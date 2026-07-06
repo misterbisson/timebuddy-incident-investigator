@@ -14,3 +14,12 @@ crash.log
 
 # For built boxes
 *.box
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local env and runtime data (alert store, metric index cache, audit log)
+.env
+.data/
