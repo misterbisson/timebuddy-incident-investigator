@@ -7,7 +7,7 @@ import { computeStats, detectOnset } from '../analysis/baseline.js';
 import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../analysis/correlation.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { resolvePanelForWindow } from './shared.js';
+import { resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -16,7 +16,13 @@ function seriesKey(series: QuerySeries): string {
   return `${series.refId}|${labelStr}`;
 }
 
-export function registerDetectCorrelatedAnomalies(server: McpServer, { client, config }: ToolContext): void {
+interface CandidateRef {
+  dashboardUid: string;
+  panelId: number;
+  connectionId: string;
+}
+
+export function registerDetectCorrelatedAnomalies(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
     'detect_correlated_anomalies',
     {
@@ -25,7 +31,9 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { client, c
         'Compares the alerting panel against other panels (explicitly given, or auto-discovered from the metric ' +
         'reverse index via find_related_dashboards) over the same incident window. Ranks candidates by deviation ' +
         'strength, label overlap with the primary alert, and how closely their anomaly onset lines up with the ' +
-        'primary\'s — a triage heuristic for blast radius, not a statistical proof of causation.',
+        'primary\'s — a triage heuristic for blast radius, not a statistical proof of causation. When ' +
+        'auto-discovering (candidates omitted), searches every configured Grafana connection, not just the ' +
+        'primary panel\'s.',
       inputSchema: {
         primaryDashboardUid: z.string(),
         primaryPanelId: z.number(),
@@ -33,40 +41,42 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { client, c
         endsAtMs: z.number().optional(),
         primaryLabels: z.record(z.string()).optional().describe('Alert labels, used for relevance ranking'),
         candidates: z
-          .array(z.object({ dashboardUid: z.string(), panelId: z.number() }))
+          .array(z.object({ dashboardUid: z.string(), panelId: z.number(), connectionId: z.string().optional() }))
           .optional()
-          .describe('Panels to check; omit to auto-discover via the metric reverse index'),
+          .describe('Panels to check; omit to auto-discover via the metric reverse index. connectionId defaults to the primary panel\'s connection.'),
         variableOverrides: z.record(z.array(z.string())).optional(),
         limit: z.number().optional().default(10),
+        connection: z.string().optional().describe('Connection id for the primary panel, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Detect correlated anomalies' },
     },
-    async ({ primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit }) => {
+    async ({ primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit, connection }) => {
       try {
         return await withAudit(
           'detect_correlated_anomalies',
           { primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs },
           config,
           async () => {
+            const { client: primaryClient, connectionId: primaryConnectionId } = resolveToolClient(registry, { connection });
             const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets: [] });
             const overrides = variableOverrides ?? {};
 
             const primaryResolved = await resolvePanelForWindow(
-              client,
+              primaryClient,
               primaryDashboardUid,
               primaryPanelId,
               overrides,
               windowSet.incident,
             );
-            const primaryIncident = await executeQueryWindow(client, primaryResolved.targets, windowSet.incident, config);
+            const primaryIncident = await executeQueryWindow(primaryClient, primaryResolved.targets, windowSet.incident, config);
             const primaryPreWindowResolved = await resolvePanelForWindow(
-              client,
+              primaryClient,
               primaryDashboardUid,
               primaryPanelId,
               overrides,
               windowSet.preWindow,
             );
-            const primaryPreWindow = await executeQueryWindow(client, primaryPreWindowResolved.targets, windowSet.preWindow, config);
+            const primaryPreWindow = await executeQueryWindow(primaryClient, primaryPreWindowResolved.targets, windowSet.preWindow, config);
 
             const primaryOnsets = primaryIncident.series
               .map((s) => {
@@ -80,29 +90,47 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { client, c
 
             const effectiveLabels = primaryLabels ?? {};
 
-            let candidateRefs = candidates;
-            if (!candidateRefs) {
-              const index = await getOrBuildIndex(client, config, {});
+            let candidateRefs: CandidateRef[];
+            if (candidates) {
+              candidateRefs = candidates.map((c) => ({ ...c, connectionId: c.connectionId ?? primaryConnectionId }));
+            } else {
               const metricNames = new Set(
                 primaryResolved.panel.targets.flatMap((t) => extractQueryInfo(t.raw).metricNames),
               );
               const seen = new Set<string>();
               candidateRefs = [];
-              for (const metric of metricNames) {
-                for (const entry of index.entriesByMetric[metric] ?? []) {
-                  if (entry.dashboardUid === primaryDashboardUid && entry.panelId === primaryPanelId) continue;
-                  const key = `${entry.dashboardUid}|${entry.panelId}`;
-                  if (seen.has(key)) continue;
-                  seen.add(key);
-                  candidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId });
+              const perConnection = await Promise.allSettled(
+                registry.list().map(async (conn) => {
+                  const index = await getOrBuildIndex(registry.get(conn.id), config, conn.id, {});
+                  return { connectionId: conn.id, index };
+                }),
+              );
+              for (const outcome of perConnection) {
+                if (outcome.status !== 'fulfilled') continue;
+                const { connectionId, index } = outcome.value;
+                for (const metric of metricNames) {
+                  for (const entry of index.entriesByMetric[metric] ?? []) {
+                    if (
+                      connectionId === primaryConnectionId &&
+                      entry.dashboardUid === primaryDashboardUid &&
+                      entry.panelId === primaryPanelId
+                    ) {
+                      continue;
+                    }
+                    const key = `${connectionId}|${entry.dashboardUid}|${entry.panelId}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    candidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId, connectionId });
+                  }
                 }
               }
             }
             candidateRefs = candidateRefs.slice(0, Math.max(limit! * 3, 15));
 
-            const candidateInputs: CorrelationCandidateInput[] = [];
+            const candidateInputs: (CorrelationCandidateInput & { connectionId: string })[] = [];
             const settled = await Promise.allSettled(
               candidateRefs.map(async (ref) => {
+                const client = registry.get(ref.connectionId);
                 const incidentResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.incident);
                 const incidentResult = await executeQueryWindow(client, incidentResolved.targets, windowSet.incident, config);
                 const preResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.preWindow);
@@ -124,12 +152,14 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { client, c
                   labels: series.labels,
                   incidentPoints: series.points,
                   preWindowPoints: preSeries?.points ?? [],
+                  connectionId: ref.connectionId,
                 });
               }
             }
 
             const ranked = rankCorrelatedAnomalies(candidateInputs, effectiveLabels, primaryOnsetMs);
             const result = {
+              primaryConnectionId,
               primaryOnsetMs,
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),

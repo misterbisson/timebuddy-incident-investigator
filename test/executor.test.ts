@@ -6,8 +6,8 @@ import type { Config } from '../src/config.js';
 import type { DsQueryResponse } from '../src/grafana/types.js';
 
 const config: Config = {
-  grafanaUrl: 'https://grafana.example.com',
-  grafanaToken: 'x',
+  connections: [{ id: 'test', name: 'test', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' }],
+  connectionsDir: '.data/connections',
   tlsVerify: true,
   requestTimeoutMs: 1000,
   maxConcurrency: 4,

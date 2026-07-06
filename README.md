@@ -12,15 +12,17 @@ evidence-linked verdict for a human to act on.
 
 ```
 src/
-  grafana/        read-only Grafana HTTP client (search, dashboards, ds/query, alerts, rules, annotations)
+  grafana/        read-only Grafana HTTP client + per-connection client registry
+  connections/    resolves which Grafana connection a tool call should use, loads the connection store
   alerts/         normalizes a webhook payload / pasted alert JSON / Grafana URL into an AlertContext
   webhook/        a small companion HTTP listener that receives Grafana's webhook contact-point POSTs
   dashboards/     panel/target extraction + Grafana template-variable substitution
   query/          incident/pre-window/baseline window math + execution via /api/ds/query
-  index-builder/  crawls dashboards into a metric/measurement -> dashboard reverse index (cached locally)
+  index-builder/  crawls dashboards into a metric/measurement -> dashboard reverse index (cached locally, per connection)
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
   tools/          the 8 MCP tools, each a thin wrapper over the modules above
+electron/         a desktop app for managing Grafana connections (see "Multiple Grafana connections" below)
 ```
 
 ## Tools
@@ -38,13 +40,25 @@ src/
 
 ## Setup
 
-1. Create a Grafana **service account** scoped to the **Viewer** role (defense in depth —
-   the code only ever calls read-only endpoints, but the account itself should also be
-   unable to mutate anything) and generate a token.
-2. Copy `.env.example` to `.env` and fill in `GRAFANA_URL` and `GRAFANA_TOKEN`. See
-   `.env.example` for the optional limits (max lookback, max data points, concurrency,
-   redaction patterns).
-3. `npm install`
+The recommended path is to run the connection-manager app once per person and let each
+teammate authenticate as themselves against every Grafana endpoint they need:
+
+1. `cd electron && npm install && npm run dev`, then add a connection for each Grafana
+   endpoint you use (one per region/tier, etc.) — either a personal Bearer token (if your
+   Grafana allows self-service API token creation) or your own username/password (Basic
+   auth). "Test connection" before saving. See [`electron/README.md`](electron/README.md)
+   for how this is stored.
+2. Set `GRAFANA_CONNECTIONS_DIR` in the MCP server's environment to the storage location
+   shown in that app (copy-path button provided); the server reads `connections.json` and
+   `credentials.json` from there on startup.
+3. `npm install` (root) and see `.env.example` for the optional limits (max lookback, max
+   data points, concurrency, redaction patterns).
+
+For a single Grafana instance with no interest in the desktop app (e.g. CI, or a quick
+local test), `GRAFANA_URL`/`GRAFANA_TOKEN` in `.env` still works on its own — a Viewer-role
+service-account token remains a fine, simpler choice there. Both paths can be used
+together: the env-default connection and anything from `GRAFANA_CONNECTIONS_DIR` are
+merged at startup.
 
 ## Running
 
@@ -81,6 +95,23 @@ npm run webhook
 It writes received alerts to `<DATA_DIR>/alerts.jsonl`; `get_alert_context` reads the
 latest one (or a specific fingerprint) from there when called with no arguments.
 
+## Multiple Grafana connections
+
+Every tool takes an optional `connection` parameter (a connection id). When it's
+omitted:
+
+- `get_alert_context` auto-detects the right connection by matching the alert's own
+  URL (panel/dashboard/generator link) against each configured connection's `url` (or its
+  `matchHosts`, for cases like a load balancer alias) — and returns `resolvedConnectionId`
+  for you to pass into every subsequent call for that incident.
+- Single-target tools (`fetch_dashboard`, `resolve_panel_queries`, `execute_query_window`,
+  `validate_baseline`, and the primary panel in `detect_correlated_anomalies`) fall back to
+  the one configured connection if there's only one, otherwise error out listing the
+  available connection ids — they never guess.
+- The two search tools (`find_related_dashboards`, and `detect_correlated_anomalies` when
+  auto-discovering candidates) fan out across every configured connection and merge
+  results, each tagged with its `connectionId`.
+
 ## Security model
 
 - The Grafana client (`src/grafana/client.ts`) is a fixed allowlist of read-only endpoints.
@@ -91,6 +122,12 @@ latest one (or a specific fingerprint) from there when called with no arguments.
 - `security/redact.ts` masks secret-shaped fields and any configured
   customer-identifier patterns before data is returned to the model.
 - `security/audit.ts` appends every tool invocation to a local JSONL audit log.
+- A per-user Bearer token or Basic-auth login (via the connection manager) no longer
+  carries the "Viewer-role service account" defense-in-depth layer that a shared token
+  gave you — whatever role that person actually has in Grafana applies. The read-only
+  guarantee then rests entirely on the client allowlist above, which is why that allowlist
+  has no generic escape hatch. A Viewer-scoped service-account token remains the more
+  defense-in-depth choice for a shared/CI connection.
 
 ## Testing
 
@@ -120,3 +157,11 @@ npx @modelcontextprotocol/inspector node dist/index.js
   pointing at a datasource UID that no longer exists.
 - `detect_correlated_anomalies` ranks candidates with a heuristic (z-score magnitude ×
   label overlap × onset-timing proximity), not a statistical correlation/causation test.
+
+## Acknowledgments
+
+The `electron/` connection-manager app's UI and auth model are adapted from
+[Time Buddy](https://github.com/Liquescent-Development/time-buddy) by Richard Kiene /
+Liquescent Development (AGPL-3.0-only, the same license this repository uses). See
+[`NOTICE.md`](NOTICE.md) for exactly what was adapted and what was deliberately changed
+(credential storage, most notably).

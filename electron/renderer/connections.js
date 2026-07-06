@@ -1,0 +1,173 @@
+// Connection list/modal logic. Field IDs and the "leave secret blank on
+// edit to keep the existing one" behavior are adapted from Time Buddy's
+// public/js/connections.js (showAddConnectionForm/editConnection/
+// saveConnection) — see NOTICE.md. Persistence goes through
+// window.connectionManager (exposed by preload.js) instead of localStorage.
+
+let editingConnectionId = null;
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function currentAuthType() {
+  return document.querySelector('input[name="authType"]').value;
+}
+
+function setAuthType(type) {
+  for (const radio of document.querySelectorAll('input[name="authType"]')) {
+    radio.checked = radio.value === type;
+  }
+  $('bearerFields').classList.toggle('hidden', type !== 'bearer');
+  $('basicFields').classList.toggle('hidden', type !== 'basic');
+}
+
+for (const radio of document.querySelectorAll('input[name="authType"]')) {
+  radio.addEventListener('change', (e) => setAuthType(e.target.value));
+}
+
+function openModalForAdd() {
+  editingConnectionId = null;
+  $('connectionFormTitle').textContent = 'Add connection';
+  $('connectionName').value = '';
+  $('connectionUrl').value = '';
+  $('connectionToken').value = '';
+  $('connectionUsername').value = '';
+  $('connectionPassword').value = '';
+  $('connectionMatchHosts').value = '';
+  $('connectionTlsVerify').checked = true;
+  $('testResult').textContent = '';
+  $('testResult').className = 'test-result';
+  setAuthType('bearer');
+  $('connectionModal').classList.remove('hidden');
+}
+
+function openModalForEdit(connection) {
+  editingConnectionId = connection.id;
+  $('connectionFormTitle').textContent = `Edit connection: ${connection.name}`;
+  $('connectionName').value = connection.name;
+  $('connectionUrl').value = connection.url;
+  // Secrets are never sent back to the renderer — leaving these blank and
+  // saving keeps whatever is already stored (see connectionStore.js).
+  $('connectionToken').value = '';
+  $('connectionUsername').value = connection.username ?? '';
+  $('connectionPassword').value = '';
+  $('connectionMatchHosts').value = (connection.matchHosts ?? []).join(', ');
+  $('connectionTlsVerify').checked = connection.tlsVerify ?? true;
+  $('testResult').textContent = '';
+  $('testResult').className = 'test-result';
+  setAuthType(connection.authType);
+  $('connectionModal').classList.remove('hidden');
+}
+
+function closeModal() {
+  $('connectionModal').classList.add('hidden');
+  editingConnectionId = null;
+}
+
+function readDraft() {
+  const authType = currentAuthType();
+  const matchHosts = $('connectionMatchHosts').value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return {
+    id: editingConnectionId ?? undefined,
+    name: $('connectionName').value.trim(),
+    url: $('connectionUrl').value.trim(),
+    authType,
+    token: authType === 'bearer' ? $('connectionToken').value.trim() : undefined,
+    username: authType === 'basic' ? $('connectionUsername').value.trim() : undefined,
+    password: authType === 'basic' ? $('connectionPassword').value.trim() : undefined,
+    matchHosts: matchHosts.length ? matchHosts : undefined,
+    tlsVerify: $('connectionTlsVerify').checked,
+  };
+}
+
+async function renderConnections() {
+  const connections = await window.connectionManager.list();
+  const body = $('connectionsTableBody');
+  body.innerHTML = '';
+
+  if (connections.length === 0) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="5">No connections yet. Click "Add connection" to create one.</td></tr>';
+    return;
+  }
+
+  for (const connection of connections) {
+    const row = document.createElement('tr');
+
+    const nameCell = document.createElement('td');
+    nameCell.textContent = connection.name;
+    row.appendChild(nameCell);
+
+    const urlCell = document.createElement('td');
+    urlCell.textContent = connection.url;
+    row.appendChild(urlCell);
+
+    const authCell = document.createElement('td');
+    authCell.textContent = connection.authType === 'basic' ? 'Basic auth' : 'Bearer token';
+    row.appendChild(authCell);
+
+    const statusCell = document.createElement('td');
+    statusCell.textContent = connection.hasSecret ? 'Configured' : 'Missing secret';
+    statusCell.className = connection.hasSecret ? 'status-ok' : 'status-warn';
+    row.appendChild(statusCell);
+
+    const actionsCell = document.createElement('td');
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openModalForEdit(connection));
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', async () => {
+      if (confirm(`Delete connection "${connection.name}"? This also removes its stored credential.`)) {
+        await window.connectionManager.delete(connection.id);
+        await renderConnections();
+      }
+    });
+    actionsCell.appendChild(editBtn);
+    actionsCell.appendChild(deleteBtn);
+    row.appendChild(actionsCell);
+
+    body.appendChild(row);
+  }
+}
+
+async function loadStorageInfo() {
+  const { dir } = await window.connectionManager.storageInfo();
+  $('storageDir').textContent = `Storage location: ${dir}`;
+  $('copyStorageDirBtn').dataset.dir = dir;
+}
+
+$('addConnectionBtn').addEventListener('click', openModalForAdd);
+$('cancelConnectionBtn').addEventListener('click', closeModal);
+
+$('saveConnectionBtn').addEventListener('click', async () => {
+  const draft = readDraft();
+  if (!draft.name || !draft.url) {
+    alert('Please provide at least a name and URL for the connection.');
+    return;
+  }
+  await window.connectionManager.upsert(draft);
+  closeModal();
+  await renderConnections();
+});
+
+$('testConnectionBtn').addEventListener('click', async () => {
+  const draft = readDraft();
+  const resultEl = $('testResult');
+  resultEl.textContent = 'Testing...';
+  resultEl.className = 'test-result';
+  const result = await window.connectionManager.test(draft);
+  resultEl.textContent = result.message;
+  resultEl.className = `test-result ${result.ok ? 'status-ok' : 'status-warn'}`;
+});
+
+$('copyStorageDirBtn').addEventListener('click', () => window.connectionManager.copyStorageDir());
+$('openStorageDirBtn').addEventListener('click', () => window.connectionManager.openStorageDir());
+
+loadStorageInfo();
+renderConnections();

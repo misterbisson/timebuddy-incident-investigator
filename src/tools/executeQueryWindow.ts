@@ -3,11 +3,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { computeWindows } from '../query/windows.js';
 import { executeQueryWindows } from '../query/executor.js';
-import { resolvePanelForWindow } from './shared.js';
+import { resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
-export function registerExecuteQueryWindow(server: McpServer, { client, config }: ToolContext): void {
+export function registerExecuteQueryWindow(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
     'execute_query_window',
     {
@@ -25,12 +25,14 @@ export function registerExecuteQueryWindow(server: McpServer, { client, config }
         preWindowMs: z.number().optional().describe('Buffer before the incident start, ms; defaults to max(30min, incident duration)'),
         variableOverrides: z.record(z.array(z.string())).optional(),
         includeControls: z.boolean().optional().default(true).describe('Include prior-hour/day/week baseline windows'),
+        connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Execute query window' },
     },
-    async ({ dashboardUid, panelId, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls }) => {
+    async ({ dashboardUid, panelId, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, connection }) => {
       try {
         return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
+          const { client } = resolveToolClient(registry, { connection });
           const windowSet = computeWindows({
             startsAtMs,
             endsAtMs,

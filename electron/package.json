@@ -1,0 +1,18 @@
+{
+  "name": "timebuddy-connection-manager",
+  "version": "0.1.0",
+  "description": "Desktop app for managing the Grafana connections used by timebuddy-incident-investigator's MCP server. Connection-manager UI and auth flow adapted from Time Buddy (github.com/Liquescent-Development/time-buddy) — see NOTICE.md.",
+  "private": true,
+  "main": "src/main.js",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^28.0.0"
+  },
+  "dependencies": {
+    "undici": "^7.2.0"
+  }
+}

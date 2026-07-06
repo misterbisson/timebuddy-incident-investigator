@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
-import { resolvePanelForWindow } from './shared.js';
+import { resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -13,7 +13,7 @@ function seriesKey(series: QuerySeries): string {
   return `${series.refId}|${labelStr}`;
 }
 
-export function registerValidateBaseline(server: McpServer, { client, config }: ToolContext): void {
+export function registerValidateBaseline(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
     'validate_baseline',
     {
@@ -34,12 +34,14 @@ export function registerValidateBaseline(server: McpServer, { client, config }: 
           .array(z.object({ label: z.string(), offsetMs: z.number() }))
           .optional()
           .describe('Override the default prior-hour/day/week baseline windows, e.g. a configurable quiet period'),
+        connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Validate baseline' },
     },
-    async ({ dashboardUid, panelId, startsAtMs, endsAtMs, variableOverrides, zThreshold, controlOffsets }) => {
+    async ({ dashboardUid, panelId, startsAtMs, endsAtMs, variableOverrides, zThreshold, controlOffsets, connection }) => {
       try {
         return await withAudit('validate_baseline', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
+          const { client } = resolveToolClient(registry, { connection });
           const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets });
           const overrides = variableOverrides ?? {};
           const allWindows: TimeWindow[] = [windowSet.incident, ...windowSet.controls];

@@ -29,7 +29,7 @@ describe('resolveAlertContext', () => {
           ],
         },
       },
-      fakeClient(),
+      () => fakeClient(),
     );
     expect(ctx.source).toBe('webhook');
     expect(ctx.dashboardUid).toBe('dash1');
@@ -49,7 +49,7 @@ describe('resolveAlertContext', () => {
         },
         fingerprint: 'fp2',
       },
-      fakeClient(),
+      () => fakeClient(),
     );
     expect(ctx.alertName).toBe('B');
   });
@@ -66,7 +66,7 @@ describe('resolveAlertContext', () => {
           endsAt: '0001-01-01T00:00:00Z',
         },
       },
-      fakeClient(),
+      () => fakeClient(),
     );
     expect(ctx.dashboardUid).toBeUndefined();
     expect(ctx.warnings.length).toBeGreaterThan(0);
@@ -85,7 +85,7 @@ describe('resolveAlertContext', () => {
           panelURL: 'https://grafana.example.com/d/dash2/slug?viewPanel=3&var-service=checkout',
         },
       },
-      fakeClient(),
+      () => fakeClient(),
     );
     expect(ctx.dashboardUid).toBe('dash2');
     expect(ctx.panelId).toBe(3);
@@ -95,7 +95,7 @@ describe('resolveAlertContext', () => {
   it('resolves a dashboard URL directly without hitting the client', async () => {
     const ctx = await resolveAlertContext(
       { url: 'https://grafana.example.com/d/dash3/slug?viewPanel=9&var-host=db1' },
-      fakeClient(),
+      () => fakeClient(),
     );
     expect(ctx.dashboardUid).toBe('dash3');
     expect(ctx.panelId).toBe(9);
@@ -119,7 +119,7 @@ describe('resolveAlertContext', () => {
     };
     const ctx = await resolveAlertContext(
       { url: 'https://grafana.example.com/alerting/grafana/rule1/view' },
-      fakeClient(rule),
+      () => fakeClient(rule),
     );
     expect(ctx.ruleUid).toBe('rule1');
     expect(ctx.dashboardUid).toBe('dash4');
@@ -137,13 +137,13 @@ describe('resolveAlertContext', () => {
     };
     const ctx = await resolveAlertContext(
       { url: 'https://grafana.example.com/alerting/grafana/rule2/view' },
-      fakeClient(rule),
+      () => fakeClient(rule),
     );
     expect(ctx.dashboardUid).toBeUndefined();
     expect(ctx.warnings.length).toBeGreaterThan(0);
   });
 
   it('throws when none of webhookPayload, alertJson, or url are provided', async () => {
-    await expect(resolveAlertContext({}, fakeClient())).rejects.toThrow(/Must provide one of/);
+    await expect(resolveAlertContext({}, () => fakeClient())).rejects.toThrow(/Must provide one of/);
   });
 });

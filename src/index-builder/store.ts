@@ -26,13 +26,17 @@ export interface MetricIndex {
   brokenDatasources: BrokenDatasourceRef[];
 }
 
-function indexFilePath(config: Config): string {
-  return join(config.dataDir, 'metric-index.json');
+function indexDir(config: Config): string {
+  return join(config.dataDir, 'metric-index');
 }
 
-export async function loadIndex(config: Config): Promise<MetricIndex | undefined> {
+function indexFilePath(config: Config, connectionId: string): string {
+  return join(indexDir(config), `${connectionId}.json`);
+}
+
+export async function loadIndex(config: Config, connectionId: string): Promise<MetricIndex | undefined> {
   try {
-    const text = await readFile(indexFilePath(config), 'utf8');
+    const text = await readFile(indexFilePath(config, connectionId), 'utf8');
     return JSON.parse(text) as MetricIndex;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
@@ -40,9 +44,9 @@ export async function loadIndex(config: Config): Promise<MetricIndex | undefined
   }
 }
 
-export async function saveIndex(index: MetricIndex, config: Config): Promise<void> {
-  await mkdir(config.dataDir, { recursive: true });
-  await writeFile(indexFilePath(config), JSON.stringify(index, null, 2), 'utf8');
+export async function saveIndex(index: MetricIndex, config: Config, connectionId: string): Promise<void> {
+  await mkdir(indexDir(config), { recursive: true });
+  await writeFile(indexFilePath(config, connectionId), JSON.stringify(index, null, 2), 'utf8');
 }
 
 export function isStale(index: MetricIndex, ttlMs: number, nowMs = Date.now()): boolean {

@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config.js';
-import type { GrafanaClient } from '../grafana/client.js';
+import type { ConnectionRegistry } from '../grafana/registry.js';
 import { registerGetAlertContext } from './getAlertContext.js';
 import { registerFetchDashboard } from './fetchDashboard.js';
 import { registerResolvePanelQueries } from './resolvePanelQueries.js';
@@ -11,7 +11,7 @@ import { registerValidateBaseline } from './validateBaseline.js';
 import { registerSummarizeFindings } from './summarizeFindings.js';
 
 export interface ToolContext {
-  client: GrafanaClient;
+  registry: ConnectionRegistry;
   config: Config;
 }
 

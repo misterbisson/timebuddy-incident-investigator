@@ -9,6 +9,8 @@ export interface CorrelationCandidateInput {
   labels: Record<string, string>;
   incidentPoints: SeriesPoint[];
   preWindowPoints: SeriesPoint[];
+  /** Which Grafana connection this candidate was fetched from, when there's more than one. */
+  connectionId?: string;
 }
 
 export interface CorrelationResult {
@@ -21,6 +23,7 @@ export interface CorrelationResult {
   labelOverlapCount: number;
   onsetLagMs?: number;
   score: number;
+  connectionId?: string;
 }
 
 function labelOverlapCount(primary: Record<string, string>, candidate: Record<string, string>): number {
@@ -70,6 +73,7 @@ export function rankCorrelatedAnomalies(
       labelOverlapCount: overlap,
       onsetLagMs: primaryOnsetMs !== undefined && onsetMs !== undefined ? onsetMs - primaryOnsetMs : undefined,
       score,
+      connectionId: c.connectionId,
     };
   });
 

@@ -14,6 +14,8 @@ export interface AlertContext {
   startsAt?: string;
   endsAt?: string;
   generatorURL?: string;
+  panelURL?: string;
+  dashboardURL?: string;
   fingerprint?: string;
   /** Variable values captured from a panel/dashboard link, keyed by variable name. */
   variables: Record<string, string[]>;
@@ -97,6 +99,8 @@ function fromAlertmanagerAlert(alert: AlertmanagerAlert, source: AlertContext['s
     startsAt: alert.startsAt,
     endsAt: alert.status?.state === 'resolved' ? alert.endsAt : undefined,
     generatorURL: alert.generatorURL,
+    panelURL: alert.panelURL,
+    dashboardURL: alert.dashboardURL,
     fingerprint: alert.fingerprint,
     variables,
     warnings,
@@ -120,7 +124,7 @@ function describeThreshold(rule: RulerAlertRule): string | undefined {
  */
 export async function resolveAlertContext(
   input: { webhookPayload?: unknown; alertJson?: unknown; url?: string; fingerprint?: string },
-  client: GrafanaClient,
+  getClient: (hintUrl?: string) => GrafanaClient,
 ): Promise<AlertContext> {
   if (input.webhookPayload !== undefined) {
     if (!isWebhookPayload(input.webhookPayload)) {
@@ -161,6 +165,7 @@ export async function resolveAlertContext(
 
     // Alert-rule URL: fetch the rule to recover its dashboard/panel link,
     // labels, and query targets.
+    const client = getClient(input.url);
     const rule = await client.getAlertRuleByUid(parsed.ruleUid);
     const warnings: string[] = [];
     const dashUid = rule.annotations?.__dashboardUid__;

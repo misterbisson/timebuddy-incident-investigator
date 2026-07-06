@@ -80,13 +80,14 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
 export async function getOrBuildIndex(
   client: GrafanaClient,
   config: Config,
+  connectionId: string,
   opts: { force?: boolean; ttlMs?: number } = {},
 ): Promise<MetricIndex> {
   if (!opts.force) {
-    const cached = await loadIndex(config);
+    const cached = await loadIndex(config, connectionId);
     if (cached && !isStale(cached, opts.ttlMs ?? DEFAULT_TTL_MS)) return cached;
   }
   const fresh = await buildMetricIndex(client);
-  await saveIndex(fresh, config);
+  await saveIndex(fresh, config, connectionId);
   return fresh;
 }

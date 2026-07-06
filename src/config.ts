@@ -1,6 +1,21 @@
+export interface GrafanaConnection {
+  id: string;
+  name: string;
+  url: string;
+  authType: 'bearer' | 'basic';
+  token?: string;
+  username?: string;
+  password?: string;
+  /** Extra hostnames that should also resolve to this connection (e.g. a LB/VPN alias the alert link uses). */
+  matchHosts?: string[];
+  /** Per-connection override of the global tlsVerify default. */
+  tlsVerify?: boolean;
+}
+
 export interface Config {
-  grafanaUrl: string;
-  grafanaToken: string;
+  connections: GrafanaConnection[];
+  /** Directory the connection-manager app writes connections.json/credentials.json into. */
+  connectionsDir: string;
   tlsVerify: boolean;
   requestTimeoutMs: number;
   maxConcurrency: number;
@@ -36,25 +51,33 @@ let cached: Config | undefined;
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (cached) return cached;
 
-  const grafanaUrl = env.GRAFANA_URL;
-  const grafanaToken = env.GRAFANA_TOKEN;
-  if (!grafanaUrl) {
-    throw new Error('GRAFANA_URL is required (see .env.example)');
-  }
-  if (!grafanaToken) {
-    throw new Error('GRAFANA_TOKEN is required (see .env.example)');
+  const dataDir = env.DATA_DIR ?? '.data';
+
+  // GRAFANA_URL/GRAFANA_TOKEN remain a supported single-connection convenience
+  // path (CI, tests, or anyone who doesn't need multiple endpoints) alongside
+  // whatever the connection-manager app has written to disk — see
+  // src/connections/store.ts, merged in by src/index.ts at startup.
+  const envConnections: GrafanaConnection[] = [];
+  if (env.GRAFANA_URL && env.GRAFANA_TOKEN) {
+    envConnections.push({
+      id: 'env-default',
+      name: 'env-default',
+      url: env.GRAFANA_URL.replace(/\/+$/, ''),
+      authType: 'bearer',
+      token: env.GRAFANA_TOKEN,
+    });
   }
 
   cached = {
-    grafanaUrl: grafanaUrl.replace(/\/+$/, ''),
-    grafanaToken,
+    connections: envConnections,
+    connectionsDir: env.GRAFANA_CONNECTIONS_DIR ?? `${dataDir}/connections`,
     tlsVerify: parseBool(env.GRAFANA_TLS_VERIFY, true),
     requestTimeoutMs: parseInt_(env.GRAFANA_REQUEST_TIMEOUT_MS, 15000),
     maxConcurrency: parseInt_(env.GRAFANA_MAX_CONCURRENCY, 4),
     maxLookbackHours: parseInt_(env.MAX_LOOKBACK_HOURS, 720),
     maxDataPoints: parseInt_(env.MAX_DATA_POINTS, 2000),
     redactionPatterns: parseRedactionPatterns(env.REDACTION_PATTERNS),
-    dataDir: env.DATA_DIR ?? '.data',
+    dataDir,
     webhookPort: parseInt_(env.WEBHOOK_PORT, 4318),
   };
   return cached;

@@ -1,4 +1,4 @@
-import type { Config } from '../config.js';
+import type { Config, GrafanaConnection } from '../config.js';
 import type {
   AlertmanagerAlert,
   DashboardGetResponse,
@@ -54,15 +54,36 @@ export class GrafanaClient {
   private readonly semaphore: Semaphore;
   private tlsAgent: unknown;
 
-  constructor(private readonly config: Config) {
+  constructor(
+    private readonly connection: GrafanaConnection,
+    private readonly config: Config,
+  ) {
     this.semaphore = new Semaphore(config.maxConcurrency);
   }
 
+  private get tlsVerify(): boolean {
+    return this.connection.tlsVerify ?? this.config.tlsVerify;
+  }
+
+  private authHeader(): string {
+    if (this.connection.authType === 'basic') {
+      if (!this.connection.username || !this.connection.password) {
+        throw new Error(`Connection "${this.connection.id}" is authType=basic but missing username/password`);
+      }
+      return `Basic ${Buffer.from(`${this.connection.username}:${this.connection.password}`).toString('base64')}`;
+    }
+    if (!this.connection.token) {
+      throw new Error(`Connection "${this.connection.id}" is authType=bearer but missing token`);
+    }
+    return `Bearer ${this.connection.token}`;
+  }
+
   private async getDispatcher(): Promise<unknown> {
-    if (this.config.tlsVerify) return undefined;
+    if (this.tlsVerify) return undefined;
     if (this.tlsAgent) return this.tlsAgent;
     // Only imported when explicitly opted out of TLS verification for a
-    // trusted internal instance (GRAFANA_TLS_VERIFY=false).
+    // trusted internal instance (GRAFANA_TLS_VERIFY=false / a connection's
+    // per-instance tlsVerify override).
     const { Agent } = await import('undici');
     this.tlsAgent = new Agent({ connect: { rejectUnauthorized: false } });
     return this.tlsAgent;
@@ -78,10 +99,10 @@ export class GrafanaClient {
       const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
       try {
         const dispatcher = await this.getDispatcher();
-        const response = await fetch(`${this.config.grafanaUrl}${path}`, {
+        const response = await fetch(`${this.connection.url}${path}`, {
           method,
           headers: {
-            Authorization: `Bearer ${this.config.grafanaToken}`,
+            Authorization: this.authHeader(),
             Accept: 'application/json',
             ...(body ? { 'Content-Type': 'application/json' } : {}),
           },
