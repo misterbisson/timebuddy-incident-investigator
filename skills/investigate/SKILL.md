@@ -32,7 +32,13 @@ skill exists to handle for them.
 3. **Replay the primary signal**, if `alertContext.dashboardUid`/`panelId` were resolved:
    - `execute_query_window` with `dashboardUid`, `panelId`, `startsAtMs` (use `alertContext.startsAt`),
      `connection` — this gets you the incident window, a pre-window buffer, and baseline control
-     windows in one call.
+     windows in one call. If you know or can guess a meaningful threshold for the metric (e.g. an
+     uptime-style series where 1.0 = fully healthy, or a known SLO threshold), pass `threshold`/
+     `thresholdDirection` in the *same* call — it returns each series' precise dip/spike windows
+     (start, end, duration, min/max) directly, including whether sibling series in the same panel
+     (other hosts/cells/nodes) show the same dip. **Do this instead of fetching raw points and
+     writing jq/python to find dip boundaries yourself** — that's exactly what `threshold` is for,
+     and scripting it ad hoc from a saved tool-output file is slower and more error-prone mid-incident.
    - `validate_baseline` with the same panel/window to get a real classification
      (`statistically-unusual` vs `common-during-normal-operations`) instead of eyeballing numbers.
 
