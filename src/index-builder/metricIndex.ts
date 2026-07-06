@@ -7,6 +7,21 @@ import { isStale, loadIndex, saveIndex, type MetricIndex } from './store.js';
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
+ * A legacy string datasource ref can be a Grafana template variable
+ * ($datasource, ${datasource}, $sysops_griffin_datasource, ...) rather than a
+ * literal datasource name — panelQueries.ts passes these through unresolved,
+ * and they'll never match a real UID, so treating them as "broken" is a
+ * false positive (confirmed against real data: this was the overwhelming
+ * majority of a many-thousands-per-connection brokenDatasources count). A
+ * plain literal name (e.g. "Griffin-ELB") is left flagged — that one could
+ * genuinely be a renamed/deleted datasource, which we can't tell apart from
+ * a template variable without also doing a name->uid lookup.
+ */
+function isTemplateVariableRef(ref: string): boolean {
+  return ref.startsWith('$');
+}
+
+/**
  * Crawls every dashboard's panels and builds a metric/measurement -> dashboard
  * reverse index, plus a list of panels pointing at a datasource uid that no
  * longer exists. This is the "which dashboards use this metric" lookup Story
@@ -39,7 +54,11 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
 
     for (const panel of resolvePanelQueries(dashboard)) {
       for (const target of panel.targets) {
-        if (target.datasourceUid && !knownDsUids.has(target.datasourceUid)) {
+        if (
+          target.datasourceUid &&
+          !knownDsUids.has(target.datasourceUid) &&
+          !isTemplateVariableRef(target.datasourceUid)
+        ) {
           index.brokenDatasources.push({
             dashboardUid: dashboard.uid,
             dashboardTitle: dashboard.title,

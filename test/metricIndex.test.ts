@@ -74,6 +74,27 @@ describe('buildMetricIndex', () => {
     ]);
   });
 
+  it('does not flag a template-variable datasource ref as broken, but still flags a plain stale name', async () => {
+    const dashboards: DashboardGetResponse[] = [
+      {
+        dashboard: {
+          uid: 'd1',
+          title: 'Templated dashboard',
+          panels: [
+            { id: 1, title: 'Templated', targets: [{ refId: 'A', datasource: '${datasource}', expr: 'up' }] },
+            { id: 2, title: 'Templated var', targets: [{ refId: 'A', datasource: '$sysops_griffin_datasource', expr: 'up' }] },
+            { id: 3, title: 'Stale name', targets: [{ refId: 'A', datasource: 'Old Datasource Name', expr: 'up' }] },
+          ],
+        },
+        meta: {},
+      },
+    ];
+    const index = await buildMetricIndex(fakeClient(dashboards));
+    expect(index.brokenDatasources).toEqual([
+      { dashboardUid: 'd1', dashboardTitle: 'Templated dashboard', panelId: 3, datasourceUid: 'Old Datasource Name' },
+    ]);
+  });
+
   it('skips dashboards that fail to load without aborting the whole crawl', async () => {
     const client = {
       searchDashboards: async () => [

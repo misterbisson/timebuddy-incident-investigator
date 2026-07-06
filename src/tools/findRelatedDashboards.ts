@@ -55,7 +55,7 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
         excludeDashboardUid: z.string().optional().describe('Skip the alert\'s own dashboard'),
         forceRefresh: z.boolean().optional().describe('Rebuild the index instead of using the cached copy'),
-        limit: z.number().optional().default(20),
+        limit: z.number().optional().default(20).describe('Max matches and max brokenDatasources entries to return; see matchesTotal/brokenDatasourcesTotal for the untruncated counts'),
         connection: z.string().optional().describe('Search only this connection; omit to fan out across every configured connection'),
       },
       annotations: { readOnlyHint: true, title: 'Find related dashboards' },
@@ -87,13 +87,21 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           const allCandidates = fulfilled.flatMap((r) => r.value.candidates);
           allCandidates.sort((a, b) => b.labelOverlapCount - a.labelOverlapCount);
 
+          const allBroken = fulfilled.flatMap((r) =>
+            r.value.index.brokenDatasources.map((b) => ({ ...b, connectionId: r.value.connectionId })),
+          );
+
+          // brokenDatasources in particular has no relevance ranking to sort
+          // by (unlike matches) and can run into the tens of thousands of
+          // entries on a large real Grafana estate — always cap both, and
+          // report the untruncated counts so nothing is silently hidden.
           const result = {
             indexBuiltAt: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.builtAt])),
             dashboardsScanned: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.dashboardsScanned])),
             matches: allCandidates.slice(0, limit),
-            brokenDatasources: fulfilled.flatMap((r) =>
-              r.value.index.brokenDatasources.map((b) => ({ ...b, connectionId: r.value.connectionId })),
-            ),
+            matchesTotal: allCandidates.length,
+            brokenDatasources: allBroken.slice(0, limit),
+            brokenDatasourcesTotal: allBroken.length,
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
         });
