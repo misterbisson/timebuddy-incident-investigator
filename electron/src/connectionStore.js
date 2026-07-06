@@ -141,7 +141,6 @@ function deleteConnection(id) {
 }
 
 module.exports = {
-  storageDir,
   listConnectionsForDisplay,
   upsertConnection,
   deleteConnection,

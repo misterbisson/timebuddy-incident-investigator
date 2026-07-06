@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
@@ -69,11 +69,6 @@ ipcMain.handle('connections:list', () => store.listConnectionsForDisplay());
 ipcMain.handle('connections:upsert', (_event, connection) => store.upsertConnection(connection));
 ipcMain.handle('connections:delete', (_event, id) => store.deleteConnection(id));
 ipcMain.handle('connections:test', (_event, draft) => testConnection(draft));
-ipcMain.handle('connections:storageInfo', () => ({ dir: store.storageDir() }));
-ipcMain.handle('connections:openStorageDir', () => shell.openPath(store.storageDir()));
-ipcMain.handle('connections:copyStorageDir', () => {
-  clipboard.writeText(store.storageDir());
-});
 ipcMain.handle('connections:registrationInfo', () => ({
   execPath: app.getPath('exe'),
   appName: app.getName(),
