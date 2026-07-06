@@ -63,7 +63,11 @@ function indexFilePath(config: Config, connectionId: string): string {
 export async function loadIndex(config: Config, connectionId: string): Promise<MetricIndex | undefined> {
   try {
     const text = await readFile(indexFilePath(config, connectionId), 'utf8');
-    return JSON.parse(text) as MetricIndex;
+    const parsed = JSON.parse(text) as MetricIndex;
+    // Cached indexes may predate fields added to MetricIndex since they were
+    // written; backfill so older cache files on disk don't crash consumers
+    // that assume every field is present.
+    return { ...parsed, alertBackedPanels: parsed.alertBackedPanels ?? [] };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw err;
