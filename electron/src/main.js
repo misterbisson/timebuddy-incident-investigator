@@ -72,4 +72,11 @@ ipcMain.handle('connections:test', (_event, draft) => testConnection(draft));
 ipcMain.handle('connections:registrationInfo', () => ({
   execPath: app.getPath('exe'),
   appName: app.getName(),
+  isPackaged: app.isPackaged,
+  // Only meaningful when !isPackaged: the raw dev Electron binary needs the
+  // app directory as an explicit argument, or it just prints its own --help
+  // and never loads main.js at all. A packaged executable has the app
+  // bundled in and must NOT be passed this — it would be misread as an
+  // arg to the app rather than "which app to load."
+  appPath: app.isPackaged ? undefined : path.join(__dirname, '..'),
 }));

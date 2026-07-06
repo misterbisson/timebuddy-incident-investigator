@@ -189,10 +189,16 @@ $('testConnectionBtn').addEventListener('click', async () => {
 // the current syntax. The Claude Desktop JSON, by contrast, is the same
 // mcpServers shape every local MCP server uses, and won't drift.
 async function loadRegistrationInfo() {
-  const { execPath } = await window.connectionManager.registrationInfo();
-  const quotedPath = execPath.includes(' ') ? `"${execPath}"` : execPath;
+  const { execPath, isPackaged, appPath } = await window.connectionManager.registrationInfo();
+  const quote = (s) => (s.includes(' ') ? `"${s}"` : s);
 
-  const codeCommand = `claude mcp add timebuddy-incident-investigator -- ${quotedPath} --mcp-server`;
+  // The raw dev Electron binary needs the app directory as an explicit
+  // argument, or it just prints its own --help and never loads main.js —
+  // only a packaged executable can be told to just run with --mcp-server on
+  // its own. See main.js's registrationInfo handler for why.
+  const args = isPackaged ? ['--mcp-server'] : [appPath, '--mcp-server'];
+
+  const codeCommand = `claude mcp add timebuddy-incident-investigator -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
   $('claudeCodeCommand').textContent = codeCommand;
 
   const desktopSnippet = JSON.stringify(
@@ -200,7 +206,7 @@ async function loadRegistrationInfo() {
       mcpServers: {
         'timebuddy-incident-investigator': {
           command: execPath,
-          args: ['--mcp-server'],
+          args,
         },
       },
     },
@@ -208,6 +214,15 @@ async function loadRegistrationInfo() {
     2,
   );
   $('claudeDesktopSnippet').textContent = desktopSnippet;
+
+  if (!isPackaged) {
+    const note = document.createElement('p');
+    note.className = 'subtitle';
+    note.textContent =
+      'Running from a dev checkout, not a packaged build — these commands include the app directory as an ' +
+      'explicit argument, which a packaged install won\'t need.';
+    $('claudeCodeCommand').insertAdjacentElement('beforebegin', note);
+  }
 
   $('copyClaudeCodeBtn').addEventListener('click', () => navigator.clipboard.writeText(codeCommand));
   $('copyClaudeDesktopBtn').addEventListener('click', () => navigator.clipboard.writeText(desktopSnippet));
