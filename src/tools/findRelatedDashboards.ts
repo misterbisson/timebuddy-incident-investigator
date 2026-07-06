@@ -25,7 +25,19 @@ function queryMatches(query: string, metric: string, entry: MetricIndexEntry): b
   );
 }
 
-export type Candidate = MetricIndexEntry & { matchedMetric?: string; labelOverlapCount: number; connectionId: string };
+export type Candidate = MetricIndexEntry & {
+  matchedMetric?: string;
+  labelOverlapCount: number;
+  connectionId: string;
+  /** Titles of real alert rules wired to this panel, if any — see AlertBackedPanelRef. */
+  backingAlertRuleTitles: string[];
+};
+
+function alertRuleTitlesFor(index: MetricIndex, dashboardUid: string, panelId: number): string[] {
+  return index.alertBackedPanels
+    .filter((p) => p.dashboardUid === dashboardUid && p.panelId === panelId)
+    .flatMap((p) => p.alertRules.map((r) => r.title));
+}
 
 export function searchIndex(
   index: MetricIndex,
@@ -43,11 +55,23 @@ export function searchIndex(
       const overlap = opts.labels ? labelOverlap(opts.labels, entry.labels) : 0;
       const queryHit = opts.query ? queryMatches(opts.query, metric, entry) : false;
       if (opts.metricName || overlap > 0 || queryHit) {
-        candidates.push({ ...entry, matchedMetric: metric, labelOverlapCount: overlap, connectionId });
+        candidates.push({
+          ...entry,
+          matchedMetric: metric,
+          labelOverlapCount: overlap,
+          connectionId,
+          backingAlertRuleTitles: alertRuleTitlesFor(index, entry.dashboardUid, entry.panelId),
+        });
       }
     }
   }
   return candidates;
+}
+
+/** Alert-backed first (the strongest "this is actually relied on" signal), then by label overlap. */
+function compareCandidates(a: Candidate, b: Candidate): number {
+  const backedDiff = (b.backingAlertRuleTitles.length > 0 ? 1 : 0) - (a.backingAlertRuleTitles.length > 0 ? 1 : 0);
+  return backedDiff !== 0 ? backedDiff : b.labelOverlapCount - a.labelOverlapCount;
 }
 
 export function registerFindRelatedDashboards(server: McpServer, { registry, config }: ToolContext): void {
@@ -65,7 +89,11 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         'this tool\'s output is redacted before it reaches you, a raw file read is not. The index is crawled from ' +
         'all dashboards and cached locally (default 6h TTL); pass forceRefresh to rebuild it now. Pass "connection" ' +
         'to search one Grafana connection; omit it to search every configured connection and merge results, tagged ' +
-        'by connectionId.',
+        'by connectionId. Each match includes backingAlertRuleTitles when a real Grafana alert rule is wired to that ' +
+        'panel — the strongest signal that it\'s actually relied on rather than a test/scratch/deprecated dashboard ' +
+        'that merely matched; alert-backed matches sort first. alertBackedDashboards is a standing overview of every ' +
+        'alert-backed panel found, independent of metricName/labels/query — useful even with no search term, e.g. ' +
+        'when just surveying what exists and is known-good.',
       inputSchema: {
         metricName: z.string().optional().describe('Exact Prometheus metric name or InfluxDB measurement name'),
         labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
@@ -102,11 +130,18 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           );
 
           const allCandidates = fulfilled.flatMap((r) => r.value.candidates);
-          allCandidates.sort((a, b) => b.labelOverlapCount - a.labelOverlapCount);
+          allCandidates.sort(compareCandidates);
 
           const allBroken = fulfilled.flatMap((r) =>
             r.value.index.brokenDatasources.map((b) => ({ ...b, connectionId: r.value.connectionId })),
           );
+
+          // Independent of metricName/labels/query — always surfaces what's
+          // known to matter (wired to a real alert rule), same idea as
+          // "explore" wanting an overview even with no search term given.
+          const allAlertBacked = fulfilled
+            .flatMap((r) => r.value.index.alertBackedPanels.map((p) => ({ ...p, connectionId: r.value.connectionId })))
+            .sort((a, b) => b.alertRules.length - a.alertRules.length);
 
           // brokenDatasources in particular has no relevance ranking to sort
           // by (unlike matches) and can run into the tens of thousands of
@@ -117,6 +152,8 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             dashboardsScanned: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.dashboardsScanned])),
             matches: allCandidates.slice(0, limit),
             matchesTotal: allCandidates.length,
+            alertBackedDashboards: allAlertBacked.slice(0, limit),
+            alertBackedTotal: allAlertBacked.length,
             brokenDatasources: allBroken.slice(0, limit),
             brokenDatasourcesTotal: allBroken.length,
           };

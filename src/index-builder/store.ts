@@ -19,11 +19,37 @@ export interface BrokenDatasourceRef {
   datasourceUid?: string;
 }
 
+export interface AlertRuleRef {
+  uid: string;
+  title: string;
+  labels: Record<string, string>;
+  folderUid?: string;
+}
+
+/**
+ * A panel that a real Grafana alert rule points at via its __dashboardUid__/
+ * __panelId__ annotations — the strongest available signal that a dashboard
+ * is actually relied on, as opposed to a test/scratch/deprecated one that
+ * merely matches a search term. Deliberately a separate structure from
+ * MetricIndexEntry rather than a field bolted onto it: entriesByMetric only
+ * covers panels where metric-name extraction succeeded (a best-effort regex
+ * scan), and a panel backing a real alert could easily use a query shape
+ * that extraction can't parse — missing exactly the panels that matter most.
+ */
+export interface AlertBackedPanelRef {
+  dashboardUid: string;
+  dashboardTitle: string;
+  panelId: number;
+  panelTitle?: string;
+  alertRules: AlertRuleRef[];
+}
+
 export interface MetricIndex {
   builtAt: string;
   dashboardsScanned: number;
   entriesByMetric: Record<string, MetricIndexEntry[]>;
   brokenDatasources: BrokenDatasourceRef[];
+  alertBackedPanels: AlertBackedPanelRef[];
 }
 
 function indexDir(config: Config): string {

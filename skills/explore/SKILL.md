@@ -11,32 +11,44 @@ person who has never successfully used this tool won't reach for it under real p
 
 ## What to do
 
-1. Call `find_related_dashboards` with no arguments (no `metricName`, no `labels`, no
+1. Call `find_related_dashboards` with no arguments (no `metricName`, no `labels`, no `query`, no
    `connection`). With no filters it won't return `matches`, but it still builds/reads each
    configured connection's metric index — use `dashboardsScanned` per connection as your real
-   connectivity signal. On a large Grafana estate this can take a little while the first time
-   (it's crawling every dashboard); say so up front rather than let it look stuck.
+   connectivity signal, and `alertBackedDashboards`/`alertBackedTotal` (also returned regardless
+   of filters) as your "what's known to matter" signal, covered in the next step. On a large
+   Grafana estate this can take a little while the first time (it's crawling every dashboard and
+   every alert rule); say so up front rather than let it look stuck.
 2. If that call fails outright (e.g. "No Grafana connections configured"), stop and explain
    plainly: connections are added through the Grafana Connection Manager app (the Electron app
    this MCP server ships as, in its normal GUI mode, not `--mcp-server` mode) — direct them there
    rather than trying to debug it from inside this skill.
 3. If it succeeds, summarize in plain language, not raw JSON: how many connections responded and
-   roughly how many dashboards each one has. Mention `brokenDatasourcesTotal` per connection if
-   it's non-trivial, but don't treat a large count as an incident signal on its own — a sizable
-   chunk of it is typically panels whose datasource is a Grafana template variable
-   (`${datasource}`, `$some_var`) that this index can't resolve statically, not real breakage.
-   `datasourceUid` values that look like plain names rather than variables (no leading `$`) are
-   the ones worth a second look.
-4. Pick one or two real dashboards from the results and offer to look at one with them —
+   roughly how many dashboards each one has.
+4. **Lead with `alertBackedDashboards`, not a raw dashboard count.** A dashboard/panel search can
+   turn up plenty of results that merely match a name or metric — some real, some test/scratch/
+   deprecated decoys, and there's no reliable way to tell those apart from titles alone.
+   `alertBackedDashboards` is different: every entry there has a real Grafana alert rule wired to
+   it (via its `__dashboardUid__`/`__panelId__` annotations), which is the strongest signal this
+   tool has for "this is actually relied on." Walk through a handful of these by name — this is
+   the single most useful thing to come out of an explore session, since it's the shortlist worth
+   trusting during a real incident. A dashboard *not* appearing here isn't necessarily bad, it's
+   just unverified by this particular signal (its alert rule might not be dashboard-linked, or it
+   might genuinely have no alert wired to it yet).
+5. Mention `brokenDatasourcesTotal` per connection if it's non-trivial, but don't treat a large
+   count as an incident signal on its own — a sizable chunk of it is typically panels whose
+   datasource is a Grafana template variable (`${datasource}`, `$some_var`) that this index can't
+   resolve statically, not real breakage. `datasourceUid` values that look like plain names rather
+   than variables (no leading `$`) are the ones worth a second look.
+6. Pick one or two dashboards from `alertBackedDashboards` and offer to look at one with them —
    `fetch_dashboard` for its panel list, or `resolve_panel_queries`/`execute_query_window` if
-   they want to see actual data. The goal is for them to see a real, live result, not just a
-   status message.
-5. Invite them to try asking about something specific ("ask me to look at any dashboard or
+   they want to see actual data. The goal is for them to see a real, live, *trustworthy* result,
+   not just a status message.
+7. Invite them to try asking about something specific ("ask me to look at any dashboard or
    metric you're curious about") so this feels like a tool they've actually used, not just
    installed. If they name a product/service in plain language (e.g. "block storage") rather
    than an exact metric or label, use `find_related_dashboards`'s `query` param — it does a
    free-text substring match against metric names and dashboard/panel titles, which is exactly
-   for this case.
+   for this case. Matches that are themselves alert-backed sort first in the results.
 
 **Never read this server's cached index/data files directly, even if you can find where they're
 stored on disk (e.g. by searching for "metric-index" under Application Support or similar) —

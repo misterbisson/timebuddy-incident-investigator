@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { buildMetricIndex } from '../src/index-builder/metricIndex.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
-import type { DashboardGetResponse } from '../src/grafana/types.js';
+import type { DashboardGetResponse, RulerRuleGroup } from '../src/grafana/types.js';
 
-function fakeClient(dashboards: DashboardGetResponse[]): GrafanaClient {
+function fakeClient(
+  dashboards: DashboardGetResponse[],
+  ruleGroupsByFolder: Record<string, RulerRuleGroup[]> = {},
+): GrafanaClient {
   const byUid = new Map(dashboards.map((d) => [d.dashboard.uid, d]));
   return {
     searchDashboards: async () => dashboards.map((d) => ({ uid: d.dashboard.uid, title: d.dashboard.title, type: 'dash-db', tags: [], url: '' })),
     listDatasources: async () => [{ uid: 'prom1', id: 1, name: 'Prometheus', type: 'prometheus' }],
+    getRuleGroups: async () => ruleGroupsByFolder,
     getDashboard: async (uid: string) => {
       const found = byUid.get(uid);
       if (!found) throw new Error('not found');
@@ -95,6 +99,73 @@ describe('buildMetricIndex', () => {
     ]);
   });
 
+  it('flags a panel a real alert rule is wired to via __dashboardUid__/__panelId__ annotations', async () => {
+    const dashboards: DashboardGetResponse[] = [
+      {
+        dashboard: {
+          uid: 'blockstorage',
+          title: 'Block Storage',
+          panels: [
+            { id: 1, title: 'Ceph health', targets: [{ refId: 'A', datasource: { uid: 'prom1' }, expr: 'ceph_health_status' }] },
+            { id: 2, title: 'Unrelated panel', targets: [{ refId: 'A', datasource: { uid: 'prom1' }, expr: 'up' }] },
+          ],
+        },
+        meta: {},
+      },
+    ];
+    const ruleGroups: Record<string, RulerRuleGroup[]> = {
+      'Product Alerts': [
+        {
+          name: 'blockstorage-alerts',
+          folderUid: 'product-alerts',
+          rules: [
+            {
+              grafana_alert: {
+                uid: 'rule1',
+                title: 'BlockStorageCephDegraded',
+                condition: 'A',
+                data: [],
+                annotations: { __dashboardUid__: 'blockstorage', __panelId__: '1' },
+                labels: { service: 'blockstorage' },
+              },
+            },
+            // No dashboard link at all — a label-only rule, not an error, just skipped.
+            { grafana_alert: { uid: 'rule2', title: 'GenericLabelAlert', condition: 'A', data: [] } },
+          ],
+        },
+      ],
+    };
+
+    const index = await buildMetricIndex(fakeClient(dashboards, ruleGroups));
+    expect(index.alertBackedPanels).toEqual([
+      {
+        dashboardUid: 'blockstorage',
+        dashboardTitle: 'Block Storage',
+        panelId: 1,
+        panelTitle: 'Ceph health',
+        alertRules: [{ uid: 'rule1', title: 'BlockStorageCephDegraded', labels: { service: 'blockstorage' }, folderUid: 'product-alerts' }],
+      },
+    ]);
+  });
+
+  it('does not fail the whole index build when the ruler API is unavailable', async () => {
+    const dashboards: DashboardGetResponse[] = [
+      { dashboard: { uid: 'd1', title: 'OK', panels: [] }, meta: {} },
+    ];
+    const client = {
+      searchDashboards: async () => [{ uid: 'd1', title: 'OK', type: 'dash-db', tags: [], url: '' }],
+      listDatasources: async () => [],
+      getRuleGroups: async () => {
+        throw new Error('403 Forbidden');
+      },
+      getDashboard: async () => dashboards[0],
+    } as unknown as GrafanaClient;
+
+    const index = await buildMetricIndex(client);
+    expect(index.dashboardsScanned).toBe(1);
+    expect(index.alertBackedPanels).toEqual([]);
+  });
+
   it('skips dashboards that fail to load without aborting the whole crawl', async () => {
     const client = {
       searchDashboards: async () => [
@@ -102,6 +173,7 @@ describe('buildMetricIndex', () => {
         { uid: 'broken', title: 'Broken', type: 'dash-db', tags: [], url: '' },
       ],
       listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
       getDashboard: async (uid: string) => {
         if (uid === 'broken') throw new Error('boom');
         return { dashboard: { uid: 'ok', title: 'OK', panels: [] }, meta: {} };

@@ -1,8 +1,9 @@
 import type { Config } from '../config.js';
 import type { GrafanaClient } from '../grafana/client.js';
+import type { RulerRuleGroup } from '../grafana/types.js';
 import { resolvePanelQueries } from '../dashboards/panelQueries.js';
 import { extractQueryInfo } from './extract.js';
-import { isStale, loadIndex, saveIndex, type MetricIndex } from './store.js';
+import { isStale, loadIndex, saveIndex, type AlertRuleRef, type MetricIndex } from './store.js';
 
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -22,23 +23,58 @@ function isTemplateVariableRef(ref: string): boolean {
 }
 
 /**
+ * Builds a dashboardUid|panelId -> alert rules lookup by crawling every
+ * Grafana-managed alert rule and reading its __dashboardUid__/__panelId__
+ * annotations — the same annotations a single rule fetch exposes
+ * (alerts/ingest.ts), just for every rule at once. A rule with no such
+ * annotations isn't linked to a specific panel and is skipped here (not an
+ * error — plenty of rules are label-based with no dashboard link at all).
+ */
+function indexAlertRulesByPanel(ruleGroupsByFolder: Record<string, RulerRuleGroup[]>): Map<string, AlertRuleRef[]> {
+  const byPanel = new Map<string, AlertRuleRef[]>();
+  for (const groups of Object.values(ruleGroupsByFolder)) {
+    for (const group of groups) {
+      for (const { grafana_alert: rule } of group.rules) {
+        const dashboardUid = rule.annotations?.__dashboardUid__;
+        const panelIdStr = rule.annotations?.__panelId__;
+        if (!dashboardUid || !panelIdStr) continue;
+        const key = `${dashboardUid}|${panelIdStr}`;
+        const list = byPanel.get(key) ?? [];
+        list.push({ uid: rule.uid, title: rule.title, labels: rule.labels ?? {}, folderUid: group.folderUid });
+        byPanel.set(key, list);
+      }
+    }
+  }
+  return byPanel;
+}
+
+/**
  * Crawls every dashboard's panels and builds a metric/measurement -> dashboard
- * reverse index, plus a list of panels pointing at a datasource uid that no
- * longer exists. This is the "which dashboards use this metric" lookup Story
- * 5 asks for, and the input find_related_dashboards searches against.
+ * reverse index, a list of panels pointing at a datasource uid that no
+ * longer exists, and a list of panels a real alert rule is wired to — the
+ * strongest available signal for which dashboards are actually relied on
+ * versus a test/scratch/deprecated one that merely matches a search term.
+ * This is what find_related_dashboards searches against.
  */
 export async function buildMetricIndex(client: GrafanaClient): Promise<MetricIndex> {
-  const [summaries, datasources] = await Promise.all([
+  const [summaries, datasources, ruleGroupsByFolder] = await Promise.all([
     client.searchDashboards({ limit: 5000 }),
     client.listDatasources(),
+    // Alert-rule access is an enhancement (surfacing which panels are
+    // actually relied on), not a requirement — some tokens/older Grafana
+    // versions won't have the ruler API available, and that shouldn't break
+    // dashboard/metric indexing, which worked fine without this before.
+    client.getRuleGroups().catch(() => ({})),
   ]);
   const knownDsUids = new Set(datasources.map((d) => d.uid));
+  const alertRulesByPanel = indexAlertRulesByPanel(ruleGroupsByFolder);
 
   const index: MetricIndex = {
     builtAt: new Date().toISOString(),
     dashboardsScanned: 0,
     entriesByMetric: {},
     brokenDatasources: [],
+    alertBackedPanels: [],
   };
 
   const dashboardResults = await Promise.allSettled(
@@ -53,6 +89,17 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
     index.dashboardsScanned++;
 
     for (const panel of resolvePanelQueries(dashboard)) {
+      const alertRules = alertRulesByPanel.get(`${dashboard.uid}|${panel.panelId}`);
+      if (alertRules) {
+        index.alertBackedPanels.push({
+          dashboardUid: dashboard.uid,
+          dashboardTitle: dashboard.title,
+          panelId: panel.panelId,
+          panelTitle: panel.title,
+          alertRules,
+        });
+      }
+
       for (const target of panel.targets) {
         if (
           target.datasourceUid &&
