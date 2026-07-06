@@ -13,7 +13,7 @@ export interface QueryWindow {
  * to — what a human clicking the link would actually have seen) wins;
  * otherwise fall back to the dashboard's saved `current.value`.
  */
-function effectiveValues(variable: TemplateVariable, overrides: Record<string, string[]>): string[] {
+export function effectiveValues(variable: TemplateVariable, overrides: Record<string, string[]>): string[] {
   const override = overrides[variable.name];
   if (override && override.length > 0) return override;
 
@@ -136,4 +136,41 @@ export function mergeVariableOverrides(...sources: Array<Record<string, string[]
     for (const [k, v] of Object.entries(source)) merged[k] = v;
   }
   return merged;
+}
+
+/** Extracts the variable name from a `$name` / `${name}` / `${name:format}` reference, or undefined if it isn't one. */
+function templateVariableName(ref: string): string | undefined {
+  return (ref.match(/^\$\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}$/) ?? ref.match(/^\$([a-zA-Z0-9_]+)$/))?.[1];
+}
+
+/**
+ * Resolves a panel/target's datasource reference when it's a Grafana
+ * datasource-picker template variable ($datasource, ${DS_PROMETHEUS}, ...)
+ * rather than a fixed UID. Grafana resolves this at render time from the
+ * variable's current selection; without doing the same, the literal
+ * variable-reference string gets sent to /api/ds/query verbatim and Grafana
+ * rejects it with "404 Data source not found".
+ *
+ * Returns the ref unchanged if it isn't a variable reference (nothing to
+ * resolve — this covers both a real UID and a legacy literal datasource
+ * name, neither of which this function can tell apart from each other).
+ * Returns undefined if it IS a variable reference this dashboard doesn't
+ * define, or one with no current value — an unresolvable reference, not a
+ * guess.
+ *
+ * The resolved value may itself be a UID (modern Grafana) or a datasource
+ * name (older Grafana) rather than a UID — callers with access to a
+ * GrafanaClient should fall back to a name lookup via listDatasources() if
+ * it doesn't match a known UID; see tools/shared.ts's resolveTargetDatasource.
+ */
+export function resolveDatasourceVariable(
+  ref: string,
+  variables: TemplateVariable[],
+  overrides: Record<string, string[]>,
+): string | undefined {
+  const name = templateVariableName(ref);
+  if (!name) return ref;
+  const variable = variables.find((v) => v.name === name);
+  if (!variable) return undefined;
+  return effectiveValues(variable, overrides)[0];
 }

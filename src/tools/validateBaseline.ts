@@ -22,7 +22,12 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
         'Compares the incident window against prior-hour, same-hour-yesterday, and same-hour-last-week control ' +
         'windows (or custom offsets) for one panel, per series. Classifies each series as "statistically-unusual" ' +
         '(z-score beyond threshold vs. the pooled baseline) or "common-during-normal-operations", and flags when a ' +
-        'similar-magnitude window recurs daily/weekly so recurring patterns aren\'t mistaken for a fresh anomaly.',
+        'similar-magnitude window recurs daily/weekly so recurring patterns aren\'t mistaken for a fresh anomaly. ' +
+        'Always check each series\' "briefExcursions" too, even when classification says common — that ' +
+        'classification is based on the whole window\'s *mean*, which can dilute a real, sharp, short-lived event ' +
+        '(e.g. a health signal that was fully down for a few minutes inside a much longer analysis window) into ' +
+        'looking routine. briefExcursions is a separate, point-level check against the same baseline and will still ' +
+        'catch that.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),

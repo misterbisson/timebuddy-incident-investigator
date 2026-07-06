@@ -106,6 +106,9 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
               pooledBaselineStddev: toNaN(args.baseline.pooledBaselineStddev),
               zScore: toNaN(args.baseline.zScore),
               classification: args.baseline.classification,
+              // Not part of this tool's input schema yet — summarizeFindings()
+              // doesn't read it, only validate_baseline's own output does.
+              briefExcursions: [],
             },
           };
           const report = summarizeFindings(input);

@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
-import { resolveToolClient } from './shared.js';
+import { resolveTargetDatasource, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -13,10 +13,12 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
     {
       title: 'Resolve panel queries',
       description:
-        'Extracts a dashboard panel\'s query targets, resolves each target\'s datasource UID, and substitutes ' +
-        'Grafana template variables ($var, ${var:format}, $__interval, $timeFilter, ...) into the query text. ' +
-        'Pass variableOverrides captured from the alert/panel URL (var-*) to reproduce exactly what was on screen ' +
-        'when the alert fired; any variable not overridden falls back to the dashboard\'s saved current value.',
+        'Extracts a dashboard panel\'s query targets, resolves each target\'s datasource UID (including when the ' +
+        'panel uses a datasource-picker template variable like $datasource/${DS_PROMETHEUS} rather than a fixed ' +
+        'UID), and substitutes Grafana template variables ($var, ${var:format}, $__interval, $timeFilter, ...) into ' +
+        'the query text. Pass variableOverrides captured from the alert/panel URL (var-*) to reproduce exactly what ' +
+        'was on screen when the alert fired; any variable not overridden falls back to the dashboard\'s saved ' +
+        'current value.',
       inputSchema: {
         dashboardUid: z.string().describe('Grafana dashboard UID'),
         panelId: z.number().optional().describe('Limit to one panel; omit to resolve every queryable panel'),
@@ -50,16 +52,20 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
             throw new Error(`Panel ${panelId} not found on dashboard ${dashboardUid}`);
           }
 
-          const result = panels.map((panel) => ({
-            panelId: panel.panelId,
-            title: panel.title,
-            type: panel.type,
-            targets: panel.targets.map((t) => ({
-              refId: t.refId,
-              datasourceUid: t.datasourceUid,
-              resolvedQuery: substituteTargetFields(t.raw, variables, overrides, window),
+          const result = await Promise.all(
+            panels.map(async (panel) => ({
+              panelId: panel.panelId,
+              title: panel.title,
+              type: panel.type,
+              targets: await Promise.all(
+                panel.targets.map(async (t) => ({
+                  refId: t.refId,
+                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides),
+                  resolvedQuery: substituteTargetFields(t.raw, variables, overrides, window),
+                })),
+              ),
             })),
-          }));
+          );
 
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
         });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { substituteVariables, substituteTargetFields } from '../src/dashboards/variables.js';
+import { substituteVariables, substituteTargetFields, resolveDatasourceVariable } from '../src/dashboards/variables.js';
 import type { TemplateVariable } from '../src/grafana/types.js';
 
 const window = { fromMs: 1_700_000_000_000, toMs: 1_700_003_600_000 };
@@ -85,5 +85,32 @@ describe('substituteTargetFields', () => {
     const variables: TemplateVariable[] = [{ name: 'host', type: 'custom', current: { value: 'db1' } }];
     const result = substituteTargetFields({ refId: 'A', query: 'SELECT mean("value") FROM cpu WHERE host = \'$host\'' }, variables, {}, window);
     expect(result.query).toBe("SELECT mean(\"value\") FROM cpu WHERE host = 'db1'");
+  });
+});
+
+describe('resolveDatasourceVariable', () => {
+  it('resolves a $name-style datasource variable reference to its current value', () => {
+    const variables: TemplateVariable[] = [{ name: 'datasource', type: 'datasource', current: { value: 'prom1' } }];
+    expect(resolveDatasourceVariable('$datasource', variables, {})).toBe('prom1');
+  });
+
+  it('resolves a ${name}-style reference, including Grafana\'s ${DS_PROMETHEUS} convention', () => {
+    const variables: TemplateVariable[] = [{ name: 'DS_PROMETHEUS', type: 'datasource', current: { value: 'prom1' } }];
+    expect(resolveDatasourceVariable('${DS_PROMETHEUS}', variables, {})).toBe('prom1');
+  });
+
+  it('prefers an override over the dashboard current value, same as query-text substitution', () => {
+    const variables: TemplateVariable[] = [{ name: 'datasource', type: 'datasource', current: { value: 'prom1' } }];
+    expect(resolveDatasourceVariable('$datasource', variables, { datasource: ['prom2'] })).toBe('prom2');
+  });
+
+  it('returns the ref unchanged when it is not a variable reference (a real UID or a legacy literal name)', () => {
+    const variables: TemplateVariable[] = [];
+    expect(resolveDatasourceVariable('prom1', variables, {})).toBe('prom1');
+    expect(resolveDatasourceVariable('Griffin-ELB', variables, {})).toBe('Griffin-ELB');
+  });
+
+  it('returns undefined for a variable reference the dashboard does not define', () => {
+    expect(resolveDatasourceVariable('$missing', [], {})).toBeUndefined();
   });
 });

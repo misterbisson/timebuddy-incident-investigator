@@ -41,6 +41,11 @@ skill exists to handle for them.
      and scripting it ad hoc from a saved tool-output file is slower and more error-prone mid-incident.
    - `validate_baseline` with the same panel/window to get a real classification
      (`statistically-unusual` vs `common-during-normal-operations`) instead of eyeballing numbers.
+     **Always check each series' `briefExcursions` too, even when `classification` says common** —
+     that classification is based on the whole window's mean, which can dilute a real, sharp,
+     short-lived event (e.g. a health signal fully down for a few minutes inside a much longer
+     window) into looking routine. `briefExcursions` is a separate, point-level check against the
+     same baseline and will still catch it. Don't just trust a "common" label at face value.
 
 4. **If there's no dashboard/panel link** (warnings said so, or there was nothing to paste in
    step 1), fall back to `find_related_dashboards` using `alertContext.labels` (or whatever labels
