@@ -38,8 +38,11 @@ skill exists to handle for them.
 
 4. **If there's no dashboard/panel link** (warnings said so, or there was nothing to paste in
    step 1), fall back to `find_related_dashboards` using `alertContext.labels` (or whatever labels
-   the person gave you) to locate relevant dashboards, then proceed as in step 3 once you have a
-   candidate panel.
+   the person gave you) to locate relevant dashboards. If the only thing you have is a product/
+   service name in plain language (e.g. "block storage is degraded") rather than an exact metric
+   or label value, use `find_related_dashboards`'s `query` param instead — a free-text substring
+   match against metric names and dashboard/panel titles. Then proceed as in step 3 once you have
+   a candidate panel.
 
 5. **Check blast radius**, once you have a primary panel: `detect_correlated_anomalies` with
    `primaryDashboardUid`/`primaryPanelId`/`startsAtMs`/`primaryLabels`/`connection` — omit
@@ -53,3 +56,10 @@ skill exists to handle for them.
    it's real, why (cite the specific baseline/correlation numbers), and links to the
    dashboards/panels involved so the person can verify anything you said. This last step is not
    optional — a bare JSON dump back to a NOC person on a live incident is not useful in the flow.
+
+**Never read this server's cached index/data files directly, even if you can find where they're
+stored on disk — always go through the MCP tools above.** Tool output is redacted before it
+reaches you; a raw file read isn't. If a tool doesn't seem to cover what you need, that's a sign
+to use a different tool/param (`query` for free-text search, `connection` to scope a search), not
+to go around the tool layer, especially mid-incident when speed matters and a wrong shortcut is
+expensive.

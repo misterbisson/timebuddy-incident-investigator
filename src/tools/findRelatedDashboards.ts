@@ -15,12 +15,22 @@ function labelOverlap(target: Record<string, string>, entryLabels: Record<string
   return count;
 }
 
-type Candidate = MetricIndexEntry & { matchedMetric?: string; labelOverlapCount: number; connectionId: string };
+/** Case-insensitive substring match against the metric name and titles — for a human product/service term, not an exact metric or label. */
+function queryMatches(query: string, metric: string, entry: MetricIndexEntry): boolean {
+  const q = query.toLowerCase();
+  return (
+    metric.toLowerCase().includes(q) ||
+    entry.dashboardTitle.toLowerCase().includes(q) ||
+    (entry.panelTitle ?? '').toLowerCase().includes(q)
+  );
+}
 
-function searchIndex(
+export type Candidate = MetricIndexEntry & { matchedMetric?: string; labelOverlapCount: number; connectionId: string };
+
+export function searchIndex(
   index: MetricIndex,
   connectionId: string,
-  opts: { metricName?: string; labels?: Record<string, string>; excludeDashboardUid?: string },
+  opts: { metricName?: string; labels?: Record<string, string>; query?: string; excludeDashboardUid?: string },
 ): Candidate[] {
   const candidates: Candidate[] = [];
   const metricPool = opts.metricName
@@ -31,7 +41,8 @@ function searchIndex(
     for (const entry of entries) {
       if (opts.excludeDashboardUid && entry.dashboardUid === opts.excludeDashboardUid) continue;
       const overlap = opts.labels ? labelOverlap(opts.labels, entry.labels) : 0;
-      if (opts.metricName || overlap > 0) {
+      const queryHit = opts.query ? queryMatches(opts.query, metric, entry) : false;
+      if (opts.metricName || overlap > 0 || queryHit) {
         candidates.push({ ...entry, matchedMetric: metric, labelOverlapCount: overlap, connectionId });
       }
     }
@@ -45,14 +56,20 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
     {
       title: 'Find related dashboards',
       description:
-        'Searches the metric/measurement -> dashboard reverse index for panels using a given metric name and/or ' +
-        'sharing label values (service, host, region, az, account, ...) with the alert. Use this to find blast-radius ' +
-        'candidates before running detect_correlated_anomalies. The index is crawled from all dashboards and cached ' +
-        'locally (default 6h TTL); pass forceRefresh to rebuild it now. Pass "connection" to search one Grafana ' +
-        'connection; omit it to search every configured connection and merge results, tagged by connectionId.',
+        'Searches the metric/measurement -> dashboard reverse index for panels using a given metric name, sharing ' +
+        'label values (service, host, region, az, account, ...) with the alert, and/or matching a free-text "query" ' +
+        'against metric names and dashboard/panel titles (e.g. a product or service name like "block storage" that ' +
+        'is not itself a metric name or label value). Use this to find blast-radius candidates before running ' +
+        'detect_correlated_anomalies, or as the general "where do I look for X" search. Always use this instead of ' +
+        'reading any cached index/data files directly, even if you know or can find where they\'re stored on disk — ' +
+        'this tool\'s output is redacted before it reaches you, a raw file read is not. The index is crawled from ' +
+        'all dashboards and cached locally (default 6h TTL); pass forceRefresh to rebuild it now. Pass "connection" ' +
+        'to search one Grafana connection; omit it to search every configured connection and merge results, tagged ' +
+        'by connectionId.',
       inputSchema: {
-        metricName: z.string().optional().describe('Prometheus metric name or InfluxDB measurement name'),
+        metricName: z.string().optional().describe('Exact Prometheus metric name or InfluxDB measurement name'),
         labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
+        query: z.string().optional().describe('Free-text, case-insensitive substring match against metric names and dashboard/panel titles - for a product/service name you don\'t have an exact metric or label for'),
         excludeDashboardUid: z.string().optional().describe('Skip the alert\'s own dashboard'),
         forceRefresh: z.boolean().optional().describe('Rebuild the index instead of using the cached copy'),
         limit: z.number().optional().default(20).describe('Max matches and max brokenDatasources entries to return; see matchesTotal/brokenDatasourcesTotal for the untruncated counts'),
@@ -60,9 +77,9 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
       },
       annotations: { readOnlyHint: true, title: 'Find related dashboards' },
     },
-    async ({ metricName, labels, excludeDashboardUid, forceRefresh, limit, connection }) => {
+    async ({ metricName, labels, query, excludeDashboardUid, forceRefresh, limit, connection }) => {
       try {
-        return await withAudit('find_related_dashboards', { metricName, labels }, config, async () => {
+        return await withAudit('find_related_dashboards', { metricName, labels, query }, config, async () => {
           const connections = connection
             ? [resolveToolClient(registry, { connection }).connectionId]
             : registry.list().map((c) => c.id);
@@ -74,7 +91,7 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
               return {
                 connectionId,
                 index,
-                candidates: searchIndex(index, connectionId, { metricName, labels, excludeDashboardUid }),
+                candidates: searchIndex(index, connectionId, { metricName, labels, query, excludeDashboardUid }),
               };
             }),
           );

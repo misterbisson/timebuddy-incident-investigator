@@ -33,12 +33,23 @@ person who has never successfully used this tool won't reach for it under real p
    status message.
 5. Invite them to try asking about something specific ("ask me to look at any dashboard or
    metric you're curious about") so this feels like a tool they've actually used, not just
-   installed.
+   installed. If they name a product/service in plain language (e.g. "block storage") rather
+   than an exact metric or label, use `find_related_dashboards`'s `query` param — it does a
+   free-text substring match against metric names and dashboard/panel titles, which is exactly
+   for this case.
+
+**Never read this server's cached index/data files directly, even if you can find where they're
+stored on disk (e.g. by searching for "metric-index" under Application Support or similar) —
+always go through the MCP tools instead.** This isn't just about avoiding shell-command
+permission prompts: this server's whole design is that tool output is redacted before it reaches
+you, and a raw file read skips that entirely. If a tool doesn't seem to support what you're
+trying to do (e.g. no free-text search), that's a sign to use a different tool/param — like
+`query` above — not to go around the tool layer.
 
 If any tool result comes back large, read its summary/count fields (every tool here reports
 counts like `dashboardsScanned`, `matchesTotal`, `brokenDatasourcesTotal` precisely so you don't
 have to) rather than reaching for `jq`/`python3 -c`/shell scripting to page through saved output —
-that's a sign to ask for a narrower query (a `metricName`/`labels` filter, a specific
+that's a sign to ask for a narrower query (a `metricName`/`labels`/`query` filter, a specific
 `connection`), not to script around the result.
 
 If multiple connections are configured, mention which ones responded by name/id — this is also a
