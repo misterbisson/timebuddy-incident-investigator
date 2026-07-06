@@ -169,5 +169,36 @@ $('testConnectionBtn').addEventListener('click', async () => {
 $('copyStorageDirBtn').addEventListener('click', () => window.connectionManager.copyStorageDir());
 $('openStorageDirBtn').addEventListener('click', () => window.connectionManager.openStorageDir());
 
+// Claude Code's exact `mcp add` flags can vary by version — this is the
+// documented `name -- command [args...]` shape as of when this was written;
+// if it doesn't match your installed version, `claude mcp add --help` has
+// the current syntax. The Claude Desktop JSON, by contrast, is the same
+// mcpServers shape every local MCP server uses, and won't drift.
+async function loadRegistrationInfo() {
+  const { execPath } = await window.connectionManager.registrationInfo();
+  const quotedPath = execPath.includes(' ') ? `"${execPath}"` : execPath;
+
+  const codeCommand = `claude mcp add timebuddy-incident-investigator -- ${quotedPath} --mcp-server`;
+  $('claudeCodeCommand').textContent = codeCommand;
+
+  const desktopSnippet = JSON.stringify(
+    {
+      mcpServers: {
+        'timebuddy-incident-investigator': {
+          command: execPath,
+          args: ['--mcp-server'],
+        },
+      },
+    },
+    null,
+    2,
+  );
+  $('claudeDesktopSnippet').textContent = desktopSnippet;
+
+  $('copyClaudeCodeBtn').addEventListener('click', () => navigator.clipboard.writeText(codeCommand));
+  $('copyClaudeDesktopBtn').addEventListener('click', () => navigator.clipboard.writeText(desktopSnippet));
+}
+
 loadStorageInfo();
+loadRegistrationInfo();
 renderConnections();

@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('connectionManager', {
   storageInfo: () => ipcRenderer.invoke('connections:storageInfo'),
   openStorageDir: () => ipcRenderer.invoke('connections:openStorageDir'),
   copyStorageDir: () => ipcRenderer.invoke('connections:copyStorageDir'),
+  registrationInfo: () => ipcRenderer.invoke('connections:registrationInfo'),
 });

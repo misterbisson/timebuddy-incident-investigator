@@ -14,8 +14,6 @@ export interface GrafanaConnection {
 
 export interface Config {
   connections: GrafanaConnection[];
-  /** Directory the connection-manager app writes connections.json/credentials.json into. */
-  connectionsDir: string;
   tlsVerify: boolean;
   requestTimeoutMs: number;
   maxConcurrency: number;
@@ -53,10 +51,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const dataDir = env.DATA_DIR ?? '.data';
 
-  // GRAFANA_URL/GRAFANA_TOKEN remain a supported single-connection convenience
-  // path (CI, tests, or anyone who doesn't need multiple endpoints) alongside
-  // whatever the connection-manager app has written to disk — see
-  // src/connections/store.ts, merged in by src/index.ts at startup.
+  // GRAFANA_URL/GRAFANA_TOKEN are the standalone-CLI/CI convenience path (see
+  // src/index.ts). The distributed app instead supplies connections directly
+  // to src/server.ts's startMcpServer() from its own safeStorage-backed
+  // store (electron/src/connectionStore.js) — no disk-based merge here.
   const envConnections: GrafanaConnection[] = [];
   if (env.GRAFANA_URL && env.GRAFANA_TOKEN) {
     envConnections.push({
@@ -70,7 +68,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   cached = {
     connections: envConnections,
-    connectionsDir: env.GRAFANA_CONNECTIONS_DIR ?? `${dataDir}/connections`,
     tlsVerify: parseBool(env.GRAFANA_TLS_VERIFY, true),
     requestTimeoutMs: parseInt_(env.GRAFANA_REQUEST_TIMEOUT_MS, 15000),
     maxConcurrency: parseInt_(env.GRAFANA_MAX_CONCURRENCY, 4),

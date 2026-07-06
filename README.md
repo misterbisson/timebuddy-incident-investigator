@@ -12,8 +12,10 @@ evidence-linked verdict for a human to act on.
 
 ```
 src/
+  server.ts       library entrypoint: createServer()/startMcpServer() build the MCP server for any caller
+  index.ts        standalone CLI wrapper around server.ts (env-only connections; dev/CI use, not the distributed app)
   grafana/        read-only Grafana HTTP client + per-connection client registry
-  connections/    resolves which Grafana connection a tool call should use, loads the connection store
+  connections/    resolves which Grafana connection a tool call should use
   alerts/         normalizes a webhook payload / pasted alert JSON / Grafana URL into an AlertContext
   webhook/        a small companion HTTP listener that receives Grafana's webhook contact-point POSTs
   dashboards/     panel/target extraction + Grafana template-variable substitution
@@ -22,7 +24,8 @@ src/
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
   tools/          the 8 MCP tools, each a thin wrapper over the modules above
-electron/         a desktop app for managing Grafana connections (see "Multiple Grafana connections" below)
+electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
+                  server (launched with --mcp-server instead of opening a window) — see electron/README.md
 ```
 
 ## Tools
@@ -40,42 +43,46 @@ electron/         a desktop app for managing Grafana connections (see "Multiple 
 
 ## Setup
 
-The recommended path is to run the connection-manager app once per person and let each
-teammate authenticate as themselves against every Grafana endpoint they need:
+There's one app to install: run it, add your Grafana connection(s) yourself (each person
+authenticates as themselves — a personal Bearer token or your own username/password —
+instead of everyone sharing one admin-provisioned service-account token), then register it
+with whichever Claude client you use. No separate MCP server process, no env vars to
+hand-edit, no plaintext credential file anywhere.
 
-1. `cd electron && npm install && npm run dev`, then add a connection for each Grafana
-   endpoint you use (one per region/tier, etc.) — either a personal Bearer token (if your
-   Grafana allows self-service API token creation) or your own username/password (Basic
-   auth). "Test connection" before saving. See [`electron/README.md`](electron/README.md)
-   for how this is stored.
-2. Set `GRAFANA_CONNECTIONS_DIR` in the MCP server's environment to the storage location
-   shown in that app (copy-path button provided); the server reads `connections.json` and
-   `credentials.json` from there on startup.
-3. `npm install` (root) and see `.env.example` for the optional limits (max lookback, max
-   data points, concurrency, redaction patterns).
+1. `cd electron && npm install && npm run dev` — opens the connection manager.
+2. Add a connection for each Grafana endpoint you use (one per region/tier, etc.) —
+   Bearer token or Basic auth, your choice. "Test connection" before saving.
+3. In the app's "Register with Claude" section, copy the command (Claude Code) or JSON
+   snippet (Claude Desktop) shown there — it already has this app's own path filled in —
+   and add it to your Claude client.
 
-For a single Grafana instance with no interest in the desktop app (e.g. CI, or a quick
-local test), `GRAFANA_URL`/`GRAFANA_TOKEN` in `.env` still works on its own — a Viewer-role
-service-account token remains a fine, simpler choice there. Both paths can be used
-together: the env-default connection and anything from `GRAFANA_CONNECTIONS_DIR` are
-merged at startup.
+See [`electron/README.md`](electron/README.md) for exactly how connections/credentials are
+stored (short version: `safeStorage`/OS-keychain-encrypted, nothing plaintext, ever).
+
+For local development or CI, where there's no interest in the desktop app, the standalone
+CLI still works on its own with a single connection from env vars — see "Standalone CLI"
+below.
 
 ## Running
 
-**MCP server (stdio)** — for Claude Code/Desktop or any MCP client that spawns a
-subprocess:
+**The distributed app (recommended)** — one Electron binary, launched with `--mcp-server`
+by whichever Claude client you registered it with (see Setup above); it reads connections
+from its own `safeStorage`-backed store, no env vars needed. See
+[`electron/README.md`](electron/README.md).
+
+**Standalone CLI (dev/CI only)** — `src/index.ts` compiled to `dist/index.js`, using
+`GRAFANA_URL`/`GRAFANA_TOKEN` for a single connection. Not what end users install; this is
+for iterating on the engine itself without going through Electron:
 
 ```bash
 npm run build
 node dist/index.js
 ```
 
-Point your MCP client config at that command, e.g. in Claude Code:
-
 ```json
 {
   "mcpServers": {
-    "timebuddy-incident-investigator": {
+    "timebuddy-incident-investigator-dev": {
       "command": "node",
       "args": ["/path/to/timebuddy-incident-investigator/dist/index.js"],
       "env": { "GRAFANA_URL": "https://grafana.example.com", "GRAFANA_TOKEN": "glsa_..." }
@@ -139,13 +146,18 @@ npm run typecheck
 There's no live Grafana instance in CI for this repo, so `npm test` covers URL parsing,
 variable substitution, baseline statistics, metric extraction/indexing, and redaction
 against fixture data — not an end-to-end call against a real Grafana API. To verify
-against a real instance, run the server under the
+against a real instance, run the standalone CLI under the
 [MCP inspector](https://github.com/modelcontextprotocol/inspector):
 
 ```bash
 npm run build
 npx @modelcontextprotocol/inspector node dist/index.js
 ```
+
+`electron/test/mcpServerMode.mjs` covers the distributed app specifically: it spawns the
+real Electron binary in `--mcp-server` mode via the actual SDK client/transport and
+confirms the `safeStorage` -> engine wiring works end to end (see
+[`electron/README.md`](electron/README.md#testing)).
 
 ## Known limitations (MVP)
 
@@ -157,6 +169,13 @@ npx @modelcontextprotocol/inspector node dist/index.js
   pointing at a datasource UID that no longer exists.
 - `detect_correlated_anomalies` ranks candidates with a heuristic (z-score magnitude ×
   label overlap × onset-timing proximity), not a statistical correlation/causation test.
+- The Electron app isn't code-signed yet. Unsigned builds run fine for local
+  testing, but distributing one to other people will hit Gatekeeper (macOS) or
+  SmartScreen (Windows) warnings until it's signed with a real developer identity —
+  a prerequisite for wider rollout, not something fixable in code.
+- Editing connections while the app is already running in `--mcp-server` mode for a
+  live Claude session requires restarting that session's server to pick up the change;
+  there's no live-reload yet.
 
 ## Acknowledgments
 
