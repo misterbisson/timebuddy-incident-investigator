@@ -65,6 +65,32 @@ describe('executeQueryWindow', () => {
     expect(result.series).toEqual([]);
   });
 
+  it('downsamples a series the datasource returned at full resolution despite maxDataPoints', async () => {
+    const pointCount = config.maxDataPoints * 10;
+    const times = Array.from({ length: pointCount }, (_, i) => 1_700_000_000_000 + i * 1000);
+    const values = Array.from({ length: pointCount }, (_, i) => i);
+    const response: DsQueryResponse = {
+      results: {
+        A: {
+          frames: [
+            {
+              schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'Value', type: 'number' }] },
+              data: { values: [times, values] },
+            },
+          ],
+        },
+      },
+    };
+    const result = await executeQueryWindow(
+      fakeClient(response),
+      [{ refId: 'A', datasourceUid: 'prom1', raw: { refId: 'A', expr: 'up' } }],
+      window,
+      config,
+    );
+    expect(result.series[0]?.points).toHaveLength(config.maxDataPoints);
+    expect(result.series[0]?.pointsTotal).toBe(pointCount);
+  });
+
   it('rejects a target with no resolvable datasource uid', async () => {
     await expect(
       executeQueryWindow(fakeClient({ results: {} }), [{ refId: 'A', raw: { refId: 'A', expr: 'up' } }], window, config),
