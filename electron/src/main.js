@@ -33,15 +33,21 @@ function createWindow() {
 }
 
 async function runMcpServer() {
-  const connections = store.getConnectionsForEngine();
+  const startupConnections = store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
   const { startMcpServer } = await import('timebuddy-incident-investigator');
-  await startMcpServer(connections);
+  // Pass a thunk, not the snapshot above, so the engine re-reads
+  // connections.json/secrets.enc.json on every tool call — a connection
+  // added or edited in the GUI takes effect on the next tool call, with no
+  // need to restart this MCP server process (restarting the GUI window
+  // alone never did anything here anyway: it's a separate process from the
+  // one Claude Code/Desktop is already talking to over stdio).
+  await startMcpServer(() => store.getConnectionsForEngine());
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
   console.error(
-    `timebuddy-incident-investigator MCP server running on stdio (${connections.length} Grafana connection(s): ${connections.map((c) => c.id).join(', ')})`,
+    `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')})`,
   );
 }
 

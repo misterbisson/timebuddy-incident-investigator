@@ -18,8 +18,17 @@ skill exists to handle for them.
    alert-rule URL, a raw alert JSON object, or a full Alertmanager webhook body). If nothing
    usable was given, ask for one of those three — a pasted Slack/email alert often has a URL in
    it even if the surrounding text doesn't look like structured data.
-   - If there's truly nothing to paste (no URL, no JSON) — no `get_alert_context` call will
-     help; skip to step 4 and search by labels/description instead.
+   - **Recognize stripped-link pasted alerts and ask, don't guess.** Slack (and some email
+     clients) turn a message's hyperlinks into plain anchor text when copied — you'll see link
+     *titles* like "Dashboard", "Runbook", "Silence", "Graylog: APIGW 5xx" with no URL anywhere
+     near them, alongside real-looking alert labels. This is NOT "truly nothing to paste" — a
+     real link exists, it just didn't survive the copy. Say so plainly and ask for it directly
+     (e.g. "Slack strips links when copied as plain text — could you grab the Dashboard or alert
+     link itself, or the alert's timestamp?") before falling back to step 4's label/description
+     search. Guessing the dashboard and time window from labels alone when a precise link was one
+     click away wastes several tool calls and turns; asking up front is faster for everyone.
+   - Only skip straight to step 4 when the person genuinely has no link and no JSON to give you
+     (e.g. they're describing the incident from memory, or pasted a screenshot's text by hand).
 
 2. **Note the resolved connection.** The response includes `resolvedConnectionId` when it could
    determine which Grafana connection the alert belongs to. Pass that same id as the `connection`

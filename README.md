@@ -57,6 +57,11 @@ hand-edit, no plaintext credential file anywhere.
    snippet (Claude Desktop) shown there — it already has this app's own path filled in —
    and add it to your Claude client.
 
+Adding, editing, or removing a connection later takes effect immediately for any MCP
+server that's already running — it's picked up on the very next tool call, no restart
+needed. (Restarting the connection-manager GUI window itself does nothing for this — it's
+a separate process from the one your Claude client is already talking to.)
+
 See [`electron/README.md`](electron/README.md) for exactly how connections/credentials are
 stored (short version: `safeStorage`/OS-keychain-encrypted, nothing plaintext, ever).
 
@@ -174,9 +179,6 @@ confirms the `safeStorage` -> engine wiring works end to end (see
   testing, but distributing one to other people will hit Gatekeeper (macOS) or
   SmartScreen (Windows) warnings until it's signed with a real developer identity —
   a prerequisite for wider rollout, not something fixable in code.
-- Editing connections while the app is already running in `--mcp-server` mode for a
-  live Claude session requires restarting that session's server to pick up the change;
-  there's no live-reload yet.
 
 ## Acknowledgments
 
