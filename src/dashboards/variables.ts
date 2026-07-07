@@ -29,7 +29,22 @@ export function effectiveValues(variable: TemplateVariable, overrides: Record<st
 }
 
 function formatValues(values: string[], format: string | undefined): string {
-  if (values.length === 0) return '';
+  if (values.length === 0) {
+    // Only reachable via an unresolved "All" selection in effectiveValues:
+    // no explicit allValue, and no options cached in the dashboard's saved
+    // JSON (common for query-type variables, whose options Grafana populates
+    // live at render time rather than storing). The default/regex formats
+    // build an alternation meant to sit inside the datasource's own regex
+    // matcher (InfluxQL's `/^$host$/`, PromQL's `label=~"$service"`); leaving
+    // it empty produces an anchored empty-string match that silently zeroes
+    // out every result. Confirmed against a real incident: this masked a live
+    // outage as "no data" on every panel of an affected dashboard. Failing
+    // open (match everything) is far safer here than failing closed (match
+    // nothing) for an incident-investigation tool. Other formats (csv/json/
+    // sqlstring/pipe/lucene) aren't naturally regex contexts, so they're left
+    // as '' rather than guessing at wildcard syntax that may not apply there.
+    return format === undefined || format === 'regex' ? '.*' : '';
+  }
   switch (format) {
     case 'csv':
       return values.join(',');

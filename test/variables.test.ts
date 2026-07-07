@@ -46,6 +46,21 @@ describe('substituteVariables', () => {
     expect(substituteVariables('region=~"$region"', variables, {}, window)).toBe('region=~"(us-east-1|us-west-2)"');
   });
 
+  it('resolves an unresolvable $__all (no allValue, no cached options) to a wildcard rather than an empty match', () => {
+    const variables: TemplateVariable[] = [
+      { name: 'proxy_host', type: 'query', current: { value: '$__all' }, includeAll: true, options: [] },
+    ];
+    expect(substituteVariables('proxy_host=~"$proxy_host"', variables, {}, window)).toBe('proxy_host=~".*"');
+    expect(substituteVariables('proxy_host=~"${proxy_host:regex}"', variables, {}, window)).toBe('proxy_host=~".*"');
+  });
+
+  it('leaves non-regex formats empty for an unresolvable $__all, rather than guessing at wildcard syntax', () => {
+    const variables: TemplateVariable[] = [
+      { name: 'proxy_host', type: 'query', current: { value: '$__all' }, includeAll: true, options: [] },
+    ];
+    expect(substituteVariables('hosts: ${proxy_host:csv}', variables, {}, window)).toBe('hosts: ');
+  });
+
   it('replaces built-in time macros', () => {
     const result = substituteVariables('time >= $__from and time <= $__to, step=$__interval', [], {}, window);
     expect(result).toContain(`${window.fromMs}`);
@@ -103,6 +118,19 @@ describe('substituteTargetFields', () => {
     expect(result.tags).toEqual([{ key: 'host::tag', operator: '=~', value: '/^telegraf-api-prd$/' }]);
     expect(result.measurement).toBe('influx_proxy_backend_status');
     expect(result.policy).toBe('raw');
+  });
+
+  it('resolves an unresolvable $__all inside a builder-mode tag filter to a wildcard, not /^$/ (real incident: this silently zeroed every panel on a live dashboard)', () => {
+    const variables: TemplateVariable[] = [
+      { name: 'proxy_host', type: 'query', current: { value: '$__all' }, includeAll: true, options: [] },
+    ];
+    const result = substituteTargetFields(
+      { refId: 'A', tags: [{ key: 'proxy_host::tag', operator: '=~', value: '/^$proxy_host$/' }] },
+      variables,
+      {},
+      window,
+    );
+    expect(result.tags).toEqual([{ key: 'proxy_host::tag', operator: '=~', value: '/^.*$/' }]);
   });
 
   it('substitutes builder-mode fields using an explicit override', () => {
