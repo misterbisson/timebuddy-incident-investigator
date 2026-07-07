@@ -43,7 +43,11 @@ person who has never successfully used this tool won't reach for it under real p
    count as an incident signal on its own — a sizable chunk of it is typically panels whose
    datasource is a Grafana template variable (`${datasource}`, `$some_var`) that this index can't
    resolve statically, not real breakage. `datasourceUid` values that look like plain names rather
-   than variables (no leading `$`) are the ones worth a second look.
+   than variables (no leading `$`) are the ones worth a second look. Also check
+   `brokenDatasourcesUniqueCount` before reacting to a big total — `brokenDatasourcesTotal` counts
+   panel *references*, and a handful of retired datasources can each be referenced by hundreds or
+   thousands of old panels, so a total in the tens of thousands is often really "a few datasources
+   need cleanup," not thousands of distinct problems.
 6. Pick one or two dashboards from `alertBackedDashboards` and offer to look at one with them —
    `fetch_dashboard` for its panel list, or `resolve_panel_queries`/`execute_query_window` if
    they want to see actual data. The goal is for them to see a real, live, *trustworthy* result,

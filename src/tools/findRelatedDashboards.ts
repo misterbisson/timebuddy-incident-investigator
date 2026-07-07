@@ -112,7 +112,9 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         'when just surveying what exists and is known-good. If alertBackedTotal is 0 or unexpectedly low, check ' +
         'alertRuleAccessErrors before concluding there simply are no alerts — it\'s only present for a connection ' +
         'when the alert-rule crawl itself failed (e.g. a permission-scoped token), which looks identical to "no ' +
-        'alerts" unless you check this.',
+        'alerts" unless you check this. brokenDatasourcesTotal counts panel references, not distinct datasources — ' +
+        'a large estate can have thousands of *references* to only a handful of retired datasources, so check ' +
+        'brokenDatasourcesUniqueCount too before treating a big total as thousands of separate problems.',
       inputSchema: {
         metricName: z.string().optional().describe('Exact Prometheus metric name or InfluxDB measurement name'),
         labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
@@ -181,6 +183,14 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             alertRuleAccessErrors,
             brokenDatasources: withUrls(registry, allBroken.slice(0, limit)),
             brokenDatasourcesTotal: allBroken.length,
+            // brokenDatasourcesTotal counts panel references, which wildly
+            // overstates the problem when a handful of retired datasources
+            // are each still referenced by hundreds/thousands of old panels
+            // (confirmed against a real estate: single digits of distinct
+            // missing datasources behind thousands of references) — this is
+            // "how many actually-different datasources are missing," the
+            // number that matters for triage.
+            brokenDatasourcesUniqueCount: new Set(allBroken.map((b) => `${b.connectionId}|${b.datasourceUid}`)).size,
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });

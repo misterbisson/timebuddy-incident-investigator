@@ -146,6 +146,11 @@ export interface RulerAlertQuery {
   relativeTimeRange?: { from: number; to: number };
 }
 
+/**
+ * The shape of a single rule from the provisioning API
+ * (`/api/v1/provisioning/alert-rules/{uid}`, see GrafanaClient.getAlertRuleByUid)
+ * — annotations/labels live directly on this object there.
+ */
 export interface RulerAlertRule {
   uid: string;
   title: string;
@@ -159,7 +164,21 @@ export interface RulerAlertRule {
 export interface RulerRuleGroup {
   name: string;
   folderUid?: string;
-  rules: Array<{ grafana_alert: RulerAlertRule; for?: string }>;
+  /**
+   * The bulk ruler API (`/api/ruler/grafana/api/v1/rules`, see
+   * GrafanaClient.getRuleGroups) nests each rule differently from the
+   * provisioning API above: annotations/labels are siblings of
+   * grafana_alert, not fields on it — grafana_alert itself only carries
+   * uid/title/condition/data/... Confirmed against a real Grafana instance;
+   * getting this wrong means every rule's annotations read as undefined
+   * with no error, which is exactly what happened before this was fixed.
+   */
+  rules: Array<{
+    grafana_alert: Omit<RulerAlertRule, 'annotations' | 'labels' | 'for'>;
+    annotations?: Record<string, string>;
+    labels?: Record<string, string>;
+    for?: string;
+  }>;
 }
 
 export interface GrafanaAnnotation {

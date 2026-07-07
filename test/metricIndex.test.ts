@@ -123,14 +123,11 @@ describe('buildMetricIndex', () => {
           folderUid: 'product-alerts',
           rules: [
             {
-              grafana_alert: {
-                uid: 'rule1',
-                title: 'BlockStorageCephDegraded',
-                condition: 'A',
-                data: [],
-                annotations: { __dashboardUid__: 'blockstorage', __panelId__: '1' },
-                labels: { service: 'blockstorage' },
-              },
+              // annotations/labels are siblings of grafana_alert in the real
+              // ruler API response, not fields on it — see RulerRuleGroup.
+              grafana_alert: { uid: 'rule1', title: 'BlockStorageCephDegraded', condition: 'A', data: [] },
+              annotations: { __dashboardUid__: 'blockstorage', __panelId__: '1' },
+              labels: { service: 'blockstorage' },
             },
             // No dashboard link at all — a label-only rule, not an error, just skipped.
             { grafana_alert: { uid: 'rule2', title: 'GenericLabelAlert', condition: 'A', data: [] } },
@@ -149,6 +146,35 @@ describe('buildMetricIndex', () => {
         alertRules: [{ uid: 'rule1', title: 'BlockStorageCephDegraded', labels: { service: 'blockstorage' }, folderUid: 'product-alerts' }],
       },
     ]);
+  });
+
+  it('does not read annotations/labels off grafana_alert itself, only off the rule wrapper', async () => {
+    const dashboards: DashboardGetResponse[] = [
+      { dashboard: { uid: 'd1', title: 'D1', panels: [{ id: 1, title: 'P1', targets: [] }] }, meta: {} },
+    ];
+    const ruleGroups: Record<string, RulerRuleGroup[]> = {
+      folder: [
+        {
+          name: 'group',
+          folderUid: 'f1',
+          rules: [
+            {
+              // Misplaced, as if grafana_alert carried them directly (the
+              // real bug this guards against) — must NOT be picked up.
+              grafana_alert: {
+                uid: 'rule1',
+                title: 'Misplaced',
+                condition: 'A',
+                data: [],
+                annotations: { __dashboardUid__: 'd1', __panelId__: '1' },
+              } as unknown as RulerRuleGroup['rules'][number]['grafana_alert'],
+            },
+          ],
+        },
+      ],
+    };
+    const index = await buildMetricIndex(fakeClient(dashboards, ruleGroups));
+    expect(index.alertBackedPanels).toEqual([]);
   });
 
   it('does not fail the whole index build when the ruler API is unavailable, but records the error rather than hiding it', async () => {

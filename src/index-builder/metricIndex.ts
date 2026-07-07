@@ -40,18 +40,22 @@ function isNonQueryableDatasourceRef(ref: string): boolean {
  * (alerts/ingest.ts), just for every rule at once. A rule with no such
  * annotations isn't linked to a specific panel and is skipped here (not an
  * error — plenty of rules are label-based with no dashboard link at all).
+ *
+ * annotations/labels come from the rule wrapper, not from grafana_alert
+ * itself — see RulerRuleGroup's doc comment; getting this backwards means
+ * every rule silently reads as unlinked, with no error to notice it by.
  */
 function indexAlertRulesByPanel(ruleGroupsByFolder: Record<string, RulerRuleGroup[]>): Map<string, AlertRuleRef[]> {
   const byPanel = new Map<string, AlertRuleRef[]>();
   for (const groups of Object.values(ruleGroupsByFolder)) {
     for (const group of groups) {
-      for (const { grafana_alert: rule } of group.rules) {
-        const dashboardUid = rule.annotations?.__dashboardUid__;
-        const panelIdStr = rule.annotations?.__panelId__;
+      for (const { grafana_alert: rule, annotations, labels } of group.rules) {
+        const dashboardUid = annotations?.__dashboardUid__;
+        const panelIdStr = annotations?.__panelId__;
         if (!dashboardUid || !panelIdStr) continue;
         const key = `${dashboardUid}|${panelIdStr}`;
         const list = byPanel.get(key) ?? [];
-        list.push({ uid: rule.uid, title: rule.title, labels: rule.labels ?? {}, folderUid: group.folderUid });
+        list.push({ uid: rule.uid, title: rule.title, labels: labels ?? {}, folderUid: group.folderUid });
         byPanel.set(key, list);
       }
     }
