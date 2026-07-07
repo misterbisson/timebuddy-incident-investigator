@@ -30,7 +30,9 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
         'catch that. A control window whose offset is smaller than the incident\'s own duration (e.g. the default ' +
         'prior-hour control against an incident longer than ~1h) mostly overlaps the incident itself, so it\'s ' +
         'excluded from pooling automatically — check "warnings" for which ones, since a long incident can leave few ' +
-        'or no default controls usable.',
+        'or no default controls usable. If "endsAtMs" is omitted for a resolved (not still-firing) alert, this can ' +
+        'silently build a many-day window, so this call errors instead of running in that case; pass "endsAtMs" ' +
+        'explicitly.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -53,6 +55,14 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
           const { client, connectionId } = resolveToolClient(registry, { connection });
           resolvedConnectionId = connectionId;
           const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets });
+          // Fail fast, before running a single Grafana query, rather than
+          // executing an accidentally-huge window — see execute_query_window
+          // for why attaching a warning to an already-oversized result isn't
+          // good enough. Only fires when endsAtMs was omitted.
+          const sizeWarning = windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs);
+          if (sizeWarning) {
+            throw new Error(`${sizeWarning} No query was executed.`);
+          }
           const overrides = variableOverrides ?? {};
           const allWindows: TimeWindow[] = [windowSet.incident, ...windowSet.controls];
 
@@ -73,9 +83,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
             allControlExecs,
           );
 
-          const warnings = [windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs)].filter(
-            (w): w is string => w !== undefined,
-          );
+          const warnings: string[] = [];
           if (excludedOverlappingControls.length > 0) {
             warnings.push(
               `Excluded overlapping control window(s) from baseline pooling: ${excludedOverlappingControls.join(', ')} — ` +

@@ -87,8 +87,10 @@ export function toolErrorText(err: unknown, url?: string): string {
  * after the incident, silently producing a huge window. Since preWindow and
  * every control window inherit the incident's duration (see windows.ts),
  * that one omission balloons every window in the response, not just this
- * one — surfacing it explicitly beats making the caller discover it only
- * from an oversized/truncated result.
+ * one. Callers use this to fail fast, before running any query, rather than
+ * attaching it as a warning to a result that already ballooned — a result
+ * large enough to get truncated to a file buries a same-payload warning
+ * behind exactly the jq/bash detour this server exists to avoid.
  */
 export function windowSizeWarning(
   startsAtMs: number,

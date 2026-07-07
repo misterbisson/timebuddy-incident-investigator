@@ -61,6 +61,14 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             const { client: primaryClient, connectionId } = resolveToolClient(registry, { connection });
             primaryConnectionId = connectionId;
             const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets: [] });
+            // Fail fast, before running a single Grafana query, rather than
+            // executing an accidentally-huge window across every candidate —
+            // see execute_query_window for why. Only fires when endsAtMs was
+            // omitted.
+            const sizeWarning = windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs);
+            if (sizeWarning) {
+              throw new Error(`${sizeWarning} No query was executed.`);
+            }
             const overrides = variableOverrides ?? {};
 
             const primaryResolved = await resolvePanelForWindow(
@@ -169,9 +177,6 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                   })
                 : undefined,
             }));
-            const warnings = [windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs)].filter(
-              (w): w is string => w !== undefined,
-            );
             const result = {
               primaryConnectionId: connectionId,
               primaryUrl: dashboardUrlFor(registry, connectionId, primaryDashboardUid, {
@@ -182,7 +187,6 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryOnsetMs,
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),
-              warnings,
             };
             return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
           },

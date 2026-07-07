@@ -45,7 +45,10 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'exactly when each refId/series dropped below full health and for how long, including whether sibling ' +
         'series (e.g. other hosts/cells in the same panel) dipped too, and threshold: 0, thresholdDirection: "above" ' +
         'finds exactly when a volume/count metric had any activity. Always prefer stats/threshold over fetching the ' +
-        'raw points and scripting the same analysis yourself.',
+        'raw points and scripting the same analysis yourself. If "endsAtMs" is omitted and the alert is resolved ' +
+        '(not still firing), it defaults to now — for an old/resolved alert this can silently build a many-day ' +
+        'window, so this call errors instead of running in that case; pass "endsAtMs" explicitly (from the alert\'s ' +
+        'own resolved end, or the dashboard link\'s "to" param).',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -72,6 +75,17 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             preWindowMs,
             controlOffsets: includeControls ? undefined : [],
           });
+          // Fail fast, before running a single Grafana query, rather than
+          // executing an accidentally-huge window and attaching a warning to
+          // a result that's already oversized — a truncated-to-file tool
+          // result buries that warning behind exactly the jq/bash detour this
+          // tool exists to avoid. Only fires when endsAtMs was omitted; an
+          // explicit endsAtMs (even a deliberately huge one, or "now" for a
+          // genuinely still-firing multi-day incident) is always honored.
+          const sizeWarning = windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs);
+          if (sizeWarning) {
+            throw new Error(`${sizeWarning} No query was executed.`);
+          }
           const allWindows = [windowSet.incident, windowSet.preWindow, ...windowSet.controls];
           const overrides = variableOverrides ?? {};
 
@@ -97,10 +111,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
           });
-          const warnings = [windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs)].filter(
-            (w): w is string => w !== undefined,
-          );
-          const result = { url, incident, preWindow, controls, warnings };
+          const result = { url, incident, preWindow, controls };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
