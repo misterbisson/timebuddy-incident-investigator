@@ -67,6 +67,20 @@ export function dashboardUrlFor(
   return buildDashboardUrl(connection.url, dashboardUid, opts);
 }
 
+/**
+ * Standard tool error text, with the dashboard/panel URL appended when one
+ * could still be built (i.e. the connection/dashboardUid/panelId were
+ * already known before whatever failed) — so a query that times out or
+ * errors partway through still gives the caller a link to open the panel
+ * directly in Grafana, rather than a dead end with nothing to click through
+ * to. Omit `url` when nothing was resolved yet (e.g. connection resolution
+ * itself failed) — there's nothing truthful to link to in that case.
+ */
+export function toolErrorText(err: unknown, url?: string): string {
+  const message = `Error: ${err instanceof Error ? err.message : String(err)}`;
+  return url ? `${message}\n\nDashboard/panel: ${url}` : message;
+}
+
 export interface ResolvedPanelForWindow {
   dashboard: DashboardJson;
   panel: ResolvedPanel;

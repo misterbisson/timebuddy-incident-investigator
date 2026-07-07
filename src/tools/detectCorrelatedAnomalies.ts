@@ -7,7 +7,7 @@ import { computeStats, detectOnset } from '../analysis/baseline.js';
 import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../analysis/correlation.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -51,13 +51,15 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
       annotations: { readOnlyHint: true, title: 'Detect correlated anomalies' },
     },
     async ({ primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit, connection }) => {
+      let primaryConnectionId: string | undefined;
       try {
         return await withAudit(
           'detect_correlated_anomalies',
           { primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs },
           config,
           async () => {
-            const { client: primaryClient, connectionId: primaryConnectionId } = resolveToolClient(registry, { connection });
+            const { client: primaryClient, connectionId } = resolveToolClient(registry, { connection });
+            primaryConnectionId = connectionId;
             const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets: [] });
             const overrides = variableOverrides ?? {};
 
@@ -92,7 +94,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
 
             let candidateRefs: CandidateRef[];
             if (candidates) {
-              candidateRefs = candidates.map((c) => ({ ...c, connectionId: c.connectionId ?? primaryConnectionId }));
+              candidateRefs = candidates.map((c) => ({ ...c, connectionId: c.connectionId ?? connectionId }));
             } else {
               const metricNames = new Set(
                 primaryResolved.panel.targets.flatMap((t) => extractQueryInfo(t.raw).metricNames),
@@ -107,20 +109,20 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               );
               for (const outcome of perConnection) {
                 if (outcome.status !== 'fulfilled') continue;
-                const { connectionId, index } = outcome.value;
+                const { connectionId: entryConnectionId, index } = outcome.value;
                 for (const metric of metricNames) {
                   for (const entry of index.entriesByMetric[metric] ?? []) {
                     if (
-                      connectionId === primaryConnectionId &&
+                      entryConnectionId === connectionId &&
                       entry.dashboardUid === primaryDashboardUid &&
                       entry.panelId === primaryPanelId
                     ) {
                       continue;
                     }
-                    const key = `${connectionId}|${entry.dashboardUid}|${entry.panelId}`;
+                    const key = `${entryConnectionId}|${entry.dashboardUid}|${entry.panelId}`;
                     if (seen.has(key)) continue;
                     seen.add(key);
-                    candidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId, connectionId });
+                    candidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId, connectionId: entryConnectionId });
                   }
                 }
               }
@@ -168,8 +170,8 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                 : undefined,
             }));
             const result = {
-              primaryConnectionId,
-              primaryUrl: dashboardUrlFor(registry, primaryConnectionId, primaryDashboardUid, {
+              primaryConnectionId: connectionId,
+              primaryUrl: dashboardUrlFor(registry, connectionId, primaryDashboardUid, {
                 panelId: primaryPanelId,
                 fromMs: windowSet.incident.fromMs,
                 toMs: windowSet.incident.toMs,
@@ -182,7 +184,10 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
           },
         );
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const url = primaryConnectionId
+          ? dashboardUrlFor(registry, primaryConnectionId, primaryDashboardUid, { panelId: primaryPanelId })
+          : undefined;
+        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
       }
     },
   );

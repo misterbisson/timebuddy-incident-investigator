@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource } from '../src/tools/shared.js';
+import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, toolErrorText } from '../src/tools/shared.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { ConnectionRegistry } from '../src/grafana/registry.js';
 import type { GrafanaConnection } from '../src/config.js';
@@ -80,5 +80,20 @@ describe('dashboardUrlFor', () => {
 
   it('returns undefined when the connection id is not found, rather than throwing', () => {
     expect(dashboardUrlFor(fakeRegistry([connection]), 'missing', 'abc123')).toBeUndefined();
+  });
+});
+
+describe('toolErrorText', () => {
+  it('formats a bare error message when no url is available', () => {
+    expect(toolErrorText(new Error('boom'))).toBe('Error: boom');
+  });
+
+  it('appends the dashboard/panel url when one was already resolved', () => {
+    const text = toolErrorText(new Error('timed out'), 'https://grafana.example.com/d/abc123?viewPanel=4');
+    expect(text).toBe('Error: timed out\n\nDashboard/panel: https://grafana.example.com/d/abc123?viewPanel=4');
+  });
+
+  it('handles a non-Error thrown value', () => {
+    expect(toolErrorText('plain string error')).toBe('Error: plain string error');
   });
 });

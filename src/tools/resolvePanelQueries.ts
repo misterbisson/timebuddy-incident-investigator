@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
-import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -33,9 +33,11 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
       annotations: { readOnlyHint: true, title: 'Resolve panel queries' },
     },
     async ({ dashboardUid, panelId, variableOverrides, windowFromMs, windowToMs, connection }) => {
+      let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('resolve_panel_queries', { dashboardUid, panelId }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
+          resolvedConnectionId = connectionId;
           const { dashboard } = await client.getDashboard(dashboardUid);
           const variables = dashboard.templating?.list ?? [];
           const overrides = variableOverrides ?? {};
@@ -71,7 +73,8 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
+        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
       }
     },
   );

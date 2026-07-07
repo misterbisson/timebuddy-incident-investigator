@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -44,9 +44,11 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
       annotations: { readOnlyHint: true, title: 'Validate baseline' },
     },
     async ({ dashboardUid, panelId, startsAtMs, endsAtMs, variableOverrides, zThreshold, controlOffsets, connection }) => {
+      let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('validate_baseline', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
+          resolvedConnectionId = connectionId;
           const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets });
           const overrides = variableOverrides ?? {};
           const allWindows: TimeWindow[] = [windowSet.incident, ...windowSet.controls];
@@ -93,7 +95,8 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
+        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
       }
     },
   );

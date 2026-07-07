@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { flattenPanels } from '../dashboards/panelQueries.js';
-import { dashboardUrlFor, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, resolveToolClient, toolErrorText } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -21,9 +21,11 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
       annotations: { readOnlyHint: true, title: 'Fetch dashboard' },
     },
     async ({ dashboardUid, connection }) => {
+      let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('fetch_dashboard', { dashboardUid }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
+          resolvedConnectionId = connectionId;
           const { dashboard, meta } = await client.getDashboard(dashboardUid);
           const panels = flattenPanels(dashboard.panels ?? []).map((p) => ({
             id: p.id,
@@ -52,7 +54,8 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
           return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid) : undefined;
+        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
       }
     },
   );

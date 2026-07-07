@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows } from '../query/windows.js';
 import { executeQueryWindows, type WindowQueryResult } from '../query/executor.js';
 import { findThresholdRuns } from '../analysis/runs.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -47,9 +47,11 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
       annotations: { readOnlyHint: true, title: 'Execute query window' },
     },
     async ({ dashboardUid, panelId, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, connection }) => {
+      let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
+          resolvedConnectionId = connectionId;
           const windowSet = computeWindows({
             startsAtMs,
             endsAtMs,
@@ -79,7 +81,8 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
+        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
       }
     },
   );
