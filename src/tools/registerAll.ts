@@ -9,6 +9,7 @@ import { registerFindRelatedDashboards } from './findRelatedDashboards.js';
 import { registerDetectCorrelatedAnomalies } from './detectCorrelatedAnomalies.js';
 import { registerValidateBaseline } from './validateBaseline.js';
 import { registerSummarizeFindings } from './summarizeFindings.js';
+import { registerListDatasources } from './listDatasources.js';
 
 export interface ToolContext {
   registry: ConnectionRegistry;
@@ -24,4 +25,5 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerDetectCorrelatedAnomalies(server, ctx);
   registerValidateBaseline(server, ctx);
   registerSummarizeFindings(server, ctx);
+  registerListDatasources(server, ctx);
 }

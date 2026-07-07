@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveTargetDatasource } from '../src/tools/shared.js';
+import { epochMsSchema, resolveTargetDatasource } from '../src/tools/shared.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { TemplateVariable } from '../src/grafana/types.js';
 
@@ -43,5 +43,23 @@ describe('resolveTargetDatasource', () => {
   it('returns undefined when the variable itself is not defined on the dashboard', async () => {
     const { client } = fakeClient([{ uid: 'prom1', name: 'Prometheus' }]);
     expect(await resolveTargetDatasource(client, '$missing', [], {})).toBeUndefined();
+  });
+});
+
+describe('epochMsSchema', () => {
+  it('passes a raw epoch-ms number through unchanged', () => {
+    expect(epochMsSchema.parse(1780704000000)).toBe(1780704000000);
+  });
+
+  it('parses an ISO 8601 date/time string into epoch ms', () => {
+    expect(epochMsSchema.parse('2026-06-08T00:00:00Z')).toBe(Date.parse('2026-06-08T00:00:00Z'));
+  });
+
+  it('parses a bare date (no time) string into epoch ms', () => {
+    expect(epochMsSchema.parse('2026-06-08')).toBe(Date.parse('2026-06-08'));
+  });
+
+  it('rejects a string that is not a parseable date, with a clear message', () => {
+    expect(() => epochMsSchema.parse('not-a-date')).toThrowError(/Could not parse.*not-a-date.*as a date/);
   });
 });

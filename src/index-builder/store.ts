@@ -50,6 +50,14 @@ export interface MetricIndex {
   entriesByMetric: Record<string, MetricIndexEntry[]>;
   brokenDatasources: BrokenDatasourceRef[];
   alertBackedPanels: AlertBackedPanelRef[];
+  /**
+   * Set when the alert-rule crawl (getRuleGroups()) failed — e.g. a
+   * permission-scoped token — so alertBackedPanels being empty can be told
+   * apart from "we tried and there genuinely are none" from "we couldn't
+   * even ask." Optional and safe to read as undefined everywhere; never
+   * assume its presence.
+   */
+  alertRuleAccessError?: string;
 }
 
 function indexDir(config: Config): string {

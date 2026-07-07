@@ -7,7 +7,7 @@ import { computeStats, detectOnset } from '../analysis/baseline.js';
 import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../analysis/correlation.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -37,8 +37,8 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
       inputSchema: {
         primaryDashboardUid: z.string(),
         primaryPanelId: z.number(),
-        startsAtMs: z.number(),
-        endsAtMs: z.number().optional(),
+        startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time'),
+        endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601'),
         primaryLabels: z.record(z.string()).optional().describe('Alert labels, used for relevance ranking'),
         candidates: z
           .array(z.object({ dashboardUid: z.string(), panelId: z.number(), connectionId: z.string().optional() }))

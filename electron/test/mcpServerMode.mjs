@@ -59,6 +59,7 @@ try {
     'detect_correlated_anomalies',
     'validate_baseline',
     'summarize_findings',
+    'list_datasources',
   ];
   const actualNames = tools.map((t) => t.name).sort();
   const missing = expectedNames.filter((n) => !actualNames.includes(n));

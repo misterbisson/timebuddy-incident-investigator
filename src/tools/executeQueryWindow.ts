@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows } from '../query/windows.js';
 import { executeQueryWindows, type WindowQueryResult } from '../query/executor.js';
 import { findThresholdRuns } from '../analysis/runs.js';
-import { resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -35,8 +35,8 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
-        startsAtMs: z.number().describe('Incident start, epoch ms (e.g. the alert\'s startsAt)'),
-        endsAtMs: z.number().optional().describe('Incident end, epoch ms; defaults to now for still-firing alerts'),
+        startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time (e.g. the alert\'s startsAt, or "2026-06-08T00:00:00Z")'),
+        endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601; defaults to now for still-firing alerts'),
         preWindowMs: z.number().optional().describe('Buffer before the incident start, ms; defaults to max(30min, incident duration)'),
         variableOverrides: z.record(z.array(z.string())).optional(),
         includeControls: z.boolean().optional().default(true).describe('Include prior-hour/day/week baseline windows'),

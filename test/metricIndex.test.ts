@@ -78,7 +78,7 @@ describe('buildMetricIndex', () => {
     ]);
   });
 
-  it('does not flag a template-variable datasource ref as broken, but still flags a plain stale name', async () => {
+  it('does not flag a template variable or a Grafana pseudo-datasource as broken, but still flags a plain stale name', async () => {
     const dashboards: DashboardGetResponse[] = [
       {
         dashboard: {
@@ -88,6 +88,9 @@ describe('buildMetricIndex', () => {
             { id: 1, title: 'Templated', targets: [{ refId: 'A', datasource: '${datasource}', expr: 'up' }] },
             { id: 2, title: 'Templated var', targets: [{ refId: 'A', datasource: '$sysops_griffin_datasource', expr: 'up' }] },
             { id: 3, title: 'Stale name', targets: [{ refId: 'A', datasource: 'Old Datasource Name', expr: 'up' }] },
+            { id: 4, title: 'Expression', targets: [{ refId: 'A', datasource: '__expr__', expr: '$A + $B' }] },
+            { id: 5, title: 'Reused annotation', targets: [{ refId: 'A', datasource: '-- Dashboard --', expr: 'up' }] },
+            { id: 6, title: 'Test data', targets: [{ refId: 'A', datasource: '-- Grafana --', expr: 'up' }] },
           ],
         },
         meta: {},
@@ -148,7 +151,7 @@ describe('buildMetricIndex', () => {
     ]);
   });
 
-  it('does not fail the whole index build when the ruler API is unavailable', async () => {
+  it('does not fail the whole index build when the ruler API is unavailable, but records the error rather than hiding it', async () => {
     const dashboards: DashboardGetResponse[] = [
       { dashboard: { uid: 'd1', title: 'OK', panels: [] }, meta: {} },
     ];
@@ -164,6 +167,13 @@ describe('buildMetricIndex', () => {
     const index = await buildMetricIndex(client);
     expect(index.dashboardsScanned).toBe(1);
     expect(index.alertBackedPanels).toEqual([]);
+    expect(index.alertRuleAccessError).toBe('403 Forbidden');
+  });
+
+  it('leaves alertRuleAccessError undefined when the ruler API succeeds', async () => {
+    const dashboards: DashboardGetResponse[] = [{ dashboard: { uid: 'd1', title: 'OK', panels: [] }, meta: {} }];
+    const index = await buildMetricIndex(fakeClient(dashboards));
+    expect(index.alertRuleAccessError).toBeUndefined();
   });
 
   it('skips dashboards that fail to load without aborting the whole crawl', async () => {

@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
-import { resolveTargetDatasource, resolveToolClient } from './shared.js';
+import { epochMsSchema, resolveTargetDatasource, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -26,8 +26,8 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
           .record(z.array(z.string()))
           .optional()
           .describe('Variable name -> value(s), e.g. from a panel URL\'s var-* query params'),
-        windowFromMs: z.number().optional().describe('Epoch ms used to evaluate $__interval/$__range/$timeFilter; defaults to 1h ago'),
-        windowToMs: z.number().optional().describe('Epoch ms used to evaluate $__interval/$__range/$timeFilter; defaults to now'),
+        windowFromMs: epochMsSchema.optional().describe('Epoch ms or ISO 8601 date/time used to evaluate $__interval/$__range/$timeFilter; defaults to 1h ago'),
+        windowToMs: epochMsSchema.optional().describe('Epoch ms or ISO 8601 date/time used to evaluate $__interval/$__range/$timeFilter; defaults to now'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Resolve panel queries' },

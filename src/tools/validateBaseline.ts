@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
-import { resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -31,8 +31,8 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
-        startsAtMs: z.number(),
-        endsAtMs: z.number().optional(),
+        startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time'),
+        endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601'),
         variableOverrides: z.record(z.array(z.string())).optional(),
         zThreshold: z.number().optional().default(3),
         controlOffsets: z

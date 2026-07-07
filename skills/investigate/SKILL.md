@@ -60,6 +60,14 @@ skill exists to handle for them.
    `candidates` to let it auto-discover across the metric index. This tells you what else moved
    around the same time, which is often the actual answer to "is this real."
 
+   If a panel's queries fail with something like "404 Data source not found," check whether its
+   datasource reference is a literal name rather than a UID (not a `$variable` — those are already
+   handled). `list_datasources` tells you whether a datasource matching that name still exists
+   under a different UID — if it does, that's a real, reportable finding ("this dashboard's
+   datasource reference is stale, here's the correct UID"), not a dead end. If nothing close shows
+   up, say so plainly rather than retrying — that dashboard needs a Grafana-side fix, not something
+   any tool call here can resolve.
+
 6. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
    and an `evidence` array of dashboard/panel links you gathered along the way.
    `summarize_findings` returns **structured data only — no prose**. Reading its `reasons` and

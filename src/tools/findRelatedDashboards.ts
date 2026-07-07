@@ -74,6 +74,13 @@ function compareCandidates(a: Candidate, b: Candidate): number {
   return backedDiff !== 0 ? backedDiff : b.labelOverlapCount - a.labelOverlapCount;
 }
 
+/** Only includes a connection when its alert-rule crawl actually failed — see MetricIndex.alertRuleAccessError. */
+export function collectAlertRuleAccessErrors(results: Array<{ connectionId: string; index: MetricIndex }>): Record<string, string> {
+  return Object.fromEntries(
+    results.filter((r) => r.index.alertRuleAccessError).map((r) => [r.connectionId, r.index.alertRuleAccessError!]),
+  );
+}
+
 export function registerFindRelatedDashboards(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
     'find_related_dashboards',
@@ -93,7 +100,10 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         'panel — the strongest signal that it\'s actually relied on rather than a test/scratch/deprecated dashboard ' +
         'that merely matched; alert-backed matches sort first. alertBackedDashboards is a standing overview of every ' +
         'alert-backed panel found, independent of metricName/labels/query — useful even with no search term, e.g. ' +
-        'when just surveying what exists and is known-good.',
+        'when just surveying what exists and is known-good. If alertBackedTotal is 0 or unexpectedly low, check ' +
+        'alertRuleAccessErrors before concluding there simply are no alerts — it\'s only present for a connection ' +
+        'when the alert-rule crawl itself failed (e.g. a permission-scoped token), which looks identical to "no ' +
+        'alerts" unless you check this.',
       inputSchema: {
         metricName: z.string().optional().describe('Exact Prometheus metric name or InfluxDB measurement name'),
         labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
@@ -147,6 +157,8 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           // by (unlike matches) and can run into the tens of thousands of
           // entries on a large real Grafana estate — always cap both, and
           // report the untruncated counts so nothing is silently hidden.
+          const alertRuleAccessErrors = collectAlertRuleAccessErrors(fulfilled.map((r) => r.value));
+
           const result = {
             indexBuiltAt: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.builtAt])),
             dashboardsScanned: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.dashboardsScanned])),
@@ -154,6 +166,10 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             matchesTotal: allCandidates.length,
             alertBackedDashboards: allAlertBacked.slice(0, limit),
             alertBackedTotal: allAlertBacked.length,
+            // Only present for connections where the alert-rule crawl itself
+            // failed — lets a zero/low alertBackedTotal be told apart from
+            // "we tried and there genuinely are none" vs. "we couldn't ask."
+            alertRuleAccessErrors,
             brokenDatasources: allBroken.slice(0, limit),
             brokenDatasourcesTotal: allBroken.length,
           };

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { GrafanaClient } from '../grafana/client.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import type { DashboardJson, TemplateVariable } from '../grafana/types.js';
@@ -5,6 +6,28 @@ import { findPanel, type ResolvedPanel, type ResolvedTarget } from '../dashboard
 import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards/variables.js';
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
+
+/**
+ * A time boundary as either a raw epoch-ms number or an ISO 8601 date/time
+ * string ("2026-06-08T00:00:00Z", "2026-06-08"). Every investigation needs
+ * to express a specific date at some point, and requiring epoch-ms only
+ * pushes that date math onto the caller — in practice, onto shell commands
+ * (`date`, `python3 -c "import datetime..."`) run just to convert a human
+ * date into a number, each one a permission prompt. Accepting both forms
+ * here removes the need for that entirely.
+ */
+export const epochMsSchema = z.union([z.number(), z.string()]).transform((value, ctx) => {
+  if (typeof value === 'number') return value;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Could not parse "${value}" as a date — use an ISO 8601 date/time (e.g. "2026-06-08T00:00:00Z") or a raw epoch-ms number`,
+    });
+    return NaN;
+  }
+  return parsed;
+});
 
 /**
  * Resolves which connection a tool call should use (explicit id wins, else

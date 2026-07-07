@@ -8,18 +8,29 @@ import { isStale, loadIndex, saveIndex, type AlertRuleRef, type MetricIndex } fr
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
+ * Grafana's own special pseudo-datasource references — never real
+ * datasources, so never "broken": __expr__ (the Expression pseudo-datasource,
+ * for panels that do math on other queries rather than querying anything)
+ * and -- Dashboard --/-- Grafana -- (reuse this dashboard's own annotations /
+ * built-in test data, respectively). -- Mixed -- is handled separately in
+ * panelQueries.ts (resolves to undefined there, never reaches this check).
+ */
+const GRAFANA_PSEUDO_DATASOURCE_REFS = new Set(['__expr__', '-- Dashboard --', '-- Grafana --']);
+
+/**
  * A legacy string datasource ref can be a Grafana template variable
  * ($datasource, ${datasource}, $sysops_griffin_datasource, ...) rather than a
  * literal datasource name — panelQueries.ts passes these through unresolved,
  * and they'll never match a real UID, so treating them as "broken" is a
- * false positive (confirmed against real data: this was the overwhelming
- * majority of a many-thousands-per-connection brokenDatasources count). A
- * plain literal name (e.g. "Griffin-ELB") is left flagged — that one could
- * genuinely be a renamed/deleted datasource, which we can't tell apart from
- * a template variable without also doing a name->uid lookup.
+ * false positive (confirmed against real data: this and the pseudo-datasource
+ * refs above were the overwhelming majority of a many-thousands-per-connection
+ * brokenDatasources count). A plain literal name (e.g. "Griffin-ELB") is left
+ * flagged — that one could genuinely be a renamed/deleted datasource, which
+ * we can't tell apart from a template variable without also doing a
+ * name->uid lookup.
  */
-function isTemplateVariableRef(ref: string): boolean {
-  return ref.startsWith('$');
+function isNonQueryableDatasourceRef(ref: string): boolean {
+  return ref.startsWith('$') || GRAFANA_PSEUDO_DATASOURCE_REFS.has(ref);
 }
 
 /**
@@ -57,16 +68,25 @@ function indexAlertRulesByPanel(ruleGroupsByFolder: Record<string, RulerRuleGrou
  * This is what find_related_dashboards searches against.
  */
 export async function buildMetricIndex(client: GrafanaClient): Promise<MetricIndex> {
-  const [summaries, datasources, ruleGroupsByFolder] = await Promise.all([
+  const [summaries, datasources] = await Promise.all([
     client.searchDashboards({ limit: 5000 }),
     client.listDatasources(),
-    // Alert-rule access is an enhancement (surfacing which panels are
-    // actually relied on), not a requirement — some tokens/older Grafana
-    // versions won't have the ruler API available, and that shouldn't break
-    // dashboard/metric indexing, which worked fine without this before.
-    client.getRuleGroups().catch(() => ({})),
   ]);
   const knownDsUids = new Set(datasources.map((d) => d.uid));
+
+  // Alert-rule access is an enhancement (surfacing which panels are actually
+  // relied on), not a requirement — some tokens/older Grafana versions won't
+  // have the ruler API available, and that shouldn't break dashboard/metric
+  // indexing, which worked fine without this before. But silently swallowing
+  // the error made a real failure indistinguishable from "there genuinely
+  // are no alert rules" — confirmed against a real Grafana estate that
+  // showed alertBackedTotal: 0 across ~2,847 dashboards with no way to tell
+  // which case it was. Capture and surface it instead of just discarding it.
+  let alertRuleAccessError: string | undefined;
+  const ruleGroupsByFolder = await client.getRuleGroups().catch((err) => {
+    alertRuleAccessError = err instanceof Error ? err.message : String(err);
+    return {};
+  });
   const alertRulesByPanel = indexAlertRulesByPanel(ruleGroupsByFolder);
 
   const index: MetricIndex = {
@@ -75,6 +95,7 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
     entriesByMetric: {},
     brokenDatasources: [],
     alertBackedPanels: [],
+    alertRuleAccessError,
   };
 
   const dashboardResults = await Promise.allSettled(
@@ -104,7 +125,7 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
         if (
           target.datasourceUid &&
           !knownDsUids.has(target.datasourceUid) &&
-          !isTemplateVariableRef(target.datasourceUid)
+          !isNonQueryableDatasourceRef(target.datasourceUid)
         ) {
           index.brokenDatasources.push({
             dashboardUid: dashboard.uid,

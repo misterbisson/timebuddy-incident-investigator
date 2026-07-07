@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { searchIndex } from '../src/tools/findRelatedDashboards.js';
+import { collectAlertRuleAccessErrors, searchIndex } from '../src/tools/findRelatedDashboards.js';
 import type { MetricIndex } from '../src/index-builder/store.js';
 
 function index(): MetricIndex {
@@ -77,5 +77,22 @@ describe('searchIndex', () => {
 
     const unbacked = searchIndex(index(), 'conn1', { query: 'checkout' });
     expect(unbacked[0]?.backingAlertRuleTitles).toEqual([]);
+  });
+});
+
+describe('collectAlertRuleAccessErrors', () => {
+  it('includes only connections whose alert-rule crawl actually failed', () => {
+    const ok = index();
+    const failed = { ...index(), alertRuleAccessError: '403 Forbidden' };
+    const errors = collectAlertRuleAccessErrors([
+      { connectionId: 'eu-prd', index: ok },
+      { connectionId: 'kr-prd', index: failed },
+    ]);
+    expect(errors).toEqual({ 'kr-prd': '403 Forbidden' });
+  });
+
+  it('returns an empty object when every connection\'s crawl succeeded', () => {
+    const errors = collectAlertRuleAccessErrors([{ connectionId: 'eu-prd', index: index() }]);
+    expect(errors).toEqual({});
   });
 });

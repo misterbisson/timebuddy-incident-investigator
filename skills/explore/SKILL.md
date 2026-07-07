@@ -34,6 +34,11 @@ person who has never successfully used this tool won't reach for it under real p
    trusting during a real incident. A dashboard *not* appearing here isn't necessarily bad, it's
    just unverified by this particular signal (its alert rule might not be dashboard-linked, or it
    might genuinely have no alert wired to it yet).
+   - **If `alertBackedTotal` is 0 or surprisingly low, check `alertRuleAccessErrors` before
+     concluding this Grafana estate just has no alerts wired up that way.** It's only present for
+     a connection when the alert-rule crawl itself failed (e.g. a permission-scoped token) — that
+     looks identical to "genuinely zero alerts" unless you check it, and 0 across a large estate
+     (hundreds/thousands of dashboards) is unusual enough to be worth verifying rather than assuming.
 5. Mention `brokenDatasourcesTotal` per connection if it's non-trivial, but don't treat a large
    count as an incident signal on its own — a sizable chunk of it is typically panels whose
    datasource is a Grafana template variable (`${datasource}`, `$some_var`) that this index can't
