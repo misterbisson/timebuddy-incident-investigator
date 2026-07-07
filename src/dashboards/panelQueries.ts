@@ -6,11 +6,57 @@ export interface ResolvedTarget {
   raw: PanelTarget;
 }
 
+export interface ResolvedDataLink {
+  title?: string;
+  /** Raw URL template, e.g. "/d/other-dashboard?var-account_id=${__data.fields[\"Field\"]}&from=${__from}&to=${__to}" — Grafana resolves the ${...} macros client-side on click; this server doesn't (see resolvePanelDataLinks' doc comment for why), so substitute field values from the query result and the window bounds yourself to get a working URL. */
+  url: string;
+  /** The field this link applies to (from a fieldConfig override matched by field name); undefined if it applies to every field. */
+  appliesToField?: string;
+}
+
 export interface ResolvedPanel {
   panelId: number;
   title?: string;
   type?: string;
   targets: ResolvedTarget[];
+  dataLinks: ResolvedDataLink[];
+}
+
+/**
+ * Extracts a panel's configured drill-down links (Grafana calls these "data
+ * links") — e.g. a table column's "click to see this account's dashboard"
+ * link. These are URL *templates*: Grafana substitutes macros like
+ * ${__from}/${__to}/${__data.fields["X"]} client-side when a cell is
+ * clicked, using that row's actual field values and the panel's time range.
+ * Resolving those macros ourselves would mean re-implementing a fair chunk
+ * of Grafana's templating engine (many macro variants: __value.raw/text/
+ * numeric, __series.name, __field.name, __data.fields[...], __from/__to,
+ * __all_variables, ...) for something the caller can usually do with simple
+ * string substitution once they already have the row's field values (from
+ * the query result) and the window bounds (already known) — so this stays
+ * best-effort extraction, matching the same tradeoff already made for
+ * PromQL/InfluxQL parsing elsewhere in this codebase.
+ */
+export function resolvePanelDataLinks(panel: Panel): ResolvedDataLink[] {
+  const links: ResolvedDataLink[] = [];
+  for (const link of panel.fieldConfig?.defaults?.links ?? []) {
+    links.push({ title: link.title, url: link.url });
+  }
+  for (const override of panel.fieldConfig?.overrides ?? []) {
+    const linksProperty = override.properties?.find((p) => p.id === 'links');
+    if (!linksProperty) continue;
+    const appliesToField =
+      override.matcher?.id === 'byName' && typeof override.matcher.options === 'string' ? override.matcher.options : undefined;
+    for (const link of (linksProperty.value as PanelDataLinkConfigLike[] | undefined) ?? []) {
+      if (link?.url) links.push({ title: link.title, url: link.url, appliesToField });
+    }
+  }
+  return links;
+}
+
+interface PanelDataLinkConfigLike {
+  title?: string;
+  url?: string;
 }
 
 /** Row panels nest their contents under `panels`; flatten to queryable leaves. */
@@ -53,10 +99,36 @@ export function resolvePanelQueries(dashboard: DashboardJson): ResolvedPanel[] {
           datasourceUid: datasourceRefToUid(t.datasource) ?? panelDsUid,
           raw: t,
         })),
+        dataLinks: resolvePanelDataLinks(p),
       };
     });
 }
 
-export function findPanel(dashboard: DashboardJson, panelId: number): ResolvedPanel | undefined {
-  return resolvePanelQueries(dashboard).find((p) => p.panelId === panelId);
+/**
+ * Thrown instead of silently picking one when a dashboard has more than one
+ * panel sharing the same id — confirmed against a real dashboard where a
+ * provisioning bug (not Grafana's repeat-panel feature; no `repeat` field)
+ * stamped ~24 genuinely different panels, one per product, all with id 9.
+ * Silently returning the first would mean querying "panelId: 9" for e.g.
+ * Compute silently returns Block Storage's data instead, with no error or
+ * any other sign anything is wrong.
+ */
+export class AmbiguousPanelError extends Error {
+  constructor(panelId: number, public readonly candidates: ResolvedPanel[]) {
+    super(
+      `Panel id ${panelId} is ambiguous on this dashboard — ${candidates.length} different panels share it: ` +
+        `${candidates.map((p) => `"${p.title}"`).join(', ')}. Pass "panelTitle" (exact match) to pick one.`,
+    );
+    this.name = 'AmbiguousPanelError';
+  }
+}
+
+export function findPanel(dashboard: DashboardJson, panelId: number, panelTitle?: string): ResolvedPanel | undefined {
+  const matches = resolvePanelQueries(dashboard).filter((p) => p.panelId === panelId);
+  if (matches.length <= 1) return matches[0];
+  if (panelTitle) {
+    const titleMatches = matches.filter((p) => p.title === panelTitle);
+    if (titleMatches.length === 1) return titleMatches[0];
+  }
+  throw new AmbiguousPanelError(panelId, matches);
 }

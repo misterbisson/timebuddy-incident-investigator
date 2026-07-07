@@ -37,6 +37,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
       inputSchema: {
         primaryDashboardUid: z.string(),
         primaryPanelId: z.number(),
+        primaryPanelTitle: z.string().optional().describe('Exact panel title — required only when primaryPanelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
         startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time'),
         endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601'),
         primaryLabels: z.record(z.string()).optional().describe('Alert labels, used for relevance ranking'),
@@ -50,7 +51,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
       },
       annotations: { readOnlyHint: true, title: 'Detect correlated anomalies' },
     },
-    async ({ primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit, connection }) => {
+    async ({ primaryDashboardUid, primaryPanelId, primaryPanelTitle, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit, connection }) => {
       let primaryConnectionId: string | undefined;
       try {
         return await withAudit(
@@ -77,6 +78,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryPanelId,
               overrides,
               windowSet.incident,
+              primaryPanelTitle,
             );
             const primaryIncident = await executeQueryWindow(primaryClient, primaryResolved.targets, windowSet.incident, config);
             const primaryPreWindowResolved = await resolvePanelForWindow(
@@ -85,6 +87,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryPanelId,
               overrides,
               windowSet.preWindow,
+              primaryPanelTitle,
             );
             const primaryPreWindow = await executeQueryWindow(primaryClient, primaryPreWindowResolved.targets, windowSet.preWindow, config);
 

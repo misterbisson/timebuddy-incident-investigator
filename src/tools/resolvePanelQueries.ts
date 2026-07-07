@@ -18,10 +18,15 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
         'UID), and substitutes Grafana template variables ($var, ${var:format}, $__interval, $timeFilter, ...) into ' +
         'the query text. Pass variableOverrides captured from the alert/panel URL (var-*) to reproduce exactly what ' +
         'was on screen when the alert fired; any variable not overridden falls back to the dashboard\'s saved ' +
-        'current value.',
+        'current value. Each panel also returns "dataLinks" — Grafana drill-down link templates (e.g. a table\'s ' +
+        '"click a row to see that account/host\'s dashboard"), as raw URL templates containing macros like ' +
+        '${__from}/${__to}/${__data.fields["X"]} that this server doesn\'t resolve. Substitute those yourself using ' +
+        'the window bounds and the actual field values from the panel\'s query result (e.g. via execute_query_window) ' +
+        'to build a working link — this is usually the way to "follow" a panel\'s links when investigating.',
       inputSchema: {
         dashboardUid: z.string().describe('Grafana dashboard UID'),
         panelId: z.number().optional().describe('Limit to one panel; omit to resolve every queryable panel'),
+        panelTitle: z.string().optional().describe('Exact panel title — required only when panelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
         variableOverrides: z
           .record(z.array(z.string()))
           .optional()
@@ -32,7 +37,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
       },
       annotations: { readOnlyHint: true, title: 'Resolve panel queries' },
     },
-    async ({ dashboardUid, panelId, variableOverrides, windowFromMs, windowToMs, connection }) => {
+    async ({ dashboardUid, panelId, panelTitle, variableOverrides, windowFromMs, windowToMs, connection }) => {
       let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('resolve_panel_queries', { dashboardUid, panelId }, config, async () => {
@@ -47,7 +52,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
           };
 
           const panels = panelId !== undefined
-            ? [findPanel(dashboard, panelId)].filter((p): p is NonNullable<typeof p> => Boolean(p))
+            ? [findPanel(dashboard, panelId, panelTitle)].filter((p): p is NonNullable<typeof p> => Boolean(p))
             : resolveAllPanelQueries(dashboard);
 
           if (panelId !== undefined && panels.length === 0) {
@@ -60,6 +65,12 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
               title: panel.title,
               type: panel.type,
               url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: panel.panelId, fromMs: window.fromMs, toMs: window.toMs }),
+              // Raw URL templates (Grafana "data links"), not resolved — see
+              // resolvePanelDataLinks' doc comment. Substitute
+              // ${__from}/${__to} with window.fromMs/toMs and
+              // ${__data.fields["X"]} with each row's actual field value
+              // from this panel's query result to build a working link.
+              dataLinks: panel.dataLinks,
               targets: await Promise.all(
                 panel.targets.map(async (t) => ({
                   refId: t.refId,

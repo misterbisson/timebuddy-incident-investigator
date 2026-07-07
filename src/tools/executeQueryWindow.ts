@@ -52,6 +52,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
+        panelTitle: z.string().optional().describe('Exact panel title — required only when panelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
         startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time (e.g. the alert\'s startsAt, or "2026-06-08T00:00:00Z")'),
         endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601; defaults to now for still-firing alerts'),
         preWindowMs: z.number().optional().describe('Buffer before the incident start, ms; defaults to max(30min, incident duration)'),
@@ -63,7 +64,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
       },
       annotations: { readOnlyHint: true, title: 'Execute query window' },
     },
-    async ({ dashboardUid, panelId, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, connection }) => {
+    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, connection }) => {
       let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
@@ -93,7 +94,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           // do — resolve targets once per window rather than once overall.
           const resultsPerWindow = await Promise.all(
             allWindows.map(async (window) => {
-              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, overrides, window);
+              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, overrides, window, panelTitle);
               const [result] = await executeQueryWindows(client, targets, [window], config);
               return annotateSeries(result!, threshold, thresholdDirection);
             }),

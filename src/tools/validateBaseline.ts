@@ -36,6 +36,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
+        panelTitle: z.string().optional().describe('Exact panel title — required only when panelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
         startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time'),
         endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601'),
         variableOverrides: z.record(z.array(z.string())).optional(),
@@ -48,7 +49,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
       },
       annotations: { readOnlyHint: true, title: 'Validate baseline' },
     },
-    async ({ dashboardUid, panelId, startsAtMs, endsAtMs, variableOverrides, zThreshold, controlOffsets, connection }) => {
+    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, variableOverrides, zThreshold, controlOffsets, connection }) => {
       let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('validate_baseline', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
@@ -68,7 +69,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
 
           const executed = await Promise.all(
             allWindows.map(async (window) => {
-              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, overrides, window);
+              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, overrides, window, panelTitle);
               return { window, result: await executeQueryWindow(client, targets, window, config) };
             }),
           );

@@ -26,6 +26,17 @@ export interface PanelTarget {
   [key: string]: unknown;
 }
 
+/** A Grafana "data link" — a URL template with macros like ${__from}/${__to}/${__data.fields["X"]}, resolved client-side in the Grafana UI when a row/point is clicked. */
+export interface PanelDataLinkConfig {
+  title?: string;
+  url: string;
+}
+
+export interface FieldConfigOverride {
+  matcher?: { id?: string; options?: unknown };
+  properties?: Array<{ id: string; value: unknown }>;
+}
+
 export interface Panel {
   id: number;
   title?: string;
@@ -33,6 +44,12 @@ export interface Panel {
   datasource?: DatasourceRef | string | null;
   targets?: PanelTarget[];
   panels?: Panel[]; // row/nested panels
+  fieldConfig?: {
+    /** Applies to every field. */
+    defaults?: { links?: PanelDataLinkConfig[] };
+    /** Applies only to fields matched by e.g. { id: 'byName', options: '<field name>' }. */
+    overrides?: FieldConfigOverride[];
+  };
 }
 
 export interface TemplateVariableOption {

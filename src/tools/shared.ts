@@ -148,9 +148,10 @@ export async function resolvePanelForWindow(
   panelId: number,
   overrides: Record<string, string[]>,
   window: QueryWindow,
+  panelTitle?: string,
 ): Promise<ResolvedPanelForWindow> {
   const { dashboard } = await client.getDashboard(dashboardUid);
-  const panel = findPanel(dashboard, panelId);
+  const panel = findPanel(dashboard, panelId, panelTitle);
   if (!panel) {
     throw new Error(`Panel ${panelId} not found on dashboard ${dashboardUid}`);
   }
