@@ -55,6 +55,12 @@ person who has never successfully used this tool won't reach for it under real p
    free-text substring match against metric names and dashboard/panel titles, which is exactly
    for this case. Matches that are themselves alert-backed sort first in the results.
 
+Every dashboard/panel you mention — in `alertBackedDashboards`, `matches`, or anywhere else —
+comes with a ready-to-click `url` field already pointing at the right connection and panel. Include
+it whenever you name a dashboard, so "here's what's trustworthy" is something they can actually
+click through to, not just a list of names and UIDs. Don't construct a URL yourself from a
+connection's base address — use the one the tool already gives you.
+
 **Never read this server's cached index/data files directly, even if you can find where they're
 stored on disk (e.g. by searching for "metric-index" under Application Support or similar) —
 always go through the MCP tools instead.** This isn't just about avoiding shell-command

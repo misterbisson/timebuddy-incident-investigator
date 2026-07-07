@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
-import { epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -46,7 +46,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
     async ({ dashboardUid, panelId, startsAtMs, endsAtMs, variableOverrides, zThreshold, controlOffsets, connection }) => {
       try {
         return await withAudit('validate_baseline', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
-          const { client } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = resolveToolClient(registry, { connection });
           const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets });
           const overrides = variableOverrides ?? {};
           const allWindows: TimeWindow[] = [windowSet.incident, ...windowSet.controls];
@@ -84,7 +84,12 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
             };
           });
 
-          const result = { window: windowSet.incident, controls: windowSet.controls, series: seriesResults };
+          const url = dashboardUrlFor(registry, connectionId, dashboardUid, {
+            panelId,
+            fromMs: windowSet.incident.fromMs,
+            toMs: windowSet.incident.toMs,
+          });
+          const result = { url, window: windowSet.incident, controls: windowSet.controls, series: seriesResults };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
         });
       } catch (err) {

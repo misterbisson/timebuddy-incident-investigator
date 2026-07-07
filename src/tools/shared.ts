@@ -6,6 +6,7 @@ import { findPanel, type ResolvedPanel, type ResolvedTarget } from '../dashboard
 import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards/variables.js';
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
+import { buildDashboardUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
 
 /**
  * A time boundary as either a raw epoch-ms number or an ISO 8601 date/time
@@ -45,6 +46,25 @@ export function resolveToolClient(
     registry.list(),
   );
   return { client: registry.get(connection.id), connectionId: connection.id };
+}
+
+/**
+ * Builds a clickable dashboard/panel URL for a connection a tool already
+ * resolved — so a human reading a result can jump straight to it in Grafana
+ * instead of manually reconstructing a link from a bare dashboardUid/panelId.
+ * Returns undefined (never throws) if the connection can't be found, since
+ * this is always a nice-to-have addition to a result, not something worth
+ * failing a whole tool call over.
+ */
+export function dashboardUrlFor(
+  registry: ConnectionRegistry,
+  connectionId: string,
+  dashboardUid: string,
+  opts?: DashboardUrlOptions,
+): string | undefined {
+  const connection = registry.list().find((c) => c.id === connectionId);
+  if (!connection) return undefined;
+  return buildDashboardUrl(connection.url, dashboardUid, opts);
 }
 
 export interface ResolvedPanelForWindow {

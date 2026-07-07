@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { flattenPanels } from '../dashboards/panelQueries.js';
-import { resolveToolClient } from './shared.js';
+import { dashboardUrlFor, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -23,13 +23,14 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
     async ({ dashboardUid, connection }) => {
       try {
         return await withAudit('fetch_dashboard', { dashboardUid }, config, async () => {
-          const { client } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = resolveToolClient(registry, { connection });
           const { dashboard, meta } = await client.getDashboard(dashboardUid);
           const panels = flattenPanels(dashboard.panels ?? []).map((p) => ({
             id: p.id,
             title: p.title,
             type: p.type,
             hasTargets: Boolean(p.targets?.length),
+            url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: p.id }),
           }));
           const result = redact(
             {
@@ -37,7 +38,7 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
               title: dashboard.title,
               tags: dashboard.tags,
               folderTitle: meta.folderTitle,
-              url: meta.url,
+              url: dashboardUrlFor(registry, connectionId, dashboardUid),
               panels,
               variables: (dashboard.templating?.list ?? []).map((v) => ({
                 name: v.name,

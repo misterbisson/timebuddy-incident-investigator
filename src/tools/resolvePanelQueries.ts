@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
-import { epochMsSchema, resolveTargetDatasource, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -35,7 +35,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
     async ({ dashboardUid, panelId, variableOverrides, windowFromMs, windowToMs, connection }) => {
       try {
         return await withAudit('resolve_panel_queries', { dashboardUid, panelId }, config, async () => {
-          const { client } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = resolveToolClient(registry, { connection });
           const { dashboard } = await client.getDashboard(dashboardUid);
           const variables = dashboard.templating?.list ?? [];
           const overrides = variableOverrides ?? {};
@@ -57,6 +57,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
               panelId: panel.panelId,
               title: panel.title,
               type: panel.type,
+              url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: panel.panelId, fromMs: window.fromMs, toMs: window.toMs }),
               targets: await Promise.all(
                 panel.targets.map(async (t) => ({
                   refId: t.refId,

@@ -7,7 +7,7 @@ import { computeStats, detectOnset } from '../analysis/baseline.js';
 import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../analysis/correlation.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -157,9 +157,23 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               }
             }
 
-            const ranked = rankCorrelatedAnomalies(candidateInputs, effectiveLabels, primaryOnsetMs);
+            const ranked = rankCorrelatedAnomalies(candidateInputs, effectiveLabels, primaryOnsetMs).map((r) => ({
+              ...r,
+              url: r.connectionId
+                ? dashboardUrlFor(registry, r.connectionId, r.dashboardUid, {
+                    panelId: r.panelId,
+                    fromMs: windowSet.incident.fromMs,
+                    toMs: windowSet.incident.toMs,
+                  })
+                : undefined,
+            }));
             const result = {
               primaryConnectionId,
+              primaryUrl: dashboardUrlFor(registry, primaryConnectionId, primaryDashboardUid, {
+                panelId: primaryPanelId,
+                fromMs: windowSet.incident.fromMs,
+                toMs: windowSet.incident.toMs,
+              }),
               primaryOnsetMs,
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),

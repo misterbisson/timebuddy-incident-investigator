@@ -4,6 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { resolveAlertContext } from '../alerts/ingest.js';
 import { getLatestWebhook, getWebhookByFingerprint } from '../webhook/store.js';
 import { resolveConnection } from '../connections/resolve.js';
+import { dashboardUrlFor } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -33,7 +34,9 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
         'to dashboard UID, panel ID, labels, annotations, threshold, and time range, and produces a one-line ' +
         '"what fired and why" summary. When multiple Grafana connections are configured, also resolves which one ' +
         'the alert belongs to (by matching the alert\'s URL host, or the explicit "connection" param) and returns ' +
-        'it as resolvedConnectionId — pass that as "connection" on every subsequent tool call for this incident.',
+        'it as resolvedConnectionId — pass that as "connection" on every subsequent tool call for this incident. ' +
+        'Also returns "dashboardUrl", a ready-to-click link to the resolved dashboard/panel/time-window — always ' +
+        'share this link when referencing the dashboard, even if the alert itself already carried a URL.',
       inputSchema: {
         webhookPayload: z.unknown().optional().describe('A full Grafana Alertmanager webhook JSON body (has an "alerts" array)'),
         alertJson: z.unknown().optional().describe('A single pasted alert object (labels/annotations/status/...)'),
@@ -88,8 +91,28 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
             }
           }
 
+          // Synthesized fresh even when the alert already carried a
+          // panelURL/dashboardURL, since a webhook/pasted-JSON alert linked
+          // only via __dashboardUid__/__panelId__ annotations often has no
+          // URL at all — this is the one place that's guaranteed to produce
+          // a clickable link whenever a dashboard/panel was resolved.
+          const parseMsOrUndefined = (iso: string | undefined): number | undefined => {
+            if (!iso) return undefined;
+            const parsed = Date.parse(iso);
+            return Number.isFinite(parsed) ? parsed : undefined;
+          };
+          const dashboardUrl =
+            resolvedConnectionId && alertContext.dashboardUid
+              ? dashboardUrlFor(registry, resolvedConnectionId, alertContext.dashboardUid, {
+                  panelId: alertContext.panelId,
+                  fromMs: parseMsOrUndefined(alertContext.startsAt),
+                  toMs: parseMsOrUndefined(alertContext.endsAt),
+                  variables: alertContext.variables,
+                })
+              : undefined;
+
           const redacted = redact(alertContext, config.redactionPatterns);
-          const result = { summary: summarize(alertContext), alertContext: redacted, resolvedConnectionId };
+          const result = { summary: summarize(alertContext), alertContext: redacted, resolvedConnectionId, dashboardUrl };
           return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
         });
       } catch (err) {

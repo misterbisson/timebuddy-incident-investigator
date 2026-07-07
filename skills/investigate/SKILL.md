@@ -69,11 +69,18 @@ skill exists to handle for them.
    any tool call here can resolve.
 
 6. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
-   and an `evidence` array of dashboard/panel links you gathered along the way.
+   and an `evidence` array of dashboard/panel links you gathered along the way. Every tool above
+   (`get_alert_context`'s `dashboardUrl`, `execute_query_window`/`validate_baseline`'s `url`,
+   `detect_correlated_anomalies`'s `primaryUrl` and each correlated result's `url`,
+   `find_related_dashboards`'s per-match `url`) already returns a ready-to-click Grafana link at
+   the exact panel and time window — use those directly as `evidence[].url`. **Never construct a
+   dashboard URL yourself** (e.g. by guessing at `/d/{uid}` or copying a base URL from somewhere
+   else) — the tools already know the right connection's base URL and the right query params;
+   hand-building one risks pointing at the wrong Grafana instance or a broken link.
    `summarize_findings` returns **structured data only — no prose**. Reading its `reasons` and
    `evidence` fields, write the actual human-readable incident note yourself: what fired, whether
-   it's real, why (cite the specific baseline/correlation numbers), and links to the
-   dashboards/panels involved so the person can verify anything you said. This last step is not
+   it's real, why (cite the specific baseline/correlation numbers), and the links you collected so
+   the person can click straight through and verify anything you said. This last step is not
    optional — a bare JSON dump back to a NOC person on a live incident is not useful in the flow.
 
 **Never read this server's cached index/data files directly, even if you can find where they're

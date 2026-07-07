@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { epochMsSchema, resolveTargetDatasource } from '../src/tools/shared.js';
+import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource } from '../src/tools/shared.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
+import type { ConnectionRegistry } from '../src/grafana/registry.js';
+import type { GrafanaConnection } from '../src/config.js';
 import type { TemplateVariable } from '../src/grafana/types.js';
 
 function fakeClient(datasources: Array<{ uid: string; name: string }>): { client: GrafanaClient; listDatasources: ReturnType<typeof vi.fn> } {
   const listDatasources = vi.fn(async () => datasources.map((d) => ({ ...d, id: 1, type: 'prometheus' })));
   return { client: { listDatasources } as unknown as GrafanaClient, listDatasources };
+}
+
+function fakeRegistry(connections: GrafanaConnection[]): ConnectionRegistry {
+  return { list: () => connections } as unknown as ConnectionRegistry;
 }
 
 describe('resolveTargetDatasource', () => {
@@ -61,5 +67,18 @@ describe('epochMsSchema', () => {
 
   it('rejects a string that is not a parseable date, with a clear message', () => {
     expect(() => epochMsSchema.parse('not-a-date')).toThrowError(/Could not parse.*not-a-date.*as a date/);
+  });
+});
+
+describe('dashboardUrlFor', () => {
+  const connection: GrafanaConnection = { id: 'eu-prd', name: 'eu-prd', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' };
+
+  it('builds a URL using the resolved connection\'s base url', () => {
+    const url = dashboardUrlFor(fakeRegistry([connection]), 'eu-prd', 'abc123', { panelId: 7 });
+    expect(url).toBe('https://grafana.example.com/d/abc123?viewPanel=7');
+  });
+
+  it('returns undefined when the connection id is not found, rather than throwing', () => {
+    expect(dashboardUrlFor(fakeRegistry([connection]), 'missing', 'abc123')).toBeUndefined();
   });
 });

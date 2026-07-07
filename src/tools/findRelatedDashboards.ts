@@ -3,7 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import type { MetricIndex, MetricIndexEntry } from '../index-builder/store.js';
-import { resolveToolClient } from './shared.js';
+import { dashboardUrlFor, resolveToolClient } from './shared.js';
+import type { ConnectionRegistry } from '../grafana/registry.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -79,6 +80,14 @@ export function collectAlertRuleAccessErrors(results: Array<{ connectionId: stri
   return Object.fromEntries(
     results.filter((r) => r.index.alertRuleAccessError).map((r) => [r.connectionId, r.index.alertRuleAccessError!]),
   );
+}
+
+/** Attaches a clickable dashboard/panel URL to a bounded result list — called after slicing to `limit`, not before, so it never builds URLs for entries that get discarded anyway. */
+function withUrls<T extends { dashboardUid: string; panelId: number; connectionId: string }>(
+  registry: ConnectionRegistry,
+  items: T[],
+): Array<T & { url: string | undefined }> {
+  return items.map((item) => ({ ...item, url: dashboardUrlFor(registry, item.connectionId, item.dashboardUid, { panelId: item.panelId }) }));
 }
 
 export function registerFindRelatedDashboards(server: McpServer, { registry, config }: ToolContext): void {
@@ -162,15 +171,15 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           const result = {
             indexBuiltAt: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.builtAt])),
             dashboardsScanned: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.dashboardsScanned])),
-            matches: allCandidates.slice(0, limit),
+            matches: withUrls(registry, allCandidates.slice(0, limit)),
             matchesTotal: allCandidates.length,
-            alertBackedDashboards: allAlertBacked.slice(0, limit),
+            alertBackedDashboards: withUrls(registry, allAlertBacked.slice(0, limit)),
             alertBackedTotal: allAlertBacked.length,
             // Only present for connections where the alert-rule crawl itself
             // failed — lets a zero/low alertBackedTotal be told apart from
             // "we tried and there genuinely are none" vs. "we couldn't ask."
             alertRuleAccessErrors,
-            brokenDatasources: allBroken.slice(0, limit),
+            brokenDatasources: withUrls(registry, allBroken.slice(0, limit)),
             brokenDatasourcesTotal: allBroken.length,
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };

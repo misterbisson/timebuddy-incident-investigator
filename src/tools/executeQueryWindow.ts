@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows } from '../query/windows.js';
 import { executeQueryWindows, type WindowQueryResult } from '../query/executor.js';
 import { findThresholdRuns } from '../analysis/runs.js';
-import { epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -49,7 +49,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
     async ({ dashboardUid, panelId, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, connection }) => {
       try {
         return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
-          const { client } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = resolveToolClient(registry, { connection });
           const windowSet = computeWindows({
             startsAtMs,
             endsAtMs,
@@ -70,7 +70,12 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           );
 
           const [incident, preWindow, ...controls] = resultsPerWindow;
-          const result = { incident, preWindow, controls };
+          const url = dashboardUrlFor(registry, connectionId, dashboardUid, {
+            panelId,
+            fromMs: windowSet.incident.fromMs,
+            toMs: windowSet.incident.toMs,
+          });
+          const result = { url, incident, preWindow, controls };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
         });
       } catch (err) {
