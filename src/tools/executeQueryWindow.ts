@@ -4,16 +4,27 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows } from '../query/windows.js';
 import { executeQueryWindows, type WindowQueryResult } from '../query/executor.js';
 import { findThresholdRuns } from '../analysis/runs.js';
+import { computeStats } from '../analysis/baseline.js';
 import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
-/** Attaches per-series threshold-crossing runs, when a threshold was requested. */
-function withRuns(result: WindowQueryResult, threshold: number | undefined, direction: 'below' | 'above') {
-  if (threshold === undefined) return result;
+/**
+ * Attaches per-series summary stats (min/max/mean/count/nonZeroCount) always,
+ * and threshold-crossing runs when a threshold was requested. Answering "what's
+ * the min/max here, was there any nonzero activity" is exactly the kind of
+ * question that otherwise gets answered by dumping points to a file and
+ * scripting it — computing it here means every execute_query_window call
+ * already has the answer, with no extra call or param needed.
+ */
+function annotateSeries(result: WindowQueryResult, threshold: number | undefined, direction: 'below' | 'above') {
   return {
     ...result,
-    series: result.series.map((s) => ({ ...s, runs: findThresholdRuns(s.points, threshold, direction) })),
+    series: result.series.map((s) => ({
+      ...s,
+      stats: computeStats(s.points),
+      ...(threshold !== undefined ? { runs: findThresholdRuns(s.points, threshold, direction) } : {}),
+    })),
   };
 }
 
@@ -27,11 +38,14 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'for the incident window, a pre-window buffer (to see the anomaly\'s onset), and baseline control windows ' +
         '(prior hour, same-hour-yesterday, same-hour-last-week by default). Returns per-window time series so the ' +
         'caller can compare magnitudes directly, or feed them into validate_baseline / detect_correlated_anomalies. ' +
+        'Every series always includes "stats" (min/max/mean/count/nonZeroCount) — check that before fetching raw ' +
+        'points to answer things like "was there any traffic at all" or "what\'s the min/max here". ' +
         'Pass "threshold" (and optionally "thresholdDirection") to get each series\' precise dip/spike windows back ' +
         'directly — e.g. threshold: 1, thresholdDirection: "below" for an uptime-style metric (1.0 = fully up) finds ' +
         'exactly when each refId/series dropped below full health and for how long, including whether sibling ' +
-        'series (e.g. other hosts/cells in the same panel) dipped too. Always prefer this over fetching the raw ' +
-        'points and scripting the same analysis yourself.',
+        'series (e.g. other hosts/cells in the same panel) dipped too, and threshold: 0, thresholdDirection: "above" ' +
+        'finds exactly when a volume/count metric had any activity. Always prefer stats/threshold over fetching the ' +
+        'raw points and scripting the same analysis yourself.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -67,7 +81,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             allWindows.map(async (window) => {
               const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, overrides, window);
               const [result] = await executeQueryWindows(client, targets, [window], config);
-              return withRuns(result!, threshold, thresholdDirection);
+              return annotateSeries(result!, threshold, thresholdDirection);
             }),
           );
 

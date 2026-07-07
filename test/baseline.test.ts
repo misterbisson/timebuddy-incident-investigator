@@ -20,6 +20,12 @@ describe('computeStats', () => {
     expect(stats.count).toBe(0);
     expect(Number.isNaN(stats.mean)).toBe(true);
   });
+
+  it('counts non-zero, non-null points separately from count', () => {
+    const stats = computeStats([{ t: 0, v: 0 }, { t: 1, v: null }, { t: 2, v: 0 }, { t: 3, v: 5 }]);
+    expect(stats.count).toBe(3);
+    expect(stats.nonZeroCount).toBe(1);
+  });
 });
 
 describe('compareToBaseline', () => {

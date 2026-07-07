@@ -16,6 +16,7 @@ const seriesStatsSchema = z.object({
   min: nullableNumber,
   max: nullableNumber,
   count: z.number(),
+  nonZeroCount: z.number().optional().default(0),
 });
 
 const baselineSchema = z.object({
@@ -91,6 +92,7 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
                 min: toNaN(args.baseline.incidentStats.min),
                 max: toNaN(args.baseline.incidentStats.max),
                 count: args.baseline.incidentStats.count,
+                nonZeroCount: args.baseline.incidentStats.nonZeroCount,
               },
               controlStats: args.baseline.controlStats.map((c) => ({
                 label: c.label,
@@ -100,6 +102,7 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
                   min: toNaN(c.stats.min),
                   max: toNaN(c.stats.max),
                   count: c.stats.count,
+                  nonZeroCount: c.stats.nonZeroCount,
                 },
               })),
               pooledBaselineMean: toNaN(args.baseline.pooledBaselineMean),

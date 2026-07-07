@@ -7,16 +7,25 @@ export interface SeriesStats {
   min: number;
   max: number;
   count: number;
+  /** Non-null points with a non-zero value — answers "was there any activity at all" without a threshold call. */
+  nonZeroCount: number;
 }
 
 export function computeStats(points: SeriesPoint[]): SeriesStats {
   const values = points.map((p) => p.v).filter((v): v is number => v !== null && Number.isFinite(v));
   if (values.length === 0) {
-    return { mean: NaN, stddev: NaN, min: NaN, max: NaN, count: 0 };
+    return { mean: NaN, stddev: NaN, min: NaN, max: NaN, count: 0, nonZeroCount: 0 };
   }
   const mean = values.reduce((a, b) => a + b, 0) / values.length;
   const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
-  return { mean, stddev: Math.sqrt(variance), min: Math.min(...values), max: Math.max(...values), count: values.length };
+  return {
+    mean,
+    stddev: Math.sqrt(variance),
+    min: Math.min(...values),
+    max: Math.max(...values),
+    count: values.length,
+    nonZeroCount: values.filter((v) => v !== 0).length,
+  };
 }
 
 /**
