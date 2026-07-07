@@ -111,7 +111,15 @@ export function substituteVariables(
   return result;
 }
 
-/** Applies substituteVariables to a target's query-string fields (`expr` for Prometheus, `query` for InfluxQL). */
+/**
+ * Applies substituteVariables to a target's query-string fields (`expr` for
+ * Prometheus, `query` for raw-mode InfluxQL) as well as the string fields of
+ * InfluxQL's structured query builder (`measurement`, `policy`, and each
+ * `tags[].value`) — a builder-mode tag filter like `/^$host$/` embeds the
+ * variable reference inside a larger string rather than being the whole
+ * field, so it needs the same substitution pass, not just a straight
+ * override lookup.
+ */
 export function substituteTargetFields(
   raw: PanelTarget,
   variables: TemplateVariable[],
@@ -124,6 +132,18 @@ export function substituteTargetFields(
   }
   if (typeof raw.query === 'string') {
     substituted.query = substituteVariables(raw.query, variables, overrides, window);
+  }
+  if (typeof raw.measurement === 'string') {
+    substituted.measurement = substituteVariables(raw.measurement, variables, overrides, window);
+  }
+  if (typeof raw.policy === 'string') {
+    substituted.policy = substituteVariables(raw.policy, variables, overrides, window);
+  }
+  if (Array.isArray(raw.tags)) {
+    substituted.tags = raw.tags.map((tag) => ({
+      ...tag,
+      value: substituteVariables(tag.value, variables, overrides, window),
+    }));
   }
   return substituted;
 }

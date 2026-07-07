@@ -86,6 +86,36 @@ describe('substituteTargetFields', () => {
     const result = substituteTargetFields({ refId: 'A', query: 'SELECT mean("value") FROM cpu WHERE host = \'$host\'' }, variables, {}, window);
     expect(result.query).toBe("SELECT mean(\"value\") FROM cpu WHERE host = 'db1'");
   });
+
+  it('substitutes a variable embedded inside a builder-mode InfluxQL tag filter value', () => {
+    const variables: TemplateVariable[] = [{ name: 'host', type: 'query', current: { value: 'telegraf-api-prd' } }];
+    const result = substituteTargetFields(
+      {
+        refId: 'A',
+        measurement: 'influx_proxy_backend_status',
+        policy: 'raw',
+        tags: [{ key: 'host::tag', operator: '=~', value: '/^$host$/' }],
+      },
+      variables,
+      {},
+      window,
+    );
+    expect(result.tags).toEqual([{ key: 'host::tag', operator: '=~', value: '/^telegraf-api-prd$/' }]);
+    expect(result.measurement).toBe('influx_proxy_backend_status');
+    expect(result.policy).toBe('raw');
+  });
+
+  it('substitutes builder-mode fields using an explicit override', () => {
+    const variables: TemplateVariable[] = [{ name: 'host', type: 'query', current: { value: 'default-host' } }];
+    const overrides = { host: ['telegraf-api-platform-monitoring-prd'] };
+    const result = substituteTargetFields(
+      { refId: 'A', tags: [{ key: 'host::tag', operator: '=~', value: '/^$host$/' }] },
+      variables,
+      overrides,
+      window,
+    );
+    expect(result.tags).toEqual([{ key: 'host::tag', operator: '=~', value: '/^telegraf-api-platform-monitoring-prd$/' }]);
+  });
 });
 
 describe('resolveDatasourceVariable', () => {
