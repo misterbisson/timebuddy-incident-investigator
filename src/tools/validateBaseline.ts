@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { computeWindows, type TimeWindow } from '../query/windows.js';
+import { computeWindows, excludeOverlapping, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -27,7 +27,10 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
         'classification is based on the whole window\'s *mean*, which can dilute a real, sharp, short-lived event ' +
         '(e.g. a health signal that was fully down for a few minutes inside a much longer analysis window) into ' +
         'looking routine. briefExcursions is a separate, point-level check against the same baseline and will still ' +
-        'catch that.',
+        'catch that. A control window whose offset is smaller than the incident\'s own duration (e.g. the default ' +
+        'prior-hour control against an incident longer than ~1h) mostly overlaps the incident itself, so it\'s ' +
+        'excluded from pooling automatically — check "warnings" for which ones, since a long incident can leave few ' +
+        'or no default controls usable.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -59,7 +62,26 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
               return { window, result: await executeQueryWindow(client, targets, window, config) };
             }),
           );
-          const [incidentExec, ...controlExecs] = executed;
+          const [incidentExec, ...allControlExecs] = executed;
+          // A control offset smaller than the incident's own duration (e.g.
+          // prior-hour, 1h, against a 5.5h incident) makes that "control"
+          // mostly overlap the incident itself — pooling it in would silently
+          // drag the baseline toward "looks normal" using the anomaly's own
+          // data. Exclude it and say so, rather than let it corrupt the verdict.
+          const { kept: controlExecs, excludedLabels: excludedOverlappingControls } = excludeOverlapping(
+            windowSet.incident,
+            allControlExecs,
+          );
+
+          const warnings = [windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs)].filter(
+            (w): w is string => w !== undefined,
+          );
+          if (excludedOverlappingControls.length > 0) {
+            warnings.push(
+              `Excluded overlapping control window(s) from baseline pooling: ${excludedOverlappingControls.join(', ')} — ` +
+                'their offset is smaller than the incident duration, so they mostly re-sample the incident itself rather than a clean baseline.',
+            );
+          }
 
           const seriesResults = incidentExec!.result.series.map((incidentSeries) => {
             const controlPoints = controlExecs.map((c) => ({
@@ -91,8 +113,8 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
           });
-          const result = { url, window: windowSet.incident, controls: windowSet.controls, series: seriesResults };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
+          const result = { url, window: windowSet.incident, controls: windowSet.controls, series: seriesResults, warnings };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
         const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;

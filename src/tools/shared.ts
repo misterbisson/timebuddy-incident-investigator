@@ -81,6 +81,29 @@ export function toolErrorText(err: unknown, url?: string): string {
   return url ? `${message}\n\nDashboard/panel: ${url}` : message;
 }
 
+/**
+ * endsAtMs defaults to "now" for a still-firing alert — but for a resolved/
+ * historical alert, forgetting to pass it means "now" can be days or weeks
+ * after the incident, silently producing a huge window. Since preWindow and
+ * every control window inherit the incident's duration (see windows.ts),
+ * that one omission balloons every window in the response, not just this
+ * one — surfacing it explicitly beats making the caller discover it only
+ * from an oversized/truncated result.
+ */
+export function windowSizeWarning(
+  startsAtMs: number,
+  endsAtMsProvided: number | undefined,
+  resolvedEndsAtMs: number,
+): string | undefined {
+  if (endsAtMsProvided !== undefined) return undefined;
+  const durationHours = (resolvedEndsAtMs - startsAtMs) / 3_600_000;
+  if (durationHours <= 24) return undefined;
+  return (
+    `endsAtMs was not provided and defaulted to now, producing a ${(durationHours / 24).toFixed(1)}-day window ` +
+    '(preWindow and every control window inherit the same duration) — pass endsAtMs explicitly for a resolved/historical alert.'
+  );
+}
+
 export interface ResolvedPanelForWindow {
   dashboard: DashboardJson;
   panel: ResolvedPanel;

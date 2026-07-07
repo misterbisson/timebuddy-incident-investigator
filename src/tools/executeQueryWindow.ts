@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { computeWindows } from '../query/windows.js';
+import { computeWindows, windowsOverlap } from '../query/windows.js';
 import { executeQueryWindows, type WindowQueryResult } from '../query/executor.js';
 import { findThresholdRuns } from '../analysis/runs.js';
 import { computeStats } from '../analysis/baseline.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -85,14 +85,23 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             }),
           );
 
-          const [incident, preWindow, ...controls] = resultsPerWindow;
+          const [incident, preWindow, ...rawControls] = resultsPerWindow;
+          // A control's fixed offset (e.g. prior-hour's 1h) can be smaller
+          // than the incident's own duration, in which case it mostly
+          // overlaps the incident rather than acting as a clean baseline —
+          // flagged here (not excluded, unlike validate_baseline's pooling)
+          // since this tool just returns data for the caller to read.
+          const controls = rawControls.map((c) => ({ ...c, overlapsIncident: windowsOverlap(windowSet.incident, c.window) }));
           const url = dashboardUrlFor(registry, connectionId, dashboardUid, {
             panelId,
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
           });
-          const result = { url, incident, preWindow, controls };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
+          const warnings = [windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs)].filter(
+            (w): w is string => w !== undefined,
+          );
+          const result = { url, incident, preWindow, controls, warnings };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
         const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;

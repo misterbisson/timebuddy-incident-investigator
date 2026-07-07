@@ -182,7 +182,7 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             brokenDatasources: withUrls(registry, allBroken.slice(0, limit)),
             brokenDatasourcesTotal: allBroken.length,
           };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };

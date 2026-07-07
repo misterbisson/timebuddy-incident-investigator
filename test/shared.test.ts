@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, toolErrorText } from '../src/tools/shared.js';
+import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, toolErrorText, windowSizeWarning } from '../src/tools/shared.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { ConnectionRegistry } from '../src/grafana/registry.js';
 import type { GrafanaConnection } from '../src/config.js';
@@ -95,5 +95,24 @@ describe('toolErrorText', () => {
 
   it('handles a non-Error thrown value', () => {
     expect(toolErrorText('plain string error')).toBe('Error: plain string error');
+  });
+});
+
+describe('windowSizeWarning', () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+
+  it('returns undefined when endsAtMs was explicitly provided, however large the window', () => {
+    expect(windowSizeWarning(0, 30 * DAY, 30 * DAY)).toBeUndefined();
+  });
+
+  it('returns undefined when endsAtMs defaulted but the resulting window is under 24h', () => {
+    expect(windowSizeWarning(0, undefined, 5 * HOUR)).toBeUndefined();
+  });
+
+  it('warns when endsAtMs defaulted and the resulting window exceeds 24h', () => {
+    const warning = windowSizeWarning(0, undefined, 8 * DAY);
+    expect(warning).toMatch(/endsAtMs was not provided/);
+    expect(warning).toMatch(/8\.0-day window/);
   });
 });

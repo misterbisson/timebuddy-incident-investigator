@@ -51,7 +51,7 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
             },
             config.redactionPatterns,
           );
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
         });
       } catch (err) {
         const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid) : undefined;

@@ -7,7 +7,7 @@ import { computeStats, detectOnset } from '../analysis/baseline.js';
 import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../analysis/correlation.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -169,6 +169,9 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                   })
                 : undefined,
             }));
+            const warnings = [windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs)].filter(
+              (w): w is string => w !== undefined,
+            );
             const result = {
               primaryConnectionId: connectionId,
               primaryUrl: dashboardUrlFor(registry, connectionId, primaryDashboardUid, {
@@ -179,8 +182,9 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryOnsetMs,
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),
+              warnings,
             };
-            return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
+            return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
           },
         );
       } catch (err) {

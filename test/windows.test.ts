@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeWindows } from '../src/query/windows.js';
+import { computeWindows, excludeOverlapping, windowsOverlap } from '../src/query/windows.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -45,5 +45,48 @@ describe('computeWindows', () => {
 
   it('rejects an end time before the start time', () => {
     expect(() => computeWindows({ startsAtMs: 1000, endsAtMs: 500 })).toThrow();
+  });
+
+  it('produces a prior-hour control that overlaps the incident when the incident is longer than 1h', () => {
+    const startsAtMs = 1_700_000_000_000;
+    const endsAtMs = startsAtMs + 5.5 * HOUR;
+    const result = computeWindows({ startsAtMs, endsAtMs });
+    const priorHour = result.controls.find((c) => c.label === 'prior-hour')!;
+    expect(windowsOverlap(result.incident, priorHour)).toBe(true);
+  });
+});
+
+describe('windowsOverlap', () => {
+  it('detects overlap when windows intersect', () => {
+    expect(windowsOverlap({ label: 'a', fromMs: 0, toMs: 100 }, { label: 'b', fromMs: 50, toMs: 150 })).toBe(true);
+  });
+
+  it('does not consider adjacent (touching) windows overlapping', () => {
+    expect(windowsOverlap({ label: 'a', fromMs: 0, toMs: 100 }, { label: 'b', fromMs: 100, toMs: 200 })).toBe(false);
+  });
+
+  it('does not consider disjoint windows overlapping', () => {
+    expect(windowsOverlap({ label: 'a', fromMs: 0, toMs: 100 }, { label: 'b', fromMs: 200, toMs: 300 })).toBe(false);
+  });
+});
+
+describe('excludeOverlapping', () => {
+  const incident = { label: 'incident', fromMs: 1000, toMs: 2000 };
+
+  it('keeps windows that do not overlap the incident', () => {
+    const items = [{ window: { label: 'clean', fromMs: 5000, toMs: 6000 } }];
+    const { kept, excludedLabels } = excludeOverlapping(incident, items);
+    expect(kept).toEqual(items);
+    expect(excludedLabels).toEqual([]);
+  });
+
+  it('excludes windows that overlap the incident and reports their labels', () => {
+    const items = [
+      { window: { label: 'overlapping', fromMs: 1500, toMs: 2500 } },
+      { window: { label: 'clean', fromMs: 5000, toMs: 6000 } },
+    ];
+    const { kept, excludedLabels } = excludeOverlapping(incident, items);
+    expect(kept.map((i) => i.window.label)).toEqual(['clean']);
+    expect(excludedLabels).toEqual(['overlapping']);
   });
 });

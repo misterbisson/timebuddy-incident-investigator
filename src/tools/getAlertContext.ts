@@ -113,7 +113,7 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
 
           const redacted = redact(alertContext, config.redactionPatterns);
           const result = { summary: summarize(alertContext), alertContext: redacted, resolvedConnectionId, dashboardUrl };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
         });
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
