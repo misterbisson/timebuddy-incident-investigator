@@ -3,7 +3,7 @@ import type { GrafanaClient } from '../grafana/client.js';
 import type { RulerRuleGroup } from '../grafana/types.js';
 import { resolvePanelQueries } from '../dashboards/panelQueries.js';
 import { extractQueryInfo } from './extract.js';
-import { isStale, loadIndex, saveIndex, type AlertRuleRef, type MetricIndex } from './store.js';
+import { CURRENT_SCHEMA_VERSION, isStale, loadIndex, saveIndex, type AlertRuleRef, type MetricIndex } from './store.js';
 
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -95,6 +95,7 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
 
   const index: MetricIndex = {
     builtAt: new Date().toISOString(),
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     dashboardsScanned: 0,
     entriesByMetric: {},
     brokenDatasources: [],

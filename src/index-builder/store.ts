@@ -58,7 +58,24 @@ export interface MetricIndex {
    * assume its presence.
    */
   alertRuleAccessError?: string;
+  /** See CURRENT_SCHEMA_VERSION. Optional so older cache files (predating this field) parse as version 0, which never matches and is always rebuilt. */
+  schemaVersion?: number;
 }
+
+/**
+ * Bump this whenever buildMetricIndex's logic changes in a way that could
+ * change results for data already cached on disk — not just when adding a
+ * new optional field (the backfill in loadIndex already handles that safely).
+ * Confirmed the hard way: a bug where getRuleGroups()'s annotations/labels
+ * were read from the wrong nesting level made alertBackedPanels silently
+ * empty for every real Grafana estate tested. Fixing the code was not
+ * enough — the fresh logic still lost to a same-shaped cache file written by
+ * the old logic, since nothing on disk marked it as built by a bugged
+ * version, and its TTL hadn't expired. A version mismatch is treated as
+ * unconditionally stale (see isStale below), regardless of TTL, so a real
+ * logic fix actually takes effect on the very next read.
+ */
+export const CURRENT_SCHEMA_VERSION = 2;
 
 function indexDir(config: Config): string {
   return join(config.dataDir, 'metric-index');
@@ -88,5 +105,6 @@ export async function saveIndex(index: MetricIndex, config: Config, connectionId
 }
 
 export function isStale(index: MetricIndex, ttlMs: number, nowMs = Date.now()): boolean {
+  if (index.schemaVersion !== CURRENT_SCHEMA_VERSION) return true;
   return nowMs - Date.parse(index.builtAt) > ttlMs;
 }

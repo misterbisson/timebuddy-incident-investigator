@@ -43,7 +43,19 @@ async function runMcpServer() {
   // need to restart this MCP server process (restarting the GUI window
   // alone never did anything here anyway: it's a separate process from the
   // one Claude Code/Desktop is already talking to over stdio).
-  await startMcpServer(() => store.getConnectionsForEngine());
+  await startMcpServer(() => store.getConnectionsForEngine(), {
+    // The engine's own default (DATA_DIR env var, else './.data') is
+    // relative to process.cwd() — but Claude Code/Desktop controls what cwd
+    // this process is spawned with, not us, and it isn't necessarily
+    // consistent. Confirmed in practice: the metric-index cache ended up
+    // split across two different .data folders depending on cwd, and the
+    // one Claude Code actually used kept serving stale (pre-bugfix) data
+    // that a fresh run elsewhere had already proven fixed. Anchoring to
+    // Electron's own per-OS userData dir (already used for
+    // connections.json/secrets.enc.json) makes the cache location the same
+    // every time, regardless of how this process gets launched.
+    dataDir: path.join(app.getPath('userData'), 'data'),
+  });
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
   console.error(
