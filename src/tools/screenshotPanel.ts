@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
@@ -12,9 +14,28 @@ import { dashboardUrlFor, resolveToolClient, toolErrorText } from './shared.js';
 import { resolveRenderWindow } from './renderDashboard.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import type { Config } from '../config.js';
 
 const DEFAULT_WIDTH = 1000;
 const DEFAULT_HEIGHT = 500;
+
+/**
+ * Persists the captured PNG to disk and returns its absolute path. The MCP
+ * inline `image` content block lets the calling model see the panel, but the
+ * host UI a person is actually watching (e.g. a terminal transcript) doesn't
+ * necessarily render that inline image for them — confirmed in practice: a
+ * real investigation used this tool several times and the person never saw
+ * a single screenshot. A file on disk is unambiguous regardless of how (or
+ * whether) the host renders inline image content: the calling agent can
+ * point the person straight at it.
+ */
+async function saveScreenshot(png: Buffer, dashboardUid: string, panelId: number, config: Config): Promise<string> {
+  const dir = join(config.dataDir, 'screenshots');
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${Date.now()}-${dashboardUid}-panel${panelId}.png`);
+  await writeFile(path, png);
+  return path;
+}
 
 export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { screenshotter: Screenshotter }): void {
   const { registry, config, screenshotter } = ctx;
@@ -32,6 +53,10 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
         'Alternatively pass dashboardUid + panelId + connection directly, with fromMs/toMs (falls back to the ' +
         "dashboard's own saved default time range if omitted). Best used selectively on the 1-2 panels that matter " +
         "for an investigation, not as a substitute for execute_query_window/render_dashboard's structured data. " +
+        'The image is also written to disk and its path returned as "savedTo" - the inline image lets you (the ' +
+        "model) see the panel, but the person you're talking to may not see inline image content the same way you " +
+        'do, depending on how they\'re connected to you - always mention the savedTo path in your response so they ' +
+        'can open the actual file themselves, not just your description of it. ' +
         'Note: unlike every other tool here, the image is NOT passed through the redaction layer - that only ' +
         'understands text - so anything visible on the panel itself (legend values, axis labels, annotation text) ' +
         'reaches the model as-is.',
@@ -129,6 +154,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             height,
             timeoutMs: config.requestTimeoutMs,
           });
+          const savedTo = await saveScreenshot(png, dashboardUid, panelId, config);
 
           const result = {
             url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId, fromMs, toMs, variables: overrides }),
@@ -139,6 +165,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             window: { fromMs, toMs },
             width,
             height,
+            savedTo,
           };
           return {
             content: [

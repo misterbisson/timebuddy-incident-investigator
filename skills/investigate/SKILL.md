@@ -57,8 +57,11 @@ skill exists to handle for them.
      If you're asked to identify specific rows/cells in a table or matrix (e.g. "which hosts
      failed"), or a table/matrix panel's raw data looks empty or surprising, call `screenshot_panel`
      on it and look at the actual rendered image before concluding there's no data — don't stop at
-     raw series alone. The image `screenshot_panel` returns is inline in your response — that's part
-     of your answer, not just something to describe in text; let the person actually see it.
+     raw series alone. **The inline image `screenshot_panel` returns is for you to look at — it is
+     not guaranteed to reach the person you're talking to.** Every call also saves the PNG to disk
+     and returns its path as `savedTo`; always state that path in your response (e.g. "screenshot
+     saved to <path> — open it to see the table") so they have something to actually look at, not
+     just your description of what you saw in it.
    - Once you have a specific `dashboardUid`/`panelId` (from `alertContext`, or picked out of a
      `render_dashboard` survey above):
    - `execute_query_window` with `dashboardUid`, `panelId`, `startsAtMs` (use `alertContext.startsAt`),
@@ -119,9 +122,9 @@ skill exists to handle for them.
    it's real, why (cite the specific baseline/correlation numbers), and the links you collected so
    the person can click straight through and verify anything you said. This last step is not
    optional — a bare JSON dump back to a NOC person on a live incident is not useful in the flow.
-   If you called `screenshot_panel` anywhere above, keep that image attached to your final answer,
-   next to the panel it came from — it's evidence for "why do you say that," not a disposable
-   intermediate step.
+   If you called `screenshot_panel` anywhere above, list each screenshot's `savedTo` path next to
+   the panel it came from — it's evidence for "why do you say that," and the file is the only
+   reliable way the person actually gets to see it (see step 3 above).
 
 **Never read this server's cached index/data files directly, even if you can find where they're
 stored on disk — always go through the MCP tools above.** Tool output is redacted before it
