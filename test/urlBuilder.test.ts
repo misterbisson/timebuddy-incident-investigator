@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDashboardUrl, buildSoloPanelUrl } from '../src/grafana/urlBuilder.js';
+import { buildDashboardUrl, buildInspectDataUrl, buildSoloPanelUrl } from '../src/grafana/urlBuilder.js';
 
 describe('buildDashboardUrl', () => {
   it('builds a bare dashboard link with no options', () => {
@@ -80,5 +80,29 @@ describe('buildSoloPanelUrl', () => {
   it('percent-encodes a dashboard UID with special characters', () => {
     const url = buildSoloPanelUrl('https://grafana.example.com', 'a/b c', 7);
     expect(url).toBe('https://grafana.example.com/d-solo/a%2Fb%20c?panelId=7');
+  });
+});
+
+describe('buildInspectDataUrl', () => {
+  it('builds the full (chrome-included) viewPanel link with the Inspect drawer opened on the Data tab', () => {
+    const url = new URL(buildInspectDataUrl('https://grafana.example.com', 'abc123', 7));
+    expect(url.pathname).toBe('/d/abc123');
+    expect(url.searchParams.get('viewPanel')).toBe('7');
+    expect(url.searchParams.get('inspect')).toBe('7');
+    expect(url.searchParams.get('inspectTab')).toBe('data');
+  });
+
+  it('carries through from/to and var-* params alongside the inspect params', () => {
+    const url = new URL(
+      buildInspectDataUrl('https://grafana.example.com', 'abc123', 7, {
+        fromMs: 1000,
+        toMs: 2000,
+        variables: { service: ['checkout'] },
+      }),
+    );
+    expect(url.searchParams.get('from')).toBe('1000');
+    expect(url.searchParams.get('to')).toBe('2000');
+    expect(url.searchParams.get('var-service')).toBe('checkout');
+    expect(url.searchParams.get('inspect')).toBe('7');
   });
 });

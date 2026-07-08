@@ -39,6 +39,30 @@ export function buildDashboardUrl(baseUrl: string, dashboardUid: string, opts: D
  * (the human-facing clickable link): that one shows the full dashboard with
  * one panel expanded, not an isolated render suitable for a clean screenshot.
  */
+/**
+ * Builds the full (chrome-included) dashboard/panel URL with Grafana's
+ * Inspect drawer pre-opened on the Data tab, via `inspect=<panelId>` +
+ * `inspectTab=data`. Grafana syncs the Inspect drawer's open/closed state and
+ * active tab to the URL itself, so navigating straight here needs no
+ * menu-click chain (hover panel -> open menu -> Inspect -> Data) to reach it.
+ * Used by the Electron screenshotter's exportPanelCsv, which drives a real
+ * browser to reproduce a panel's Grafana-side transformations exactly -
+ * distinct from buildSoloPanelUrl's chrome-free embed (which never renders
+ * the panel menu/Inspect drawer at all) and buildDashboardUrl's human-facing
+ * link (which doesn't request the drawer open).
+ */
+export function buildInspectDataUrl(
+  baseUrl: string,
+  dashboardUid: string,
+  panelId: number,
+  opts: Omit<DashboardUrlOptions, 'panelId'> = {},
+): string {
+  const url = new URL(buildDashboardUrl(baseUrl, dashboardUid, { ...opts, panelId }));
+  url.searchParams.set('inspect', String(panelId));
+  url.searchParams.set('inspectTab', 'data');
+  return url.toString();
+}
+
 export function buildSoloPanelUrl(
   baseUrl: string,
   dashboardUid: string,

@@ -1,11 +1,12 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerExportPanelCsv } from '../src/tools/exportPanelCsv.js';
 import type { Config, GrafanaConnection } from '../src/config.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { DashboardGetResponse, DsQueryRequest, DsQueryResponse } from '../src/grafana/types.js';
+import type { Screenshotter } from '../src/screenshot/types.js';
 import { fakeRegistry, fakeServer } from './toolTestHelpers.js';
 
 const connections: GrafanaConnection[] = [{ id: 'test', name: 'test', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' }];
@@ -119,6 +120,10 @@ function fakeClient(dashboard: DashboardGetResponse, queryDs: (req: DsQueryReque
   } as unknown as GrafanaClient;
 }
 
+function fakeScreenshotter(exportPanelCsv: Screenshotter['exportPanelCsv']): Screenshotter {
+  return { capturePanel: async () => Buffer.from(''), exportPanelCsv };
+}
+
 describe('export_panel_csv tool', () => {
   it('exports a timeseries panel as a wide-format CSV with a UTC timestamp column', async () => {
     const client = fakeClient(timeseriesDashboard(), timeseriesQueryDsResponse);
@@ -221,5 +226,95 @@ describe('export_panel_csv tool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/Must provide either "url"/);
+  });
+
+  it('reports transformationsApplied: false with no note when no screenshotter is configured', async () => {
+    const client = fakeClient(timeseriesDashboard(), timeseriesQueryDsResponse);
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.transformationsApplied).toBe(false);
+    expect(parsed.transformCaptureNote).toBeUndefined();
+  });
+});
+
+describe('export_panel_csv tool with a screenshotter', () => {
+  it('uses the browser-captured, transformed CSV as-is and skips the direct query entirely', async () => {
+    const queryDs = vi.fn(timeseriesQueryDsResponse);
+    const client = fakeClient(timeseriesDashboard(), queryDs);
+    const exportPanelCsv = vi.fn(async (req: Parameters<Screenshotter['exportPanelCsv']>[0]) => {
+      expect(req.url).toContain('inspect=2');
+      expect(req.url).toContain('inspectTab=data');
+      return { csv: Buffer.from('"Field","Mean"\r\nweb1,1\r\n') };
+    });
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(exportPanelCsv).toHaveBeenCalledOnce();
+    expect(queryDs).not.toHaveBeenCalled();
+    expect(parsed.transformationsApplied).toBe(true);
+    expect(parsed.transformCaptureNote).toBeUndefined();
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files[0].rows).toBe(1);
+    expect(parsed.files[0].columns).toEqual(['Field', 'Mean']);
+
+    const csv = await readFile(parsed.files[0].path, 'utf8');
+    expect(csv).toBe('"Field","Mean"\r\nweb1,1\r\n');
+  });
+
+  it('falls back to the direct export when the panel has no transformations configured', async () => {
+    const client = fakeClient(timeseriesDashboard(), timeseriesQueryDsResponse);
+    const exportPanelCsv = vi.fn(async () => ({}));
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.transformationsApplied).toBe(false);
+    expect(parsed.transformCaptureNote).toBeUndefined();
+    expect(parsed.files[0].columns).toEqual(['timestamp', 'host=web1']);
+  });
+
+  it('falls back to the direct export and reports transformCaptureNote when the browser attempt fails', async () => {
+    const client = fakeClient(timeseriesDashboard(), timeseriesQueryDsResponse);
+    const exportPanelCsv = vi.fn(async () => {
+      throw new Error('Timed out waiting for the CSV download after 45000ms');
+    });
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.transformationsApplied).toBe(false);
+    expect(parsed.transformCaptureNote).toMatch(/Timed out waiting for the CSV download/);
+    expect(parsed.files[0].columns).toEqual(['timestamp', 'host=web1']);
   });
 });

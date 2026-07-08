@@ -39,7 +39,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. |
-| `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. Table panels export as-is (every raw column); timeseries/graph panels are pivoted wide (one UTC-timestamp column plus one column per series). |
+| `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. In the Electron app, first tries to capture the panel's real on-screen data by driving a hidden browser to Grafana's own Inspect > Data view with "Apply panel transformations" checked (`transformationsApplied: true` in the result) — so a join/reduce/rename configured on the panel comes back exactly as shown, not just the raw query result. Otherwise (no transformations configured, or no Electron/`screenshotter`) falls back to a direct export: table panels as-is (every raw column); timeseries/graph panels pivoted wide (one UTC-timestamp column plus one column per series). |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
@@ -284,10 +284,13 @@ confirms the `safeStorage` -> engine wiring works end to end (see
   testing, but distributing one to other people will hit Gatekeeper (macOS) or
   SmartScreen (Windows) warnings until it's signed with a real developer identity —
   a prerequisite for wider rollout, not something fixable in code.
-- `export_panel_csv` doesn't apply Grafana-side panel transformations (e.g. a "join by
-  field" used to merge several queries into one table on screen) — a table panel backed by
-  more than one query/frame is written to one CSV file per frame, not the merged table a
-  person sees in Grafana.
+- `export_panel_csv`'s Grafana-side transformation capture (see the tools table above) is
+  Electron-only, and depends on the exact visible text/DOM structure of Grafana's Inspect
+  drawer rather than a published API — it's expected to be more version-sensitive than the
+  rest of this project's Grafana integration. When it's unavailable (standalone CLI) or a
+  panel has no transformations configured, or the capture attempt itself fails, the tool
+  falls back to its own direct export: a table panel backed by more than one query/frame is
+  then written to one CSV file per frame, not a merged table.
 
 ## Acknowledgments
 

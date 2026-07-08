@@ -13,6 +13,26 @@ export interface CapturePanelRequest {
   timeoutMs: number;
 }
 
+export interface ExportPanelCsvRequest {
+  /** The full (chrome-included) dashboard/panel URL with the Inspect/Data drawer pre-opened — see grafana/urlBuilder.ts's buildInspectDataUrl. */
+  url: string;
+  headers: Record<string, string>;
+  timeoutMs: number;
+}
+
+export interface ExportPanelCsvResult {
+  /**
+   * The exact bytes Grafana's own "Download CSV" button produces for this
+   * panel with "Apply panel transformations" checked. Undefined when this
+   * panel has no transformations configured at all — Grafana only renders
+   * that checkbox when there's something for it to do, which doubles as a
+   * reliable "is there anything here we'd otherwise miss" signal. Callers
+   * should fall back to the direct /api/ds/query-based export in that case:
+   * it's both cheaper and exactly as correct for an untransformed panel.
+   */
+  csv?: Buffer;
+}
+
 /**
  * Renders a Grafana panel URL in a real browser and captures it as a PNG —
  * the client-side fallback for when the target Grafana instance has no
@@ -24,4 +44,17 @@ export interface CapturePanelRequest {
  */
 export interface Screenshotter {
   capturePanel(req: CapturePanelRequest): Promise<Buffer>;
+  /**
+   * Reproduces a panel's actual on-screen data — including Grafana-side
+   * panel transformations (joins, reduces, renames, ...) that this server's
+   * own /api/ds/query-based export can't see, since those only ever run in
+   * Grafana's own frontend. Driven by navigating a real browser straight to
+   * the panel's Inspect/Data URL, checking "Apply panel transformations" (a
+   * few DOM interactions, not a public API — see electron/src/screenshotter.js
+   * for exactly what it depends on), and intercepting the real "Download CSV"
+   * click. export_panel_csv falls back to its own direct export when this
+   * throws (page/DOM didn't behave as expected) or returns no csv (nothing
+   * to reproduce this way).
+   */
+  exportPanelCsv(req: ExportPanelCsvRequest): Promise<ExportPanelCsvResult>;
 }

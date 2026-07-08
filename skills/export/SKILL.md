@@ -27,18 +27,26 @@ yourself; don't just describe what could be done.
 2. **Export the data.** Call `export_panel_csv` with the same `url` - its own embedded time range
    (`from`/`to`) is used automatically, so only pass `fromMs`/`toMs` if the person wants a different
    window than what's in the link - plus `panelId` (and `panelTitle`, if step 1 needed it to
-   disambiguate a shared id). Table panels are exported as-is; timeseries/graph panels come out as
-   one UTC-timestamp column plus one column per series. If the result's `files` array has more than
-   one entry, say so and mention why - the `note` field explains it (usually more than one query
-   feeding the panel, with Grafana's own join/transform between them not replicated here).
+   disambiguate a shared id). Check `transformationsApplied` in the result:
+   - `true` means this is the Electron app's own real-browser capture - Grafana's actual on-screen
+     data (joins, reduces, renames, whatever the panel has configured), byte for byte. Trust it fully.
+   - `false` means it's this server's own direct export instead: table panels as-is, timeseries/graph
+     panels as one UTC-timestamp column plus one column per series. This happens when the panel
+     genuinely has no transformations configured (nothing lost - the direct export is exactly as
+     correct there), when there's no Electron/screenshotter available, or when the capture attempt
+     itself failed - check `transformCaptureNote` for that last case specifically, since a real
+     transformation this data doesn't reflect may exist.
+   - If the result's `files` array has more than one entry, say so and mention why - the `note` field
+     explains it (this only happens in the direct-export fallback: more than one query feeding the
+     panel, with no merge applied).
 
-3. **Also capture a screenshot** when: the person asked for one explicitly, or the panel is a
-   table/matrix type. Table/matrix panels are frequently built from Grafana transformations (joins,
-   computed columns) applied on top of the raw query - the CSV `export_panel_csv` writes is that raw
-   query result, not necessarily the merged table shown on screen (same caveat `/timebuddy:investigate`
-   gives for reading table panels), so a screenshot is often the only faithful view of what's actually
-   displayed. For a plain timeseries/graph panel, skip the screenshot unless asked - the CSV there is
-   already a complete, faithful export. Call `screenshot_panel` with the same `url` and `panelId`.
+3. **Also capture a screenshot** when: the person asked for one explicitly, or
+   `transformationsApplied` is `false` for a table/matrix panel (i.e. the CSV is this server's raw
+   per-query export, not Grafana's own transformed output) - a screenshot is then the only faithful
+   view of what's actually displayed, same caveat `/timebuddy:investigate` gives for reading table
+   panels. Skip the screenshot when `transformationsApplied` is `true`, or for a plain timeseries/
+   graph panel, unless asked - the CSV is already a complete, faithful export in both of those cases.
+   Call `screenshot_panel` with the same `url` and `panelId`.
 
 4. **Report every file path plainly** - e.g. "<panel title> data: <csv path(s)>" and, if captured,
    "<panel title> screenshot: <saved path>" - plus the panel's own `url` so they can also open it

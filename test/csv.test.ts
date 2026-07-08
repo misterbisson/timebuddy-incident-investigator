@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSeriesColumnNames, frameToCsv, seriesToCsv } from '../src/export/csv.js';
+import { buildSeriesColumnNames, frameToCsv, parseCsvLine, seriesToCsv } from '../src/export/csv.js';
 import type { QuerySeries } from '../src/query/executor.js';
 import type { GrafanaFrame } from '../src/grafana/types.js';
 
@@ -82,5 +82,19 @@ describe('frameToCsv', () => {
   it('returns just the header row when there are no data rows', () => {
     const f = frame([{ name: 'value', type: 'number' }], [[]]);
     expect(frameToCsv(f)).toBe('value\r\n');
+  });
+});
+
+describe('parseCsvLine', () => {
+  it('splits a plain unquoted row on commas', () => {
+    expect(parseCsvLine('Field,Mean,Max')).toEqual(['Field', 'Mean', 'Max']);
+  });
+
+  it('unescapes a quoted field, including an embedded comma', () => {
+    expect(parseCsvLine('"a,b",c')).toEqual(['a,b', 'c']);
+  });
+
+  it('unescapes a doubled quote inside a quoted field', () => {
+    expect(parseCsvLine('"say ""hi""",c')).toEqual(['say "hi"', 'c']);
   });
 });

@@ -57,6 +57,43 @@ export function seriesToCsv(series: QuerySeries[]): string {
 }
 
 /**
+ * Parses one CSV row (RFC 4180: comma-separated, double-quote-quoted fields
+ * with "" escaping) — used only to report column/row metadata about a CSV
+ * this server didn't itself generate (Grafana's own "Download CSV" output,
+ * captured via a real browser — see tools/exportPanelCsv.ts), not for
+ * anything data-critical.
+ */
+export function parseCsvLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      fields.push(current);
+      current = '';
+    } else {
+      current += c;
+    }
+  }
+  fields.push(current);
+  return fields;
+}
+
+/**
  * "As-is" CSV for one raw Grafana data frame (a table panel's query result):
  * every field becomes a column, in schema order — including string/boolean
  * fields, unlike query/executor.ts's parseFrames which only extracts number
