@@ -38,7 +38,29 @@ skill exists to handle for them.
      person which environment this is (they usually know, even if the alert link didn't say) and
      use that as `connection` going forward.
 
-3. **Replay the primary signal**, if `alertContext.dashboardUid`/`panelId` were resolved:
+3. **Get the primary signal(s).**
+   - If you only have `alertContext.dashboardUid` with **no** `panelId` — a bare dashboard link
+     (e.g. someone pasted a `/d/:uid?var-...` URL with no `viewPanel`/`panelId` in it) — call
+     `render_dashboard` with that same `url` first. It executes every queryable panel on the
+     dashboard in one call, using the url's own time window and variable overrides automatically.
+     **Don't manually chain `fetch_dashboard` -> guess which panel -> `resolve_panel_queries` as a
+     substitute for this** — that's more tool calls to arrive at the same per-panel series
+     `render_dashboard` already returns directly. Skim `panels[].series`/`stats` (and `title`) for
+     the panel(s) that actually answer the question, then drop into the steps below on just those
+     panels for threshold/baseline analysis.
+   - **Table and matrix panels can look empty when they aren't.** These are frequently built from
+     Grafana transformations (joins, filters, field overrides, computed columns) applied on top of
+     the raw query — `execute_query_window`/`render_dashboard` only ever return each query target's
+     *raw* series, never the transformed/rendered result the panel actually displays. A raw series
+     coming back empty or unremarkable does **not** mean the panel shows nothing; it may just mean
+     the transformation that produces the interesting column isn't visible in the raw query alone.
+     If you're asked to identify specific rows/cells in a table or matrix (e.g. "which hosts
+     failed"), or a table/matrix panel's raw data looks empty or surprising, call `screenshot_panel`
+     on it and look at the actual rendered image before concluding there's no data — don't stop at
+     raw series alone. The image `screenshot_panel` returns is inline in your response — that's part
+     of your answer, not just something to describe in text; let the person actually see it.
+   - Once you have a specific `dashboardUid`/`panelId` (from `alertContext`, or picked out of a
+     `render_dashboard` survey above):
    - `execute_query_window` with `dashboardUid`, `panelId`, `startsAtMs` (use `alertContext.startsAt`),
      `connection` — this gets you the incident window, a pre-window buffer, and baseline control
      windows in one call. Every series in the response already includes `stats`
@@ -97,6 +119,9 @@ skill exists to handle for them.
    it's real, why (cite the specific baseline/correlation numbers), and the links you collected so
    the person can click straight through and verify anything you said. This last step is not
    optional — a bare JSON dump back to a NOC person on a live incident is not useful in the flow.
+   If you called `screenshot_panel` anywhere above, keep that image attached to your final answer,
+   next to the panel it came from — it's evidence for "why do you say that," not a disposable
+   intermediate step.
 
 **Never read this server's cached index/data files directly, even if you can find where they're
 stored on disk — always go through the MCP tools above.** Tool output is redacted before it
