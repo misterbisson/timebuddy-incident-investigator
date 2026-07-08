@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Config, GrafanaConnection } from './config.js';
 import { loadConfig } from './config.js';
 import { ConnectionRegistry, type ConnectionsSource } from './grafana/registry.js';
+import type { Screenshotter } from './screenshot/types.js';
 import { registerAllTools } from './tools/registerAll.js';
 
 /**
@@ -16,7 +17,11 @@ import { registerAllTools } from './tools/registerAll.js';
  * stays a plain startup snapshot, only used for the zero-connections guard
  * and startup logging.
  */
-export function createServer(source: ConnectionsSource, configOverrides: Partial<Config> = {}): McpServer {
+export function createServer(
+  source: ConnectionsSource,
+  configOverrides: Partial<Config> = {},
+  screenshotter?: Screenshotter,
+): McpServer {
   const startupSnapshot = typeof source === 'function' ? source() : source;
   if (startupSnapshot.length === 0) {
     throw new Error(
@@ -33,7 +38,7 @@ export function createServer(source: ConnectionsSource, configOverrides: Partial
     version: '0.1.0',
   });
 
-  registerAllTools(server, { registry, config });
+  registerAllTools(server, { registry, config, screenshotter });
   return server;
 }
 
@@ -46,8 +51,9 @@ export function createServer(source: ConnectionsSource, configOverrides: Partial
 export async function startMcpServer(
   source: ConnectionsSource,
   configOverrides: Partial<Config> = {},
+  screenshotter?: Screenshotter,
 ): Promise<McpServer> {
-  const server = createServer(source, configOverrides);
+  const server = createServer(source, configOverrides, screenshotter);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;
@@ -55,3 +61,4 @@ export async function startMcpServer(
 
 export type { Config, GrafanaConnection } from './config.js';
 export type { ConnectionsSource } from './grafana/registry.js';
+export type { Screenshotter, CapturePanelRequest } from './screenshot/types.js';

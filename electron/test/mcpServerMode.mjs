@@ -2,7 +2,7 @@
 // connectionStore.js, then spawn the real Electron binary in --mcp-server
 // mode using the actual @modelcontextprotocol/sdk Client + StdioClientTransport
 // (the same spawn-and-speak-stdio-JSON-RPC mechanism Claude Code/Desktop use)
-// and confirm it lists the 9 real tools and that a tool call actually reaches
+// and confirm it lists the 11 real tools and that a tool call actually reaches
 // out using the seeded connection's real URL/token (proving safeStorage ->
 // GrafanaClient wiring works end to end, not just that the process boots).
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -56,6 +56,7 @@ try {
     'resolve_panel_queries',
     'execute_query_window',
     'render_dashboard',
+    'screenshot_panel',
     'find_related_dashboards',
     'detect_correlated_anomalies',
     'validate_baseline',

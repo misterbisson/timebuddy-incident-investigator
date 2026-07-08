@@ -30,3 +30,29 @@ export function buildDashboardUrl(baseUrl: string, dashboardUid: string, opts: D
   }
   return url.toString();
 }
+
+/**
+ * Builds a Grafana "solo panel" embed URL (/d-solo/:uid) — the same
+ * chrome-free, single-panel view Grafana's own (optional) Image Renderer
+ * plugin navigates to internally — for screenshot_panel's headless-browser
+ * capture. Deliberately distinct from buildDashboardUrl's "viewPanel" form
+ * (the human-facing clickable link): that one shows the full dashboard with
+ * one panel expanded, not an isolated render suitable for a clean screenshot.
+ */
+export function buildSoloPanelUrl(
+  baseUrl: string,
+  dashboardUid: string,
+  panelId: number,
+  opts: Omit<DashboardUrlOptions, 'panelId'> = {},
+): string {
+  const url = new URL(`${baseUrl.replace(/\/+$/, '')}/d-solo/${encodeURIComponent(dashboardUid)}`);
+  url.searchParams.set('panelId', String(panelId));
+  if (opts.fromMs !== undefined) url.searchParams.set('from', String(opts.fromMs));
+  if (opts.toMs !== undefined) url.searchParams.set('to', String(opts.toMs));
+  if (opts.variables) {
+    for (const [name, values] of Object.entries(opts.variables)) {
+      for (const value of values) url.searchParams.append(`var-${name}`, value);
+    }
+  }
+  return url.toString();
+}

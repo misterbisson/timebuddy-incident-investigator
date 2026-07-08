@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDashboardUrl } from '../src/grafana/urlBuilder.js';
+import { buildDashboardUrl, buildSoloPanelUrl } from '../src/grafana/urlBuilder.js';
 
 describe('buildDashboardUrl', () => {
   it('builds a bare dashboard link with no options', () => {
@@ -48,5 +48,37 @@ describe('buildDashboardUrl', () => {
     expect(url.searchParams.get('from')).toBe('1000');
     expect(url.searchParams.get('to')).toBe('2000');
     expect(url.searchParams.get('var-region')).toBe('eu-central-1');
+  });
+});
+
+describe('buildSoloPanelUrl', () => {
+  it('builds a /d-solo/:uid link with panelId set', () => {
+    const url = new URL(buildSoloPanelUrl('https://grafana.example.com', 'abc123', 7));
+    expect(url.pathname).toBe('/d-solo/abc123');
+    expect(url.searchParams.get('panelId')).toBe('7');
+  });
+
+  it('strips a trailing slash from the base URL', () => {
+    expect(buildSoloPanelUrl('https://grafana.example.com/', 'abc123', 7)).toBe(
+      'https://grafana.example.com/d-solo/abc123?panelId=7',
+    );
+  });
+
+  it('adds from/to and var-* params, supporting multi-value variables', () => {
+    const url = new URL(
+      buildSoloPanelUrl('https://grafana.example.com', 'abc123', 7, {
+        fromMs: 1000,
+        toMs: 2000,
+        variables: { service: ['checkout', 'payments'] },
+      }),
+    );
+    expect(url.searchParams.get('from')).toBe('1000');
+    expect(url.searchParams.get('to')).toBe('2000');
+    expect(url.searchParams.getAll('var-service')).toEqual(['checkout', 'payments']);
+  });
+
+  it('percent-encodes a dashboard UID with special characters', () => {
+    const url = buildSoloPanelUrl('https://grafana.example.com', 'a/b c', 7);
+    expect(url).toBe('https://grafana.example.com/d-solo/a%2Fb%20c?panelId=7');
   });
 });
