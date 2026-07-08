@@ -5,6 +5,7 @@ import type {
   DatasourceInfo,
   DsQueryRequest,
   DsQueryResponse,
+  FolderInfo,
   GrafanaAnnotation,
   RulerAlertRule,
   RulerRuleGroup,
@@ -154,6 +155,11 @@ export class GrafanaClient {
 
   async getDashboard(uid: string): Promise<DashboardGetResponse> {
     return this.request<DashboardGetResponse>('GET', `/api/dashboards/uid/${encodeURIComponent(uid)}`);
+  }
+
+  /** Used to walk a folder's ancestor chain (Grafana has no single "chain" endpoint) when looking up a knowledge dashboard scoped to a parent folder. */
+  async getFolder(uid: string): Promise<FolderInfo> {
+    return this.request<FolderInfo>('GET', `/api/folders/${encodeURIComponent(uid)}`);
   }
 
   async listDatasources(): Promise<DatasourceInfo[]> {

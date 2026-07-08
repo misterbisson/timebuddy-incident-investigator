@@ -23,7 +23,8 @@ src/
   index-builder/  crawls dashboards into a metric/measurement -> dashboard reverse index (cached locally, per connection)
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
-  tools/          the 10 MCP tools, each a thin wrapper over the modules above
+  knowledge/      looks up an adopter-published "Timebuddy knowledge" dashboard/panel for a product, with caching
+  tools/          the 11 MCP tools, each a thin wrapper over the modules above
 electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
                   server (launched with --mcp-server instead of opening a window) — see electron/README.md
 ```
@@ -32,7 +33,8 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 
 | Tool | Purpose |
 | --- | --- |
-| `get_alert_context` | Ingest an alert (webhook payload, pasted JSON, or a dashboard/panel/alert-rule URL) and resolve it to dashboard UID, panel ID, labels, threshold, and time range. |
+| `get_alert_context` | Ingest an alert (webhook payload, pasted JSON, or a dashboard/panel/alert-rule URL) and resolve it to dashboard UID, panel ID, labels, threshold, and time range. Also attaches a matching "Timebuddy knowledge" panel when one has been published (see below). |
+| `get_product_context` | Look up a "Timebuddy knowledge" panel directly by product key, without an alert in hand. |
 | `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. |
@@ -143,6 +145,48 @@ omitted:
 - The two search tools (`find_related_dashboards`, and `detect_correlated_anomalies` when
   auto-discovering candidates) fan out across every configured connection and merge
   results, each tagged with its `connectionId`.
+
+## Product knowledge dashboards
+
+A generic, adopter-defined convention for surfacing institutional knowledge (what a panel
+means, known false positives, runbook links, ownership) that lives in your team's heads,
+not in Grafana's own data. There are no Joyent- or org-specific assumptions here — any
+adopter can publish their own.
+
+**Publishing convention:**
+
+- In a folder alongside your product's dashboards, add one dashboard titled
+  `🧠 Timebuddy knowledge` and tagged `timebuddy-knowledge`.
+- Add one panel per product, each a Grafana **text panel** (markdown mode) titled
+  `timebuddy: <product-key>` (case-insensitive).
+- Start that panel's markdown with a single fenced ` ```json ` block holding whatever
+  structured data you want tools/agents to read (severity, owner, runbook links, known
+  false positives — no fixed schema is enforced); free-form prose below it is for humans
+  and is returned too. A missing or malformed JSON block degrades to the raw panel text
+  rather than breaking the tool call it's attached to.
+
+**Lookup behavior:**
+
+- `get_alert_context` automatically looks for a knowledge dashboard once it resolves an
+  alert to a dashboard, trying (in order) each of that dashboard's own Grafana tags, then
+  each of the alert's label values, as the product key — the first one matching a
+  `timebuddy: <key>` panel wins. If nothing matches, `get_alert_context`'s output is
+  unchanged (no `knowledge` field, no warning, no error) — this is purely additive and
+  never a prerequisite.
+- `get_product_context` looks up the same convention directly by product key. Pass
+  `dashboardUid` to scope the search to that dashboard's folder; omit it to search every
+  knowledge dashboard on the connection (returning every match rather than guessing when
+  more than one exists, e.g. the same product key defined in both a staging and a prod
+  knowledge dashboard).
+- Lookup **walks up the folder tree**: if a dashboard's own folder has no knowledge
+  dashboard, its parent folder is checked, and so on up to 10 levels, stopping at the
+  first match or the top of the tree. A partially-adopted estate (knowledge published in
+  some folders but not others) works fine — a miss anywhere in the chain is silent.
+- Results are cached per connection (which knowledge dashboard serves a given folder, and
+  each knowledge dashboard's parsed panel content, keyed by its own save version) so a
+  live investigation doesn't repeat the folder walk or re-parse panels on every call. An
+  edit to a knowledge dashboard is picked up as soon as its cached folder-resolution entry
+  expires (15 minutes) and its version no longer matches.
 
 ## Security model
 

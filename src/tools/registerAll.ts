@@ -3,6 +3,7 @@ import type { Config } from '../config.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import type { Screenshotter } from '../screenshot/types.js';
 import { registerGetAlertContext } from './getAlertContext.js';
+import { registerGetProductContext } from './getProductContext.js';
 import { registerFetchDashboard } from './fetchDashboard.js';
 import { registerResolvePanelQueries } from './resolvePanelQueries.js';
 import { registerExecuteQueryWindow } from './executeQueryWindow.js';
@@ -23,6 +24,7 @@ export interface ToolContext {
 
 export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerGetAlertContext(server, ctx);
+  registerGetProductContext(server, ctx);
   registerFetchDashboard(server, ctx);
   registerResolvePanelQueries(server, ctx);
   registerExecuteQueryWindow(server, ctx);

@@ -58,6 +58,10 @@ person who has never successfully used this tool won't reach for it under real p
    than an exact metric or label, use `find_related_dashboards`'s `query` param — it does a
    free-text substring match against metric names and dashboard/panel titles, which is exactly
    for this case. Matches that are themselves alert-backed sort first in the results.
+   - If they name a product by its key rather than asking to browse, try `get_product_context`
+     directly — some folders publish a "Timebuddy knowledge" dashboard with product-specific
+     context (owner, runbook links, known false positives). An empty `matches` array just means
+     nothing's been published there yet, not an error.
 
 Every dashboard/panel you mention — in `alertBackedDashboards`, `matches`, or anywhere else —
 comes with a ready-to-click `url` field already pointing at the right connection and panel. Include

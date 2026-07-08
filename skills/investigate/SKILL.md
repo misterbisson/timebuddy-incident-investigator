@@ -29,6 +29,11 @@ skill exists to handle for them.
      click away wastes several tool calls and turns; asking up front is faster for everyone.
    - Only skip straight to step 4 when the person genuinely has no link and no JSON to give you
      (e.g. they're describing the incident from memory, or pasted a screenshot's text by hand).
+   - If the response includes a `knowledge` field, a "Timebuddy knowledge" dashboard published
+     product-specific context for this alert (owner, known false positives, runbook links) —
+     fold it into your verdict in step 6. Absent means nothing's been published for this alert's
+     product, not an error; don't go looking for it yourself (`get_product_context` exists for
+     that, but `get_alert_context` already tried).
 
 2. **Note the resolved connection.** The response includes `resolvedConnectionId` when it could
    determine which Grafana connection the alert belongs to. Pass that same id as the `connection`
@@ -124,7 +129,9 @@ skill exists to handle for them.
    optional — a bare JSON dump back to a NOC person on a live incident is not useful in the flow.
    If you called `screenshot_panel` anywhere above, list each screenshot's `savedTo` path next to
    the panel it came from — it's evidence for "why do you say that," and the file is the only
-   reliable way the person actually gets to see it (see step 3 above).
+   reliable way the person actually gets to see it (see step 3 above). If `get_alert_context`
+   returned a `knowledge` field (step 1), weave its content into the note (e.g. a known false
+   positive, an owning team, a runbook link) rather than leaving it as a separate, unexplained blob.
 
 **Never read this server's cached index/data files directly, even if you can find where they're
 stored on disk — always go through the MCP tools above.** Tool output is redacted before it

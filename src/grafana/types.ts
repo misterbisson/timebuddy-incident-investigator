@@ -50,6 +50,8 @@ export interface Panel {
     /** Applies only to fields matched by e.g. { id: 'byName', options: '<field name>' }. */
     overrides?: FieldConfigOverride[];
   };
+  /** Populated for a "text" panel (type: 'text'); its markdown/HTML body. */
+  options?: { content?: string; mode?: string };
 }
 
 export interface TemplateVariableOption {
@@ -78,6 +80,8 @@ export interface DashboardJson {
   panels?: Panel[];
   templating?: { list?: TemplateVariable[] };
   time?: { from: string; to: string };
+  /** Bumped by Grafana on every save; used to detect a changed dashboard without diffing its body. */
+  version?: number;
 }
 
 export interface DashboardGetResponse {
@@ -87,7 +91,15 @@ export interface DashboardGetResponse {
     folderTitle?: string;
     url?: string;
     slug?: string;
+    updated?: string;
   };
+}
+
+/** `GET /api/folders/:uid`. `parentUid` is only present when nested folders are enabled and this isn't a root folder. */
+export interface FolderInfo {
+  uid: string;
+  title: string;
+  parentUid?: string;
 }
 
 export interface SearchResultItem {
