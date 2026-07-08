@@ -98,4 +98,47 @@ describe('execute_query_window tool', () => {
     expect(result.isError).toBeUndefined();
     expect(parsed.unresolvedAllVariables).toEqual(['unreachable_target_hosts']);
   });
+
+  it('omits raw points but keeps stats/pointsTotal when includePoints is false', async () => {
+    const { client } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1'] });
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const startsAtMs = Date.parse('2026-07-07T15:38:50Z');
+    const endsAtMs = Date.parse('2026-07-07T16:38:50Z');
+    const result = (await call('execute_query_window', {
+      dashboardUid: 'dash1',
+      panelId: 1,
+      startsAtMs,
+      endsAtMs,
+      includePoints: false,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    const series = parsed.incident.series[0];
+    expect(series.points).toBeUndefined();
+    expect(series.stats).toBeDefined();
+    expect(series.pointsTotal).toBeGreaterThan(0);
+  });
+
+  it('includes raw points by default', async () => {
+    const { client } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1'] });
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const startsAtMs = Date.parse('2026-07-07T15:38:50Z');
+    const endsAtMs = Date.parse('2026-07-07T16:38:50Z');
+    const result = (await call('execute_query_window', {
+      dashboardUid: 'dash1',
+      panelId: 1,
+      startsAtMs,
+      endsAtMs,
+      includePoints: true,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(Array.isArray(parsed.incident.series[0].points)).toBe(true);
+  });
 });

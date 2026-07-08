@@ -30,7 +30,8 @@ interface RenderedPanel {
   /** Only set for a queryable panel past panelLimit — see panelsSkipped. */
   skipped?: boolean;
   targets?: RenderedTarget[];
-  series?: Array<QuerySeries & { stats: SeriesStats }>;
+  /** points is omitted (not just empty) when the caller passed includePoints: false. */
+  series?: Array<Omit<QuerySeries, 'points'> & { points?: QuerySeries['points']; stats: SeriesStats }>;
   errors?: Record<string, string>;
   /** Set when resolving/executing this panel's own queries threw (e.g. an unresolvable datasource) — sibling panels still complete normally. */
   executionError?: string;
@@ -92,7 +93,9 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
         'is best-effort live-resolved to its real value list; when that can\'t be done (unsupported datasource/query ' +
         'shape, or the live lookup itself failed) it falls back to matching everything, and the variable name is ' +
         'listed in "unresolvedAllVariables" - treat any panel depending on one of those as unscoped/unverified rather ' +
-        'than trusting its series or applying a naming-convention guess to narrow it down.',
+        'than trusting its series or applying a naming-convention guess to narrow it down. Pass includePoints: false ' +
+        'to drop each series\' raw "points" array from every panel - "stats" is still computed and returned either ' +
+        'way, so this only removes the raw arrays a wide-window/all-panel survey doesn\'t need.',
       inputSchema: {
         url: z.string().optional().describe('A Grafana dashboard/panel or alert-rule URL'),
         dashboardUid: z.string().optional().describe('Dashboard UID, when not passing url (requires fromMs/toMs or falls back to the dashboard\'s saved default range, and a resolvable connection)'),
@@ -100,11 +103,12 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
         toMs: z.number().optional().describe('Window end, epoch ms - overrides the url\'s own "to" when both are given'),
         variableOverrides: z.record(z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
         panelLimit: z.number().optional().default(DEFAULT_PANEL_LIMIT).describe('Max queryable panels to execute in one call; panels beyond this are listed with skipped: true, never silently dropped'),
+        includePoints: z.boolean().optional().default(true).describe('Set false to omit each panel series\' raw "points" array - stats are still computed and returned either way. Use this for a wide-window/all-panel survey, where only shape (min/max/mean) matters, to avoid an oversized response spilling to disk'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Render dashboard' },
     },
-    async ({ url, dashboardUid: inputDashboardUid, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, panelLimit, connection }) => {
+    async ({ url, dashboardUid: inputDashboardUid, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, panelLimit, includePoints, connection }) => {
       let resolvedConnectionId: string | undefined;
       let resolvedDashboardUid: string | undefined;
       try {
@@ -173,9 +177,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
           const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(client, variables, overrides, window);
           const allPanels = flattenPanels(dashboard.panels ?? []);
           const queryablePanels = resolvePanelQueries(dashboard);
-          const queryableIds = new Set(queryablePanels.map((p) => p.panelId));
           const toExecute = queryablePanels.slice(0, panelLimit);
-          const executeIds = new Set(toExecute.map((p) => p.panelId));
 
           const executed = await Promise.allSettled(
             toExecute.map(async (panel): Promise<RenderedPanel> => {
@@ -194,7 +196,10 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
                 hasTargets: true,
                 url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides }),
                 targets: targets.map((t) => ({ refId: t.refId, datasourceUid: t.datasourceUid, resolvedQuery: t.raw })),
-                series: result.series.map((s) => ({ ...s, stats: computeStats(s.points) })),
+                series: result.series.map((s) => {
+                  const { points, ...rest } = s;
+                  return { ...rest, ...(includePoints ? { points } : {}), stats: computeStats(points) };
+                }),
                 errors: result.errors,
               };
             }),
@@ -213,8 +218,14 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
             };
           });
 
+          // Index-based, not id-based: toExecute is literally the first
+          // panelLimit entries of queryablePanels, so "the rest" is exactly
+          // this slice. A Set keyed by bare panelId would silently merge two
+          // panels sharing an id (a real provisioning bug seen in practice —
+          // see AmbiguousPanelError's doc comment), making the second one
+          // vanish: not executed, not skipped, not anywhere in the output.
           const skippedPanels: RenderedPanel[] = queryablePanels
-            .filter((p) => !executeIds.has(p.panelId))
+            .slice(panelLimit)
             .map((p) => ({
               panelId: p.panelId,
               title: p.title,
@@ -224,8 +235,13 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
               url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: p.panelId, fromMs, toMs, variables: overrides }),
             }));
 
+          // Same reasoning as skippedPanels above: check each Panel's own
+          // targets directly (matching resolvePanelQueries' own predicate)
+          // rather than cross-referencing by id against queryablePanels,
+          // which would misclassify a non-queryable panel that happens to
+          // share an id with a queryable one.
           const nonQueryablePanels: RenderedPanel[] = allPanels
-            .filter((p) => !queryableIds.has(p.id))
+            .filter((p) => !p.targets?.length)
             .map((p) => ({
               panelId: p.id,
               title: p.title,

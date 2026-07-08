@@ -95,4 +95,95 @@ describe('render_dashboard tool', () => {
 
     expect(parsed.unresolvedAllVariables).toEqual(['unreachable_target_hosts']);
   });
+
+  it('does not silently drop a panel when two panels share the same panelId', async () => {
+    const dashboard: DashboardGetResponse = {
+      dashboard: {
+        uid: 'dash2',
+        title: 'Duplicate ids',
+        version: 1,
+        time: { from: 'now-1h', to: 'now' },
+        panels: [
+          { id: 9, title: 'Compute', targets: [{ refId: 'A', datasource: { uid: 'prom1' }, expr: 'up{product="compute"}' }] },
+          { id: 9, title: 'Block Storage', targets: [{ refId: 'A', datasource: { uid: 'prom1' }, expr: 'up{product="block-storage"}' }] },
+          { id: 10, title: 'Row header (non-queryable)', type: 'row' },
+        ],
+      },
+      meta: {},
+    };
+    const { client } = fakeGrafanaClient({ dashboard });
+    const { server, call } = fakeServer();
+    registerRenderDashboard(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('render_dashboard', {
+      dashboardUid: 'dash2',
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_003_600_000,
+      // fakeServer's call() bypasses zod (unlike the real MCP server), so the
+      // schema's panelLimit default isn't applied here - pass it explicitly.
+      panelLimit: 25,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.panelsTotal).toBe(2);
+    const titles = parsed.panels.map((p: { title?: string }) => p.title);
+    expect(titles).toContain('Compute');
+    expect(titles).toContain('Block Storage');
+    expect(titles).toContain('Row header (non-queryable)');
+    expect(parsed.panels).toHaveLength(3);
+  });
+
+  it('marks a duplicate-panelId panel beyond panelLimit as skipped rather than dropping it', async () => {
+    const dashboard: DashboardGetResponse = {
+      dashboard: {
+        uid: 'dash2',
+        title: 'Duplicate ids',
+        version: 1,
+        time: { from: 'now-1h', to: 'now' },
+        panels: [
+          { id: 9, title: 'Compute', targets: [{ refId: 'A', datasource: { uid: 'prom1' }, expr: 'up{product="compute"}' }] },
+          { id: 9, title: 'Block Storage', targets: [{ refId: 'A', datasource: { uid: 'prom1' }, expr: 'up{product="block-storage"}' }] },
+        ],
+      },
+      meta: {},
+    };
+    const { client } = fakeGrafanaClient({ dashboard });
+    const { server, call } = fakeServer();
+    registerRenderDashboard(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('render_dashboard', {
+      dashboardUid: 'dash2',
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_003_600_000,
+      panelLimit: 1,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.panelsExecuted).toBe(1);
+    expect(parsed.panelsSkipped).toBe(1);
+    const skipped = parsed.panels.find((p: { skipped?: boolean }) => p.skipped);
+    expect(skipped.title).toBe('Block Storage');
+  });
+
+  it('omits raw points but keeps stats when includePoints is false', async () => {
+    const { client } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1', 'h2'] });
+    const { server, call } = fakeServer();
+    registerRenderDashboard(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('render_dashboard', {
+      dashboardUid: 'dash1',
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_003_600_000,
+      panelLimit: 25,
+      includePoints: false,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    const panel = parsed.panels.find((p: { panelId: number }) => p.panelId === 1);
+    expect(panel.series[0].points).toBeUndefined();
+    expect(panel.series[0].stats).toBeDefined();
+  });
 });

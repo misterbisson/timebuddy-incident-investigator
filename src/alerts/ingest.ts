@@ -158,6 +158,12 @@ export async function resolveAlertContext(
         annotations: {},
         dashboardUid: parsed.uid,
         panelId: parsed.panelId,
+        // Stamp the input url itself so connection auto-resolution (which
+        // hints off panelURL/dashboardURL/generatorURL) works for a plain
+        // dashboard/panel link, not just alert-rule URLs and webhook/JSON
+        // alerts that already carried one of those fields.
+        panelURL: parsed.panelId !== undefined ? input.url : undefined,
+        dashboardURL: parsed.panelId === undefined ? input.url : undefined,
         variables: parsed.vars,
         warnings: [],
       };

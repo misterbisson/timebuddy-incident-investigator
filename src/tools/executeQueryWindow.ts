@@ -17,15 +17,30 @@ import { withAudit } from '../security/audit.js';
  * question that otherwise gets answered by dumping points to a file and
  * scripting it — computing it here means every execute_query_window call
  * already has the answer, with no extra call or param needed.
+ *
+ * includePoints:false drops the raw "points" array (stats/runs/pointsTotal are
+ * still computed from it and returned) — for a wide survey where only the
+ * shape of the anomaly matters, this is what keeps the response from
+ * overflowing to disk in the first place, instead of overflowing and then
+ * needing jq/bash to recover the same numbers stats() already computed.
  */
-function annotateSeries(result: WindowQueryResult, threshold: number | undefined, direction: 'below' | 'above') {
+function annotateSeries(
+  result: WindowQueryResult,
+  threshold: number | undefined,
+  direction: 'below' | 'above',
+  includePoints: boolean,
+) {
   return {
     ...result,
-    series: result.series.map((s) => ({
-      ...s,
-      stats: computeStats(s.points),
-      ...(threshold !== undefined ? { runs: findThresholdRuns(s.points, threshold, direction) } : {}),
-    })),
+    series: result.series.map((s) => {
+      const { points, ...rest } = s;
+      return {
+        ...rest,
+        ...(includePoints ? { points } : {}),
+        stats: computeStats(points),
+        ...(threshold !== undefined ? { runs: findThresholdRuns(points, threshold, direction) } : {}),
+      };
+    }),
   };
 }
 
@@ -53,7 +68,10 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'live (e.g. an InfluxQL "SHOW TAG VALUES" query variable) is best-effort live-resolved to its real value ' +
         'list, once, using the incident window; when that can\'t be done it falls back to matching everything, and ' +
         'the variable name is listed in the top-level "unresolvedAllVariables" (omitted when empty) — treat the ' +
-        'result as unscoped/unverified rather than trusting it or narrowing it down with a naming-convention guess.',
+        'result as unscoped/unverified rather than trusting it or narrowing it down with a naming-convention guess. ' +
+        'Pass includePoints: false to drop each series\' raw "points" array from the response - "stats" and "runs" ' +
+        '(when threshold is set) are still computed from the full data either way, so this only removes the raw ' +
+        'array a wide/long-window call doesn\'t need, keeping the response from spilling to disk.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -65,11 +83,12 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         includeControls: z.boolean().optional().default(true).describe('Include prior-hour/day/week baseline windows'),
         threshold: z.number().optional().describe('When set, each returned series gets a "runs" array of contiguous points crossing this value (start/end/duration/min/max) - e.g. 1 for an uptime metric'),
         thresholdDirection: z.enum(['below', 'above']).optional().default('below').describe('Whether "threshold" means find runs below or above that value'),
+        includePoints: z.boolean().optional().default(true).describe('Set false to omit each series\' raw "points" array - stats/runs are still computed and returned either way'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Execute query window' },
     },
-    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, connection }) => {
+    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, includePoints, connection }) => {
       let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
@@ -115,7 +134,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             allWindows.map(async (window) => {
               const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
               const [result] = await executeQueryWindows(client, targets, [window], config);
-              return annotateSeries(result!, threshold, thresholdDirection);
+              return annotateSeries(result!, threshold, thresholdDirection, includePoints);
             }),
           );
 

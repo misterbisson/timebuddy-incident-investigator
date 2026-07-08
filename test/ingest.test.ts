@@ -102,6 +102,24 @@ describe('resolveAlertContext', () => {
     expect(ctx.variables).toEqual({ host: ['db1'] });
   });
 
+  it('stamps panelURL from a bare panel URL so connection auto-resolution has a hostname to match', async () => {
+    const ctx = await resolveAlertContext(
+      { url: 'https://grafana.example.com/d/dash3/slug?viewPanel=9&var-host=db1' },
+      () => fakeClient(),
+    );
+    expect(ctx.panelURL).toBe('https://grafana.example.com/d/dash3/slug?viewPanel=9&var-host=db1');
+    expect(ctx.dashboardURL).toBeUndefined();
+  });
+
+  it('stamps dashboardURL (not panelURL) from a bare dashboard URL with no viewPanel', async () => {
+    const ctx = await resolveAlertContext(
+      { url: 'https://grafana.example.com/d/dash5/slug?var-host=db1' },
+      () => fakeClient(),
+    );
+    expect(ctx.dashboardURL).toBe('https://grafana.example.com/d/dash5/slug?var-host=db1');
+    expect(ctx.panelURL).toBeUndefined();
+  });
+
   it('resolves an alert-rule URL by fetching the rule definition', async () => {
     const rule: RulerAlertRule = {
       uid: 'rule1',
