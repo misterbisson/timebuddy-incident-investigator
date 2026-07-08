@@ -188,6 +188,39 @@ adopter can publish their own.
   edit to a knowledge dashboard is picked up as soon as its cached folder-resolution entry
   expires (15 minutes) and its version no longer matches.
 
+## Live resolution of "all" dashboard variables
+
+A dashboard's saved JSON only ever caches the *options* Grafana knew about at save time.
+For a **query-type variable** — one whose value list Grafana computes live (e.g. an
+InfluxQL `SHOW TAG VALUES` variable) rather than a fixed list — that means a `$__all`
+selection with no cached options and no configured `allValue` has nothing to expand to.
+The safe default, kept from an earlier real incident, is to fail *open*: substitute the
+regex `.*` rather than an empty string, since an empty match silently reports "no data"
+over what might be a live outage. But failing open can just as easily produce a
+*wrong* answer instead of no answer — `.*` matches every value that datasource has ever
+recorded for that field, not the actual (often much smaller) set the dashboard's variable
+is scoped to, and there is no way to tell the two apart from the result alone.
+
+`render_dashboard`, `resolve_panel_queries`, `execute_query_window`, and
+`detect_correlated_anomalies` (for its primary panel only — see below) now make a
+best-effort attempt to resolve this properly instead: when a query-type variable is stuck
+at an unresolved `$__all`, and its query text is a `SHOW TAG VALUES` InfluxQL statement,
+it's actually executed through the same allowlisted `/api/ds/query` endpoint panel queries
+already use, with any other variable references and `$timeFilter` in it substituted
+first (so the result is scoped to the same window being investigated). The real value
+list replaces the `.*` fallback. `execute_query_window`/`detect_correlated_anomalies`
+resolve this once per call using the incident window — not once per baseline/control
+window — so a historical comparison window can't end up scoped to a different value list
+than the incident it's being compared against.
+
+This only covers the one concrete shape seen in practice; other datasources (e.g. a
+Prometheus `label_values(...)` variable, which resolves through a different Grafana API
+entirely) or a live lookup that itself fails still fall back to `.*`, exactly as before.
+Either way, the variable's name is added to the result's `unresolvedAllVariables` array
+(omitted when empty) — treat any panel whose scope depends on a listed variable as
+unverified rather than trusting its result or narrowing it down with a naming-convention
+guess.
+
 ## Security model
 
 - The Grafana client (`src/grafana/client.ts`) is a fixed allowlist of read-only endpoints.

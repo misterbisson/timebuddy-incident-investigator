@@ -7,6 +7,7 @@ const config: Config = {
   connections: [],
   tlsVerify: true,
   requestTimeoutMs: 1000,
+  screenshotTimeoutMs: 45000,
   maxConcurrency: 4,
   maxLookbackHours: 720,
   maxDataPoints: 2000,

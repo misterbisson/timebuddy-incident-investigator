@@ -16,6 +16,15 @@ export interface Config {
   connections: GrafanaConnection[];
   tlsVerify: boolean;
   requestTimeoutMs: number;
+  /**
+   * Separate from requestTimeoutMs: a full Grafana page load in a headless
+   * browser (JS bundle, auth, the panel's own /api/ds/query fetch, chart
+   * render) routinely takes longer than a single JSON API call, especially
+   * on a heavy dashboard. Reusing requestTimeoutMs here caused screenshot_panel
+   * to fail consistently at ~15s on dashboards that render fine in a real
+   * browser, well before the page ever finished loading.
+   */
+  screenshotTimeoutMs: number;
   maxConcurrency: number;
   maxLookbackHours: number;
   maxDataPoints: number;
@@ -70,6 +79,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     connections: envConnections,
     tlsVerify: parseBool(env.GRAFANA_TLS_VERIFY, true),
     requestTimeoutMs: parseInt_(env.GRAFANA_REQUEST_TIMEOUT_MS, 15000),
+    screenshotTimeoutMs: parseInt_(env.GRAFANA_SCREENSHOT_TIMEOUT_MS, 45000),
     maxConcurrency: parseInt_(env.GRAFANA_MAX_CONCURRENCY, 4),
     maxLookbackHours: parseInt_(env.MAX_LOOKBACK_HOURS, 720),
     maxDataPoints: parseInt_(env.MAX_DATA_POINTS, 2000),

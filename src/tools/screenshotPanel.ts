@@ -152,7 +152,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             headers: { Authorization: buildAuthHeader(rawConnection) },
             width,
             height,
-            timeoutMs: config.requestTimeoutMs,
+            timeoutMs: config.screenshotTimeoutMs,
           });
           const savedTo = await saveScreenshot(png, dashboardUid, panelId, config);
 

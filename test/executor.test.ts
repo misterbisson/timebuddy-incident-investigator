@@ -9,6 +9,7 @@ const config: Config = {
   connections: [{ id: 'test', name: 'test', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' }],
   tlsVerify: true,
   requestTimeoutMs: 1000,
+  screenshotTimeoutMs: 45000,
   maxConcurrency: 4,
   maxLookbackHours: 720,
   maxDataPoints: 2000,

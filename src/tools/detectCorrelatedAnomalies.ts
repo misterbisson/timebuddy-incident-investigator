@@ -8,6 +8,7 @@ import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../anal
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
 import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -33,7 +34,10 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         'strength, label overlap with the primary alert, and how closely their anomaly onset lines up with the ' +
         'primary\'s — a triage heuristic for blast radius, not a statistical proof of causation. When ' +
         'auto-discovering (candidates omitted), searches every configured Grafana connection, not just the ' +
-        'primary panel\'s.',
+        'primary panel\'s. A "$__all" selection on the primary panel\'s own variables is best-effort live-resolved ' +
+        '(e.g. an InfluxQL "SHOW TAG VALUES" query variable); when that can\'t be done it falls back to matching ' +
+        'everything and the variable name is listed in the top-level "unresolvedAllVariables" (omitted when empty) — ' +
+        'candidate panels are unaffected, since those already use each dashboard\'s own saved current values.',
       inputSchema: {
         primaryDashboardUid: z.string(),
         primaryPanelId: z.number(),
@@ -72,11 +76,25 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             }
             const overrides = variableOverrides ?? {};
 
+            // Live-resolve any "$__all" query-type variable once, using the incident
+            // window — same rationale as execute_query_window: a baseline window
+            // resolving to a different value list than the incident window would
+            // break the comparison. Scoped to the primary panel only; auto-discovered
+            // candidate panels below already use {} overrides / saved current values.
+            const { dashboard: primaryDashboard } = await primaryClient.getDashboard(primaryDashboardUid);
+            const primaryVariables = primaryDashboard.templating?.list ?? [];
+            const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(
+              primaryClient,
+              primaryVariables,
+              overrides,
+              windowSet.incident,
+            );
+
             const primaryResolved = await resolvePanelForWindow(
               primaryClient,
               primaryDashboardUid,
               primaryPanelId,
-              overrides,
+              resolvedOverrides,
               windowSet.incident,
               primaryPanelTitle,
             );
@@ -85,7 +103,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryClient,
               primaryDashboardUid,
               primaryPanelId,
-              overrides,
+              resolvedOverrides,
               windowSet.preWindow,
               primaryPanelTitle,
             );
@@ -190,6 +208,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryOnsetMs,
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),
+              ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
             };
             return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
           },

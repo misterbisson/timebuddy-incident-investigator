@@ -11,6 +11,7 @@ import { executeQueryWindow } from '../query/executor.js';
 import { computeStats } from '../analysis/baseline.js';
 import { enforceWindowLimit } from '../security/limits.js';
 import { dashboardUrlFor, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
+import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -86,7 +87,12 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
         'use execute_query_window/validate_baseline for that. Every panel appears in "panels": queryable ones carry ' +
         'their resolved query, series (each with stats), and per-panel errors; row/text/non-queryable panels are ' +
         'metadata only (hasTargets: false, nothing executed); a queryable panel beyond panelLimit is marked ' +
-        '"skipped: true" rather than silently dropped - check panelsSkipped/panelsTotal before assuming full coverage.',
+        '"skipped: true" rather than silently dropped - check panelsSkipped/panelsTotal before assuming full coverage. ' +
+        'A "$__all" selection on a variable Grafana computes live (e.g. an InfluxQL "SHOW TAG VALUES" query variable) ' +
+        'is best-effort live-resolved to its real value list; when that can\'t be done (unsupported datasource/query ' +
+        'shape, or the live lookup itself failed) it falls back to matching everything, and the variable name is ' +
+        'listed in "unresolvedAllVariables" - treat any panel depending on one of those as unscoped/unverified rather ' +
+        'than trusting its series or applying a naming-convention guess to narrow it down.',
       inputSchema: {
         url: z.string().optional().describe('A Grafana dashboard/panel or alert-rule URL'),
         dashboardUid: z.string().optional().describe('Dashboard UID, when not passing url (requires fromMs/toMs or falls back to the dashboard\'s saved default range, and a resolvable connection)'),
@@ -160,6 +166,11 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
           enforceWindowLimit({ label: 'render', fromMs, toMs }, config);
 
           const window = { fromMs, toMs };
+          // Live-resolve any query-type variable stuck at the unconstrained '.*'
+          // fallback (see liveVariables.ts) — resolvedOverrides feeds the actual
+          // queries; the original overrides (not the potentially large resolved
+          // value list) still builds the human-facing dashboard URLs below.
+          const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(client, variables, overrides, window);
           const allPanels = flattenPanels(dashboard.panels ?? []);
           const queryablePanels = resolvePanelQueries(dashboard);
           const queryableIds = new Set(queryablePanels.map((p) => p.panelId));
@@ -171,8 +182,8 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
               const targets = await Promise.all(
                 panel.targets.map(async (t) => ({
                   refId: t.refId,
-                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides),
-                  raw: substituteTargetFields(t.raw, variables, overrides, window),
+                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
+                  raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window),
                 })),
               );
               const result = await executeQueryWindow(client, targets, { label: 'render', fromMs, toMs }, config);
@@ -232,6 +243,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
             panelsExecuted: executedPanels.length,
             panelsSkipped: skippedPanels.length,
             panels: [...executedPanels, ...skippedPanels, ...nonQueryablePanels],
+            ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });

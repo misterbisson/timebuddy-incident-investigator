@@ -6,6 +6,7 @@ import { executeQueryWindows, type WindowQueryResult } from '../query/executor.j
 import { findThresholdRuns } from '../analysis/runs.js';
 import { computeStats } from '../analysis/baseline.js';
 import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -48,7 +49,11 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'raw points and scripting the same analysis yourself. If "endsAtMs" is omitted and the alert is resolved ' +
         '(not still firing), it defaults to now — for an old/resolved alert this can silently build a many-day ' +
         'window, so this call errors instead of running in that case; pass "endsAtMs" explicitly (from the alert\'s ' +
-        'own resolved end, or the dashboard link\'s "to" param).',
+        'own resolved end, or the dashboard link\'s "to" param). A "$__all" selection on a variable Grafana computes ' +
+        'live (e.g. an InfluxQL "SHOW TAG VALUES" query variable) is best-effort live-resolved to its real value ' +
+        'list, once, using the incident window; when that can\'t be done it falls back to matching everything, and ' +
+        'the variable name is listed in the top-level "unresolvedAllVariables" (omitted when empty) — treat the ' +
+        'result as unscoped/unverified rather than trusting it or narrowing it down with a naming-convention guess.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -90,11 +95,25 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           const allWindows = [windowSet.incident, windowSet.preWindow, ...windowSet.controls];
           const overrides = variableOverrides ?? {};
 
+          // Live-resolve any "$__all" query-type variable once, using the incident
+          // window — not per-window like the substitution below, since letting a
+          // baseline window (e.g. same-hour-last-week) live-resolve to a *different*
+          // host list than the incident window would break the apples-to-apples
+          // comparison these baselines exist for. Costs one extra dashboard fetch.
+          const { dashboard } = await client.getDashboard(dashboardUid);
+          const variables = dashboard.templating?.list ?? [];
+          const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(
+            client,
+            variables,
+            overrides,
+            windowSet.incident,
+          );
+
           // Variable values don't depend on the window, but $__interval/$timeFilter
           // do — resolve targets once per window rather than once overall.
           const resultsPerWindow = await Promise.all(
             allWindows.map(async (window) => {
-              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, overrides, window, panelTitle);
+              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
               const [result] = await executeQueryWindows(client, targets, [window], config);
               return annotateSeries(result!, threshold, thresholdDirection);
             }),
@@ -112,7 +131,13 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
           });
-          const result = { url, incident, preWindow, controls };
+          const result = {
+            url,
+            incident,
+            preWindow,
+            controls,
+            ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
+          };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {

@@ -4,6 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
 import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
+import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -22,7 +23,10 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
         '"click a row to see that account/host\'s dashboard"), as raw URL templates containing macros like ' +
         '${__from}/${__to}/${__data.fields["X"]} that this server doesn\'t resolve. Substitute those yourself using ' +
         'the window bounds and the actual field values from the panel\'s query result (e.g. via execute_query_window) ' +
-        'to build a working link — this is usually the way to "follow" a panel\'s links when investigating.',
+        'to build a working link — this is usually the way to "follow" a panel\'s links when investigating. ' +
+        'Returns { panels, unresolvedAllVariables }: panels as described above, plus unresolvedAllVariables (omitted ' +
+        'when empty) listing any "$__all"-selected variable this couldn\'t live-resolve to its real value list (falls ' +
+        'back to matching everything instead) — treat a panel depending on one of those as unscoped/unverified.',
       inputSchema: {
         dashboardUid: z.string().describe('Grafana dashboard UID'),
         panelId: z.number().optional().describe('Limit to one panel; omit to resolve every queryable panel'),
@@ -50,6 +54,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
             fromMs: windowFromMs ?? Date.now() - 3_600_000,
             toMs: windowToMs ?? Date.now(),
           };
+          const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(client, variables, overrides, window);
 
           const panels = panelId !== undefined
             ? [findPanel(dashboard, panelId, panelTitle)].filter((p): p is NonNullable<typeof p> => Boolean(p))
@@ -74,14 +79,18 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
               targets: await Promise.all(
                 panel.targets.map(async (t) => ({
                   refId: t.refId,
-                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides),
-                  resolvedQuery: substituteTargetFields(t.raw, variables, overrides, window),
+                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
+                  resolvedQuery: substituteTargetFields(t.raw, variables, resolvedOverrides, window),
                 })),
               ),
             })),
           );
 
-          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
+          const response = {
+            panels: result,
+            ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
+          };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(response, config.redactionPatterns)) }] };
         });
       } catch (err) {
         const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;

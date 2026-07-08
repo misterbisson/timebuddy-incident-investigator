@@ -67,6 +67,14 @@ skill exists to handle for them.
      and returns its path as `savedTo`; always state that path in your response (e.g. "screenshot
      saved to <path> — open it to see the table") so they have something to actually look at, not
      just your description of what you saw in it.
+   - **Check `unresolvedAllVariables` before trusting a panel's scope.** `render_dashboard`,
+     `resolve_panel_queries`, `execute_query_window`, and `detect_correlated_anomalies` best-effort
+     resolve a `$__all`-selected variable to its real value list, but some datasources/query shapes
+     can't be resolved this way and fall back to matching *everything* that datasource has ever
+     recorded for that field — silently far broader than what the dashboard/panel actually shows. If
+     a variable a panel depends on shows up in `unresolvedAllVariables`, treat that panel's results as
+     unscoped: don't apply a naming-convention guess (e.g. matching a hostname prefix) to narrow down
+     which rows are actually in scope — screenshot the panel or ask the person directly instead.
    - Once you have a specific `dashboardUid`/`panelId` (from `alertContext`, or picked out of a
      `render_dashboard` survey above):
    - `execute_query_window` with `dashboardUid`, `panelId`, `startsAtMs` (use `alertContext.startsAt`),
