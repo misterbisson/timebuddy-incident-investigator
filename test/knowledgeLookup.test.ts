@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findProductContextAcrossConnection, resolveProductContext } from '../src/knowledge/lookup.js';
+import { findProductContextAcrossConnection, listKnowledgeDashboards, resolveProductContext } from '../src/knowledge/lookup.js';
 import { GrafanaApiError, type GrafanaClient } from '../src/grafana/client.js';
 import type { Config } from '../src/config.js';
 import type { DashboardGetResponse, SearchResultItem } from '../src/grafana/types.js';
@@ -150,5 +150,46 @@ describe('findProductContextAcrossConnection', () => {
     const client = { searchDashboards: async () => [] } as unknown as GrafanaClient;
     const matches = await findProductContextAcrossConnection(client, config(), 'conn1', 'block-storage');
     expect(matches).toEqual([]);
+  });
+});
+
+describe('listKnowledgeDashboards', () => {
+  it('returns an empty array, not an error, when nothing has been published', async () => {
+    const client = { searchDashboards: async () => [] } as unknown as GrafanaClient;
+    const dashboards = await listKnowledgeDashboards(client, config(), 'conn1');
+    expect(dashboards).toEqual([]);
+  });
+
+  it('lists every timebuddy-knowledge-tagged dashboard with its published product keys, independent of any single key', async () => {
+    const dash = knowledgeDashboard(1, [
+      { id: 1, title: 'timebuddy: block-storage', content: '```json\n{"owner":"storage-team"}\n```\n' },
+      { id: 2, title: 'timebuddy: compute', content: '```json\n{"owner":"compute-team"}\n```\n' },
+      { id: 3, title: 'Not a knowledge panel', content: 'irrelevant' },
+    ]);
+    const client = {
+      searchDashboards: async () => [{ uid: 'kb1', title: '🧠 Timebuddy knowledge', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'folder-a', url: '' }],
+      getDashboard: async () => dash,
+    } as unknown as GrafanaClient;
+
+    const dashboards = await listKnowledgeDashboards(client, config(), 'conn1');
+    expect(dashboards).toEqual([
+      { dashboardUid: 'kb1', title: '🧠 Timebuddy knowledge', folderUid: 'folder-a', productKeys: ['block-storage', 'compute'] },
+    ]);
+  });
+
+  it('returns one entry per knowledge dashboard when more than one is tagged on the connection', async () => {
+    const stagingDash = knowledgeDashboard(1, [{ id: 1, title: 'timebuddy: block-storage', content: '```json\n{}\n```\n' }]);
+    const prodDash = knowledgeDashboard(1, [{ id: 1, title: 'timebuddy: compute', content: '```json\n{}\n```\n' }]);
+    const client = {
+      searchDashboards: async () => [
+        { uid: 'kb-staging', title: 'K staging', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'staging', url: '' },
+        { uid: 'kb-prod', title: 'K prod', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'prod', url: '' },
+      ],
+      getDashboard: async (uid: string) => (uid === 'kb-staging' ? stagingDash : prodDash),
+    } as unknown as GrafanaClient;
+
+    const dashboards = await listKnowledgeDashboards(client, config(), 'conn1');
+    expect(dashboards.map((d) => d.dashboardUid)).toEqual(['kb-staging', 'kb-prod']);
+    expect(dashboards.map((d) => d.productKeys)).toEqual([['block-storage'], ['compute']]);
   });
 });

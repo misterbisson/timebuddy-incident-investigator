@@ -39,7 +39,16 @@ person who has never successfully used this tool won't reach for it under real p
      a connection when the alert-rule crawl itself failed (e.g. a permission-scoped token) — that
      looks identical to "genuinely zero alerts" unless you check it, and 0 across a large estate
      (hundreds/thousands of dashboards) is unusual enough to be worth verifying rather than assuming.
-5. Mention `brokenDatasourcesTotal` per connection if it's non-trivial, but don't treat a large
+5. **Check `knowledgeDashboards`.** Same standing-overview shape as `alertBackedDashboards` — every
+   "Timebuddy knowledge" dashboard found (tagged `timebuddy-knowledge`, independent of the estate's
+   naming conventions) plus the product keys each one publishes. This is the proactive counterpart
+   to step 8's `get_product_context`: don't wait for someone to name a product key before
+   mentioning that published context exists — if `knowledgeDashboardsTotal` is non-zero, name a few
+   of the product keys you see so the person knows what's already documented (owner, runbook links,
+   known false positives) without having to guess a key first. An empty list just means nothing's
+   been published on that connection yet, not an error — see README for the publishing convention
+   if they ask how to add one.
+6. Mention `brokenDatasourcesTotal` per connection if it's non-trivial, but don't treat a large
    count as an incident signal on its own — a sizable chunk of it is typically panels whose
    datasource is a Grafana template variable (`${datasource}`, `$some_var`) that this index can't
    resolve statically, not real breakage. `datasourceUid` values that look like plain names rather
@@ -48,11 +57,11 @@ person who has never successfully used this tool won't reach for it under real p
    panel *references*, and a handful of retired datasources can each be referenced by hundreds or
    thousands of old panels, so a total in the tens of thousands is often really "a few datasources
    need cleanup," not thousands of distinct problems.
-6. Pick one or two dashboards from `alertBackedDashboards` and offer to look at one with them —
+7. Pick one or two dashboards from `alertBackedDashboards` and offer to look at one with them —
    `fetch_dashboard` for its panel list, or `resolve_panel_queries`/`execute_query_window` if
    they want to see actual data. The goal is for them to see a real, live, *trustworthy* result,
    not just a status message.
-7. Invite them to try asking about something specific ("ask me to look at any dashboard or
+8. Invite them to try asking about something specific ("ask me to look at any dashboard or
    metric you're curious about") so this feels like a tool they've actually used, not just
    installed. If they name a product/service in plain language (e.g. "block storage") rather
    than an exact metric or label, use `find_related_dashboards`'s `query` param — it does a

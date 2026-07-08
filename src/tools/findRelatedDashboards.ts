@@ -7,6 +7,7 @@ import { dashboardUrlFor, resolveToolClient } from './shared.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import { listKnowledgeDashboards } from '../knowledge/lookup.js';
 
 function labelOverlap(target: Record<string, string>, entryLabels: Record<string, string[]>): number {
   let count = 0;
@@ -114,7 +115,11 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         'when the alert-rule crawl itself failed (e.g. a permission-scoped token), which looks identical to "no ' +
         'alerts" unless you check this. brokenDatasourcesTotal counts panel references, not distinct datasources — ' +
         'a large estate can have thousands of *references* to only a handful of retired datasources, so check ' +
-        'brokenDatasourcesUniqueCount too before treating a big total as thousands of separate problems.',
+        'brokenDatasourcesUniqueCount too before treating a big total as thousands of separate problems. ' +
+        'knowledgeDashboards is likewise a standing overview, independent of metricName/labels/query, of every ' +
+        '"Timebuddy knowledge" dashboard found (identified by the timebuddy-knowledge tag) with the product keys ' +
+        'each one publishes — use this to discover what get_product_context can answer without already knowing a ' +
+        'product key to ask for.',
       inputSchema: {
         metricName: z.string().optional().describe('Exact Prometheus metric name or InfluxDB measurement name'),
         labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
@@ -149,6 +154,19 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             (r): r is PromiseFulfilledResult<{ connectionId: string; index: MetricIndex; candidates: Candidate[] }> =>
               r.status === 'fulfilled',
           );
+
+          // Independent of the metric index (a cheap tag search, not a full
+          // crawl) and fetched separately so a knowledge-search failure on one
+          // connection can never take down that connection's index/matches too.
+          const knowledgePerConnection = await Promise.allSettled(
+            connections.map(async (connectionId) => ({
+              connectionId,
+              dashboards: await listKnowledgeDashboards(registry.get(connectionId), config, connectionId),
+            })),
+          );
+          const allKnowledgeDashboards = knowledgePerConnection
+            .filter((r): r is PromiseFulfilledResult<{ connectionId: string; dashboards: Awaited<ReturnType<typeof listKnowledgeDashboards>> }> => r.status === 'fulfilled')
+            .flatMap((r) => r.value.dashboards.map((d) => ({ ...d, connectionId: r.value.connectionId })));
 
           const allCandidates = fulfilled.flatMap((r) => r.value.candidates);
           allCandidates.sort(compareCandidates);
@@ -191,6 +209,16 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             // "how many actually-different datasources are missing," the
             // number that matters for triage.
             brokenDatasourcesUniqueCount: new Set(allBroken.map((b) => `${b.connectionId}|${b.datasourceUid}`)).size,
+            // Independent of metricName/labels/query, like alertBackedDashboards
+            // above — "Timebuddy knowledge" dashboards (tagged timebuddy-knowledge)
+            // are otherwise only discoverable by already knowing a product key to
+            // ask get_product_context for; this is what lets an explore-style
+            // survey say "here's what's been published" instead of nothing.
+            knowledgeDashboards: allKnowledgeDashboards.map((d) => ({
+              ...d,
+              url: dashboardUrlFor(registry, d.connectionId, d.dashboardUid),
+            })),
+            knowledgeDashboardsTotal: allKnowledgeDashboards.length,
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });

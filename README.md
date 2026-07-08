@@ -39,7 +39,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. |
-| `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. |
+| `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
 | `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle — it does not generate prose; the calling agent writes the human-readable note from this bundle. |
@@ -187,6 +187,11 @@ adopter can publish their own.
   live investigation doesn't repeat the folder walk or re-parse panels on every call. An
   edit to a knowledge dashboard is picked up as soon as its cached folder-resolution entry
   expires (15 minutes) and its version no longer matches.
+- Both lookups above require already knowing (or guessing) a product key. To discover
+  *that* knowledge dashboards exist at all — without a key in hand — `find_related_dashboards`
+  also returns `knowledgeDashboards`: every `timebuddy-knowledge`-tagged dashboard found per
+  connection, with the product keys each one publishes, as a standing overview independent
+  of any search term (the same idea as that tool's `alertBackedDashboards`).
 
 ## Live resolution of "all" dashboard variables
 

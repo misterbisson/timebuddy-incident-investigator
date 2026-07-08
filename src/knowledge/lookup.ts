@@ -105,6 +105,45 @@ export interface ProductContextMatch extends ProductKnowledge {
   folderUid?: string;
 }
 
+export interface KnowledgeDashboardSummary {
+  dashboardUid: string;
+  title: string;
+  folderUid?: string;
+  /** Product keys published on this dashboard, from each `timebuddy: <key>` panel — what a caller can pass to get_product_context. */
+  productKeys: string[];
+}
+
+/**
+ * Enumerates every "Timebuddy knowledge" dashboard on a connection, independent
+ * of any single product key — for a proactive "here's what's been published"
+ * survey (e.g. find_related_dashboards's no-args overview) rather than the
+ * targeted, key-first lookups above. Returns an empty array, not an error,
+ * when nothing has been published on this connection.
+ */
+export async function listKnowledgeDashboards(
+  client: GrafanaClient,
+  config: Config,
+  connectionId: string,
+): Promise<KnowledgeDashboardSummary[]> {
+  const results = await client.searchDashboards({ tag: [KNOWLEDGE_TAG] });
+  const cache = await loadKnowledgeCache(config, connectionId);
+  try {
+    return await Promise.all(
+      results.map(async (result) => {
+        const panels = await loadDashboardPanels(client, cache, result.uid);
+        return {
+          dashboardUid: result.uid,
+          title: result.title,
+          folderUid: result.folderUid,
+          productKeys: Object.keys(panels).sort(),
+        };
+      }),
+    );
+  } finally {
+    await saveKnowledgeCache(cache, config, connectionId);
+  }
+}
+
 /**
  * Used by get_product_context when called with no dashboardUid to scope the
  * search: checks every dashboard tagged timebuddy-knowledge on this
