@@ -23,7 +23,7 @@ src/
   index-builder/  crawls dashboards into a metric/measurement -> dashboard reverse index (cached locally, per connection)
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
-  tools/          the 9 MCP tools, each a thin wrapper over the modules above
+  tools/          the 10 MCP tools, each a thin wrapper over the modules above
 electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
                   server (launched with --mcp-server instead of opening a window) — see electron/README.md
 ```
@@ -36,6 +36,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. |
+| `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
@@ -134,9 +135,11 @@ omitted:
   `matchHosts`, for cases like a load balancer alias) — and returns `resolvedConnectionId`
   for you to pass into every subsequent call for that incident.
 - Single-target tools (`fetch_dashboard`, `resolve_panel_queries`, `execute_query_window`,
-  `validate_baseline`, and the primary panel in `detect_correlated_anomalies`) fall back to
-  the one configured connection if there's only one, otherwise error out listing the
-  available connection ids — they never guess.
+  `render_dashboard`, `validate_baseline`, and the primary panel in
+  `detect_correlated_anomalies`) fall back to the one configured connection if there's only
+  one, otherwise error out listing the available connection ids — they never guess.
+  `render_dashboard` additionally auto-detects the connection from a `url`'s host, the same
+  way `get_alert_context` does.
 - The two search tools (`find_related_dashboards`, and `detect_correlated_anomalies` when
   auto-discovering candidates) fan out across every configured connection and merge
   results, each tagged with its `connectionId`.

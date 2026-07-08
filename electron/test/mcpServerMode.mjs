@@ -55,6 +55,7 @@ try {
     'fetch_dashboard',
     'resolve_panel_queries',
     'execute_query_window',
+    'render_dashboard',
     'find_related_dashboards',
     'detect_correlated_anomalies',
     'validate_baseline',

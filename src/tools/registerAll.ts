@@ -5,6 +5,7 @@ import { registerGetAlertContext } from './getAlertContext.js';
 import { registerFetchDashboard } from './fetchDashboard.js';
 import { registerResolvePanelQueries } from './resolvePanelQueries.js';
 import { registerExecuteQueryWindow } from './executeQueryWindow.js';
+import { registerRenderDashboard } from './renderDashboard.js';
 import { registerFindRelatedDashboards } from './findRelatedDashboards.js';
 import { registerDetectCorrelatedAnomalies } from './detectCorrelatedAnomalies.js';
 import { registerValidateBaseline } from './validateBaseline.js';
@@ -21,6 +22,7 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerFetchDashboard(server, ctx);
   registerResolvePanelQueries(server, ctx);
   registerExecuteQueryWindow(server, ctx);
+  registerRenderDashboard(server, ctx);
   registerFindRelatedDashboards(server, ctx);
   registerDetectCorrelatedAnomalies(server, ctx);
   registerValidateBaseline(server, ctx);
