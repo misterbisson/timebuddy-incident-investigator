@@ -46,6 +46,25 @@ describe('substituteVariables', () => {
     expect(substituteVariables('region=~"$region"', variables, {}, window)).toBe('region=~"(us-east-1|us-west-2)"');
   });
 
+  it('resolves $__all arriving as a URL override (var-region=$__all), not just a saved current value', () => {
+    const variables: TemplateVariable[] = [
+      {
+        name: 'region',
+        type: 'custom',
+        current: { value: 'us-east-1' },
+        includeAll: true,
+        options: [
+          { text: 'All', value: '$__all' },
+          { text: 'us-east-1', value: 'us-east-1' },
+          { text: 'us-west-2', value: 'us-west-2' },
+        ],
+      },
+    ];
+    expect(substituteVariables('region=~"$region"', variables, { region: ['$__all'] }, window)).toBe(
+      'region=~"(us-east-1|us-west-2)"',
+    );
+  });
+
   it('resolves an unresolvable $__all (no allValue, no cached options) to a wildcard rather than an empty match', () => {
     const variables: TemplateVariable[] = [
       { name: 'proxy_host', type: 'query', current: { value: '$__all' }, includeAll: true, options: [] },

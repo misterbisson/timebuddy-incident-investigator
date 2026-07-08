@@ -11,15 +11,21 @@ export interface QueryWindow {
  * Resolves the effective value(s) for one variable: an explicit override
  * (e.g. captured from the `var-*` params of the panel URL an alert linked
  * to — what a human clicking the link would actually have seen) wins;
- * otherwise fall back to the dashboard's saved `current.value`.
+ * otherwise fall back to the dashboard's saved `current.value`. Either
+ * source can carry the literal `$__all` sentinel — a URL built by Grafana
+ * itself for a multi-value variable with "Include All" selected renders as
+ * `var-name=$__all`, not as every individual option — so both are expanded
+ * the same way: to the variable's configured allValue, else its cached
+ * option list. (Confirmed against a real incident: before this expanded
+ * override values too, an alert URL with `var-host=$__all` sent the literal
+ * string "$__all" into the replayed query, which every real datasource
+ * predictably matched nothing against — this tool reported "no data" over a
+ * live, ongoing outage the dashboard itself showed clearly.)
  */
 export function effectiveValues(variable: TemplateVariable, overrides: Record<string, string[]>): string[] {
   const override = overrides[variable.name];
-  if (override && override.length > 0) return override;
-
   const current = variable.current?.value;
-  if (current === undefined) return [];
-  const values = Array.isArray(current) ? current : [current];
+  const values = override && override.length > 0 ? override : current === undefined ? [] : Array.isArray(current) ? current : [current];
 
   if (values.includes('$__all')) {
     if (variable.allValue) return [variable.allValue];
