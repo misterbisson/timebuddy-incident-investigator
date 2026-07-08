@@ -14,8 +14,19 @@ npx vitest run test/baseline.test.ts   # run a single test file
 npm run webhook       # start the standalone webhook listener (src/webhook/listener.ts)
 ```
 
-`GRAFANA_URL` and `GRAFANA_TOKEN` are required at runtime (see `.env.example`); they are
-not needed for `npm test` or `npm run typecheck`, since tests mock the Grafana client.
+`GRAFANA_URL`/`GRAFANA_TOKEN` (see `.env.example`) are only used by the standalone CLI
+path above (`npm run dev`, or `dist/index.js`) — not needed for `npm test`/`npm run
+typecheck` (the Grafana client is mocked), and not used at all by the distributed
+Electron app, which sources connections from its own `safeStorage`-backed store instead
+(see `electron/README.md`).
+
+`electron/` is a separate npm workspace (the distributed app) with its own commands:
+
+```bash
+cd electron && npm install   # also links the root engine package via the npm workspace
+npm run dev                    # builds the root package, then opens the connection-manager GUI
+node test/mcpServerMode.mjs    # spawns the real electron binary in --mcp-server mode; no live Grafana needed
+```
 
 ## Architecture
 
@@ -25,7 +36,7 @@ its dashboard queries over the incident window, compare against baselines, and s
 for correlated signals on other dashboards. Full tool list and design rationale are in
 README.md.
 
-Two things shape almost every module here and are easy to miss from a partial read:
+Three things shape almost every module here and are easy to miss from a partial read:
 
 1. **The Grafana client is a closed allowlist, not a passthrough.** `src/grafana/client.ts`
    exposes exactly the read-only endpoints the tools need (search, dashboard-by-uid,
@@ -43,31 +54,68 @@ Two things shape almost every module here and are easy to miss from a partial re
    `redact(result, config.redactionPatterns)` pattern used in `src/tools/*.ts` rather than
    returning raw data.
 
-Data flow for the core incident-review path: `alerts/ingest.ts` normalizes a webhook
-payload / pasted JSON / Grafana URL into an `AlertContext` (resolving dashboard/panel
-links via `__dashboardUid__`/`__panelId__` annotations or by parsing the URL);
-`dashboards/panelQueries.ts` + `dashboards/variables.ts` turn a dashboard UID/panel ID
-into concrete, variable-substituted query targets; `query/windows.ts` computes the
-incident/pre-window/control windows; `query/executor.ts` runs them through
-`/api/ds/query` and parses Grafana's data-frame response into `{refId, labels, points}`
-series; `analysis/baseline.ts` and `analysis/correlation.ts` turn those series into a
-z-score classification and a ranked correlated-signal list; `analysis/summarize.ts` does
-**deterministic** rule-based verdict assembly only (no LLM call, no prose generation) —
-the calling agent is expected to write the human-readable note from that structured
-output, which is why `summarize_findings` returns `reasons`/`evidence` arrays rather than
-a paragraph.
+3. **A tool call doesn't target one fixed Grafana — it resolves a connection first.**
+   `src/grafana/registry.ts`'s `ConnectionRegistry` lazily builds and caches one
+   `GrafanaClient` per connection id from a `ConnectionsSource`: a static array for the
+   standalone CLI (env-based, one connection), or a thunk that re-reads
+   `connections.json` on every call for the Electron app's `--mcp-server` mode — so
+   adding/editing a connection in the GUI takes effect on the very next tool call, no
+   server restart. `src/connections/resolve.ts`'s `resolveConnection()` picks which
+   connection a given call uses: an explicit `connection` param always wins, then a match
+   against the alert/dashboard URL's hostname, then the sole configured connection if
+   there's only one — anything ambiguous or unresolvable is a hard error listing the
+   available ids, never a guess. This is why every tool takes an optional `connection`
+   parameter.
 
-`index-builder/` is a separate concern: it crawls all dashboards to build a
-metric/measurement -> dashboard reverse index, cached to `<DATA_DIR>/metric-index.json`
-with a TTL (rebuilt on demand via `find_related_dashboards({forceRefresh: true})` or
-`detect_correlated_anomalies` when it needs to auto-discover candidates), not tied to the
-per-alert investigation flow.
+Data flow for the core incident-review path: `alerts/ingest.ts` normalizes a webhook
+payload / pasted JSON / Grafana URL (via `alerts/urlParser.ts`) into an `AlertContext`
+(resolving dashboard/panel links via `__dashboardUid__`/`__panelId__` annotations or by
+parsing the URL); `dashboards/panelQueries.ts` + `dashboards/variables.ts` turn a
+dashboard UID/panel ID into concrete, variable-substituted query targets; `query/windows.ts`
+computes the incident/pre-window/control windows; `query/executor.ts` runs them through
+`/api/ds/query` and parses Grafana's data-frame response into `{refId, labels, points}`
+series; `analysis/baseline.ts`, `analysis/correlation.ts`, and `analysis/runs.ts`
+(maximal-run detection for a threshold crossing — e.g. an uptime series dipping below
+1.0 — shared by `execute_query_window`'s optional `threshold`/`thresholdDirection` and by
+`validate_baseline`'s `briefExcursions`) turn those series into a z-score classification
+and a ranked correlated-signal list; `analysis/summarize.ts` does **deterministic**
+rule-based verdict assembly only (no LLM call, no prose generation) — the calling agent
+is expected to write the human-readable note from that structured output, which is why
+`summarize_findings` returns `reasons`/`evidence` arrays rather than a paragraph.
+`grafana/urlBuilder.ts` builds the clickable dashboard/panel URL nearly every tool
+returns alongside its data, deliberately using the same `viewPanel` URL shape
+`urlParser.ts` parses on the way in, so a URL built here round-trips if it's ever pasted
+back into `get_alert_context`.
+
+`index-builder/` is a separate concern: it crawls all dashboards (per connection) to
+build a metric/measurement -> dashboard reverse index, cached to
+`<DATA_DIR>/metric-index.json` with a TTL (rebuilt on demand via
+`find_related_dashboards({forceRefresh: true})` or `detect_correlated_anomalies` when it
+needs to auto-discover candidates), not tied to the per-alert investigation flow.
 
 The webhook listener (`src/webhook/listener.ts`) is a separate, optional process — it's
 not part of the MCP server itself. It only accepts `POST /` and appends to
 `<DATA_DIR>/alerts.jsonl`; `get_alert_context` reads from that store when called with no
 arguments. Keep it that minimal — it exists solely so Grafana's contact-point webhook has
 somewhere to land.
+
+`electron/` is a separate npm workspace: the distributed app end users actually install.
+Launched normally it's a connection-manager GUI (adds Grafana connections into a
+`safeStorage`-encrypted local store, one per Grafana endpoint/region/tier); launched with
+`--mcp-server` it skips the window and runs this same MCP server, sourcing connections
+from that store via the `ConnectionsSource` thunk above instead of env vars. Both modes
+are the same binary/process — that's what lets connection secrets stay OS-keychain-encrypted
+end to end, with no separate server process that would need a plaintext credential on
+disk. See `electron/README.md` for the storage format and
+`electron/test/mcpServerMode.mjs` for how it's tested (spawns the real binary in
+`--mcp-server` mode via the actual MCP SDK client/transport; no live Grafana needed).
+
+`skills/explore/SKILL.md` and `skills/investigate/SKILL.md` (packaged as a Claude Code
+plugin via `.claude-plugin/plugin.json`, invoked as `/timebuddy:explore` /
+`/timebuddy:investigate`) are prose runbooks that drive these tools in the right order for
+an agent. Treat them as part of the interface, not just docs: if a tool's params, return
+shape, or behavior changes in a way that would make a skill's instructions wrong or
+stale, update the skill in the same change.
 
 PromQL/InfluxQL metric and label extraction (`index-builder/extract.ts`) is a best-effort
 regex scan, not a real parser — see the "Known limitations" section in README.md before

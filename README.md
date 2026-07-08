@@ -23,7 +23,7 @@ src/
   index-builder/  crawls dashboards into a metric/measurement -> dashboard reverse index (cached locally, per connection)
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
-  tools/          the 8 MCP tools, each a thin wrapper over the modules above
+  tools/          the 9 MCP tools, each a thin wrapper over the modules above
 electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
                   server (launched with --mcp-server instead of opening a window) — see electron/README.md
 ```
@@ -35,7 +35,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `get_alert_context` | Ingest an alert (webhook payload, pasted JSON, or a dashboard/panel/alert-rule URL) and resolve it to dashboard UID, panel ID, labels, threshold, and time range. |
 | `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
-| `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. |
+| `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
@@ -68,6 +68,22 @@ stored (short version: `safeStorage`/OS-keychain-encrypted, nothing plaintext, e
 For local development or CI, where there's no interest in the desktop app, the standalone
 CLI still works on its own with a single connection from env vars — see "Standalone CLI"
 below.
+
+## Claude Code skills
+
+This repo also ships as a Claude Code plugin (`.claude-plugin/plugin.json`) with two skills
+that drive the tools above so nobody needs to know the tool names or the right call order:
+
+- `/timebuddy:explore` — a low-stakes health check: confirms the MCP server is connected,
+  surveys what connections/dashboards exist, and highlights which dashboards are actually
+  alert-backed (and therefore trustworthy) before an incident happens.
+- `/timebuddy:investigate` — the reactive path: ingests an alert (a pasted URL, alert JSON,
+  or webhook payload), replays it, checks baselines, looks for correlated signals, and
+  writes an evidence-linked incident note.
+
+See [`skills/explore/SKILL.md`](skills/explore/SKILL.md) and
+[`skills/investigate/SKILL.md`](skills/investigate/SKILL.md) for the exact pipeline each one
+follows.
 
 ## Running
 
