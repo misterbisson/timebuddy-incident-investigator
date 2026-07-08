@@ -155,6 +155,13 @@ export async function resolvePanelForWindow(
   if (!panel) {
     throw new Error(`Panel ${panelId} not found on dashboard ${dashboardUid}`);
   }
+  if (panel.mirrorsPanelIds) {
+    throw new Error(
+      `Panel ${panelId} ("${panel.title ?? 'untitled'}") uses Grafana's built-in "-- Dashboard --" datasource — it ` +
+        `re-displays panel ${panel.mirrorsPanelIds.join(', ')}'s already-computed value client-side and has no ` +
+        `backend to query. Call this on panel ${panel.mirrorsPanelIds.join(', ')} directly instead.`,
+    );
+  }
   const variables = dashboard.templating?.list ?? [];
   const targets: ResolvedTarget[] = await Promise.all(
     panel.targets.map(async (t) => ({

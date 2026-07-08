@@ -35,6 +35,8 @@ interface RenderedPanel {
   errors?: Record<string, string>;
   /** Set when resolving/executing this panel's own queries threw (e.g. an unresolvable datasource) — sibling panels still complete normally. */
   executionError?: string;
+  /** Set instead of executing/erroring when this panel uses Grafana's built-in "-- Dashboard --" datasource — see panelQueries.ts's DASHBOARD_MIRROR_REF. Read the referenced panel(s) for the real data. */
+  mirrorsPanelIds?: number[];
 }
 
 const DEFAULT_PANEL_LIMIT = 25;
@@ -89,6 +91,9 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
         'their resolved query, series (each with stats), and per-panel errors; row/text/non-queryable panels are ' +
         'metadata only (hasTargets: false, nothing executed); a queryable panel beyond panelLimit is marked ' +
         '"skipped: true" rather than silently dropped - check panelsSkipped/panelsTotal before assuming full coverage. ' +
+        'A panel using Grafana\'s built-in "-- Dashboard --" datasource (re-displays another panel\'s already-computed ' +
+        'value client-side; no backend to query - always 404s if replayed) is never executed or reported as an error; ' +
+        'it carries "mirrorsPanelIds" instead - read the referenced panel(s) in this same response for the real data. ' +
         'A "$__all" selection on a variable Grafana computes live (e.g. an InfluxQL "SHOW TAG VALUES" query variable) ' +
         'is best-effort live-resolved to its real value list; when that can\'t be done (unsupported datasource/query ' +
         'shape, or the live lookup itself failed) it falls back to matching everything, and the variable name is ' +
@@ -177,7 +182,13 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
           const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(client, variables, overrides, window);
           const allPanels = flattenPanels(dashboard.panels ?? []);
           const queryablePanels = resolvePanelQueries(dashboard);
-          const toExecute = queryablePanels.slice(0, panelLimit);
+          // Mirror panels (Grafana's "-- Dashboard --" pseudo-datasource) have no
+          // backend to query at all — executing them always 404s. Pull them out
+          // before slicing to panelLimit so they never occupy an execution slot
+          // or show up as a confusing per-panel error; report them separately.
+          const executablePanels = queryablePanels.filter((p) => !p.mirrorsPanelIds);
+          const mirrorPanels = queryablePanels.filter((p) => p.mirrorsPanelIds);
+          const toExecute = executablePanels.slice(0, panelLimit);
 
           const executed = await Promise.allSettled(
             toExecute.map(async (panel): Promise<RenderedPanel> => {
@@ -219,12 +230,12 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
           });
 
           // Index-based, not id-based: toExecute is literally the first
-          // panelLimit entries of queryablePanels, so "the rest" is exactly
+          // panelLimit entries of executablePanels, so "the rest" is exactly
           // this slice. A Set keyed by bare panelId would silently merge two
           // panels sharing an id (a real provisioning bug seen in practice —
           // see AmbiguousPanelError's doc comment), making the second one
           // vanish: not executed, not skipped, not anywhere in the output.
-          const skippedPanels: RenderedPanel[] = queryablePanels
+          const skippedPanels: RenderedPanel[] = executablePanels
             .slice(panelLimit)
             .map((p) => ({
               panelId: p.panelId,
@@ -234,6 +245,15 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
               skipped: true,
               url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: p.panelId, fromMs, toMs, variables: overrides }),
             }));
+
+          const mirrorRenderedPanels: RenderedPanel[] = mirrorPanels.map((p) => ({
+            panelId: p.panelId,
+            title: p.title,
+            type: p.type,
+            hasTargets: true,
+            mirrorsPanelIds: p.mirrorsPanelIds,
+            url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: p.panelId, fromMs, toMs, variables: overrides }),
+          }));
 
           // Same reasoning as skippedPanels above: check each Panel's own
           // targets directly (matching resolvePanelQueries' own predicate)
@@ -258,7 +278,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
             panelsTotal: queryablePanels.length,
             panelsExecuted: executedPanels.length,
             panelsSkipped: skippedPanels.length,
-            panels: [...executedPanels, ...skippedPanels, ...nonQueryablePanels],
+            panels: [...executedPanels, ...skippedPanels, ...mirrorRenderedPanels, ...nonQueryablePanels],
             ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };

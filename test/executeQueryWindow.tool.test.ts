@@ -122,6 +122,36 @@ describe('execute_query_window tool', () => {
     expect(series.pointsTotal).toBeGreaterThan(0);
   });
 
+  it('returns a clear error instead of a 404 when the panel mirrors another via "-- Dashboard --"', async () => {
+    const dashboard: DashboardGetResponse = {
+      dashboard: {
+        uid: 'dash1',
+        title: 'Host connectivity',
+        version: 1,
+        panels: [
+          { id: 4, title: 'Success rate over time', datasource: { uid: 'influx1' }, targets: [{ refId: 'A', query: 'SELECT mean("success")' }] },
+          { id: 6, title: 'Success rate (stat)', datasource: { uid: '-- Dashboard --' }, targets: [{ refId: 'A', panelId: 4 }] },
+        ],
+      },
+      meta: {},
+    };
+    const { client } = fakeGrafanaClient({ dashboard });
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('execute_query_window', {
+      dashboardUid: 'dash1',
+      panelId: 6,
+      startsAtMs: Date.parse('2026-07-07T15:38:50Z'),
+      endsAtMs: Date.parse('2026-07-07T16:38:50Z'),
+      connection: 'test',
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('-- Dashboard --');
+    expect(result.content[0]!.text).toContain('panel 4');
+  });
+
   it('includes raw points by default', async () => {
     const { client } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1'] });
     const { server, call } = fakeServer();

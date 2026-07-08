@@ -94,6 +94,38 @@ describe('findPanel with duplicate panel ids', () => {
   });
 });
 
+describe('resolvePanelQueries with Grafana\'s built-in "-- Dashboard --" datasource', () => {
+  // Confirmed against real dashboards: a stat panel set to mirror another
+  // panel's already-computed value has no backend to query — replaying it
+  // through /api/ds/query always 404s ("data source not found"), which reads
+  // like a broken dashboard but is this Grafana feature working as designed.
+  const dashboard: DashboardJson = {
+    uid: 'd1',
+    title: 'Test',
+    panels: [
+      { id: 4, title: 'Success rate over time', datasource: { uid: 'influx1' }, targets: [{ refId: 'A', query: 'SELECT mean("success")' }] },
+      {
+        id: 6,
+        title: 'Success rate (stat)',
+        datasource: { uid: '-- Dashboard --' },
+        targets: [{ refId: 'A', panelId: 4 }],
+      },
+    ],
+  };
+
+  it('flags a panel whose target mirrors another panel via the "-- Dashboard --" datasource', () => {
+    const resolved = resolvePanelQueries(dashboard);
+    const mirror = resolved.find((p) => p.panelId === 6);
+    expect(mirror?.mirrorsPanelIds).toEqual([4]);
+  });
+
+  it('does not flag a normally-queried panel', () => {
+    const resolved = resolvePanelQueries(dashboard);
+    const normal = resolved.find((p) => p.panelId === 4);
+    expect(normal?.mirrorsPanelIds).toBeUndefined();
+  });
+});
+
 describe('resolvePanelDataLinks', () => {
   it('returns an empty array when the panel has no fieldConfig', () => {
     const panel: Panel = { id: 1, title: 'No links' };

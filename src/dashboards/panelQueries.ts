@@ -20,7 +20,30 @@ export interface ResolvedPanel {
   type?: string;
   targets: ResolvedTarget[];
   dataLinks: ResolvedDataLink[];
+  /**
+   * Set when every target uses Grafana's built-in "-- Dashboard --"
+   * pseudo-datasource — the panel id(s) it re-displays an already-computed
+   * value from, not itself queryable via /api/ds/query. See
+   * DASHBOARD_MIRROR_REF's doc comment.
+   */
+  mirrorsPanelIds?: number[];
 }
+
+/**
+ * Grafana's built-in "-- Dashboard --" pseudo-datasource: a stat/gauge panel
+ * configured this way doesn't query anything itself — it re-displays another
+ * panel's already-computed value client-side (each target carries that
+ * source panel's id in its own "panelId" field), a Grafana-UI-only feature
+ * with no backend behind it. Replaying it through /api/ds/query always 404s
+ * ("data source not found"), which reads like a broken dashboard but isn't —
+ * confirmed as a recurring, mechanically-detectable pattern across real
+ * dashboards (multiple independent investigations have hit this and had to
+ * fetch the raw dashboard JSON to explain it). See also
+ * index-builder/metricIndex.ts's GRAFANA_PSEUDO_DATASOURCE_REFS, which
+ * excludes the same ref from its "broken datasource" count for the same
+ * reason.
+ */
+const DASHBOARD_MIRROR_REF = '-- Dashboard --';
 
 /**
  * Extracts a panel's configured drill-down links (Grafana calls these "data
@@ -90,16 +113,23 @@ export function resolvePanelQueries(dashboard: DashboardJson): ResolvedPanel[] {
     .filter((p): p is Panel & { targets: PanelTarget[] } => Boolean(p.targets?.length))
     .map((p) => {
       const panelDsUid = datasourceRefToUid(p.datasource);
+      const targets = p.targets.map((t) => ({
+        refId: t.refId,
+        datasourceUid: datasourceRefToUid(t.datasource) ?? panelDsUid,
+        raw: t,
+      }));
+      const mirrorTargets = targets.filter((t) => t.datasourceUid === DASHBOARD_MIRROR_REF);
+      const mirrorsPanelIds =
+        mirrorTargets.length > 0 && mirrorTargets.length === targets.length
+          ? [...new Set(mirrorTargets.map((t) => t.raw.panelId).filter((id): id is number => typeof id === 'number'))]
+          : undefined;
       return {
         panelId: p.id,
         title: p.title,
         type: p.type,
-        targets: p.targets.map((t) => ({
-          refId: t.refId,
-          datasourceUid: datasourceRefToUid(t.datasource) ?? panelDsUid,
-          raw: t,
-        })),
+        targets,
         dataLinks: resolvePanelDataLinks(p),
+        ...(mirrorsPanelIds ? { mirrorsPanelIds } : {}),
       };
     });
 }

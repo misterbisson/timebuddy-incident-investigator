@@ -145,13 +145,19 @@ skill exists to handle for them.
    reading "0% for 5 hours" next to real traffic that only dipped 4% and was concentrated on one
    account is a materially different, more useful finding than the first panel alone.
 
-   If a panel's queries fail with something like "404 Data source not found," check whether its
-   datasource reference is a literal name rather than a UID (not a `$variable` — those are already
-   handled). `list_datasources` tells you whether a datasource matching that name still exists
-   under a different UID — if it does, that's a real, reportable finding ("this dashboard's
-   datasource reference is stale, here's the correct UID"), not a dead end. If nothing close shows
-   up, say so plainly rather than retrying — that dashboard needs a Grafana-side fix, not something
-   any tool call here can resolve.
+   A stat panel using Grafana's built-in "-- Dashboard --" datasource (re-displays another panel's
+   already-computed value; no backend to query) is detected automatically — it never shows up as a
+   404 or an `executionError`, it carries `mirrorsPanelIds` instead. Read the referenced panel(s)
+   directly rather than investigating the 404 yourself; there's nothing to fix, it's this Grafana
+   feature working as designed.
+
+   If a panel's queries fail with something like "404 Data source not found" for any *other*
+   reason, check whether its datasource reference is a literal name rather than a UID (not a
+   `$variable` — those are already handled). `list_datasources` tells you whether a datasource
+   matching that name still exists under a different UID — if it does, that's a real, reportable
+   finding ("this dashboard's datasource reference is stale, here's the correct UID"), not a dead
+   end. If nothing close shows up, say so plainly rather than retrying — that dashboard needs a
+   Grafana-side fix, not something any tool call here can resolve.
 
 6. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
    and an `evidence` array of dashboard/panel links you gathered along the way. Every tool above

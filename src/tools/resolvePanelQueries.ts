@@ -26,7 +26,10 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
         'to build a working link — this is usually the way to "follow" a panel\'s links when investigating. ' +
         'Returns { panels, unresolvedAllVariables }: panels as described above, plus unresolvedAllVariables (omitted ' +
         'when empty) listing any "$__all"-selected variable this couldn\'t live-resolve to its real value list (falls ' +
-        'back to matching everything instead) — treat a panel depending on one of those as unscoped/unverified.',
+        'back to matching everything instead) — treat a panel depending on one of those as unscoped/unverified. A ' +
+        'panel using Grafana\'s built-in "-- Dashboard --" datasource carries "mirrorsPanelIds" — it re-displays ' +
+        'another panel\'s already-computed value client-side and has no backend to query (always 404s if replayed via ' +
+        'execute_query_window); read the referenced panel(s) instead.',
       inputSchema: {
         dashboardUid: z.string().describe('Grafana dashboard UID'),
         panelId: z.number().optional().describe('Limit to one panel; omit to resolve every queryable panel'),
@@ -70,6 +73,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
               title: panel.title,
               type: panel.type,
               url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: panel.panelId, fromMs: window.fromMs, toMs: window.toMs }),
+              ...(panel.mirrorsPanelIds ? { mirrorsPanelIds: panel.mirrorsPanelIds } : {}),
               // Raw URL templates (Grafana "data links"), not resolved — see
               // resolvePanelDataLinks' doc comment. Substitute
               // ${__from}/${__to} with window.fromMs/toMs and

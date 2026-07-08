@@ -124,7 +124,39 @@ function fakeScreenshotter(exportPanelCsv: Screenshotter['exportPanelCsv']): Scr
   return { capturePanel: async () => Buffer.from(''), exportPanelCsv };
 }
 
+function mirrorDashboard(): DashboardGetResponse {
+  return {
+    dashboard: {
+      uid: 'glue',
+      title: 'Glue',
+      panels: [
+        { id: 4, title: 'Success rate over time', datasource: { uid: 'ds1' }, targets: [{ refId: 'A', expr: 'success_rate' }] },
+        { id: 6, title: 'Success rate (stat)', datasource: { uid: '-- Dashboard --' }, targets: [{ refId: 'A', panelId: 4 }] },
+      ],
+    },
+    meta: {},
+  };
+}
+
 describe('export_panel_csv tool', () => {
+  it('errors with a clear message instead of a 404 when the panel mirrors another via "-- Dashboard --"', async () => {
+    const client = fakeClient(mirrorDashboard(), () => ({ results: {} }));
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('export_panel_csv', {
+      dashboardUid: 'glue',
+      panelId: 6,
+      fromMs: 0,
+      toMs: 60000,
+      connection: 'test',
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('-- Dashboard --');
+    expect(result.content[0]!.text).toContain('panel 4');
+  });
+
   it('exports a timeseries panel as a wide-format CSV with a UTC timestamp column', async () => {
     const client = fakeClient(timeseriesDashboard(), timeseriesQueryDsResponse);
     const { server, call } = fakeServer();

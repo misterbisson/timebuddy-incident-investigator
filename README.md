@@ -38,7 +38,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables — from a dashboard/panel/alert-rule URL (connection auto-detected) or a `dashboardUid` directly. Useful for finding a panel's id/type from its title before calling another tool by name. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. `includePoints: false` drops each series' raw points (stats/runs are still returned) for a wide window that would otherwise overflow. |
-| `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. `includePoints: false` drops raw points from every panel's series for a compact, stats-only survey. |
+| `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. `includePoints: false` drops raw points from every panel's series for a compact, stats-only survey. A panel mirroring another via Grafana's built-in "-- Dashboard --" datasource (see below) is reported with `mirrorsPanelIds`, never executed or errored. |
 | `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. In the Electron app, first tries to capture the panel's real on-screen data by driving a hidden browser to Grafana's own Inspect > Data view with "Apply panel transformations" checked (`transformationsApplied: true` in the result) — so a join/reduce/rename configured on the panel comes back exactly as shown, not just the raw query result. Otherwise (no transformations configured, or no Electron/`screenshotter`) falls back to a direct export: table panels as-is (every raw column); timeseries/graph panels pivoted wide (one UTC-timestamp column plus one column per series). |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. |
@@ -229,6 +229,20 @@ Either way, the variable's name is added to the result's `unresolvedAllVariables
 (omitted when empty) — treat any panel whose scope depends on a listed variable as
 unverified rather than trusting its result or narrowing it down with a naming-convention
 guess.
+
+## Grafana's "-- Dashboard --" pseudo-datasource
+
+A stat/gauge panel can be configured to re-display another panel's already-computed value
+client-side instead of querying anything itself — Grafana calls this the "-- Dashboard --"
+datasource. There's no backend behind it, so replaying it through `/api/ds/query` (as every
+query-execution tool here does) always 404s with "data source not found" — a recurring,
+mechanically-detectable pattern seen across real dashboards, not a misconfiguration. Rather
+than surface that 404 (or require fetching the dashboard's raw JSON to explain it, as an
+investigation previously had to), `render_dashboard`, `resolve_panel_queries`,
+`execute_query_window`, `validate_baseline`, `detect_correlated_anomalies`, and
+`export_panel_csv` all detect this case up front and report it as `mirrorsPanelIds` (the
+panel id(s) it mirrors) instead of an error — read the referenced panel(s) directly for the
+real data.
 
 ## Security model
 

@@ -167,6 +167,42 @@ describe('render_dashboard tool', () => {
     expect(skipped.title).toBe('Block Storage');
   });
 
+  it('reports a mirror panel ("-- Dashboard --" datasource) with mirrorsPanelIds instead of a 404', async () => {
+    const dashboard: DashboardGetResponse = {
+      dashboard: {
+        uid: 'dash3',
+        title: 'Glue',
+        version: 1,
+        time: { from: 'now-1h', to: 'now' },
+        panels: [
+          { id: 4, title: 'Success rate over time', datasource: { uid: 'influx1' }, targets: [{ refId: 'A', query: 'SELECT mean("success")' }] },
+          { id: 6, title: 'Success rate (stat)', datasource: { uid: '-- Dashboard --' }, targets: [{ refId: 'A', panelId: 4 }] },
+        ],
+      },
+      meta: {},
+    };
+    const { client } = fakeGrafanaClient({ dashboard });
+    const { server, call } = fakeServer();
+    registerRenderDashboard(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('render_dashboard', {
+      dashboardUid: 'dash3',
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_003_600_000,
+      panelLimit: 25,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    const mirror = parsed.panels.find((p: { panelId: number }) => p.panelId === 6);
+    expect(mirror.mirrorsPanelIds).toEqual([4]);
+    expect(mirror.executionError).toBeUndefined();
+    expect(mirror.errors).toBeUndefined();
+    // Doesn't occupy an execution slot or count toward panelsSkipped.
+    expect(parsed.panelsExecuted).toBe(1);
+    expect(parsed.panelsSkipped).toBe(0);
+  });
+
   it('omits raw points but keeps stats when includePoints is false', async () => {
     const { client } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1', 'h2'] });
     const { server, call } = fakeServer();

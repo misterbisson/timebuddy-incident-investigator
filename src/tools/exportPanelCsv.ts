@@ -223,6 +223,17 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
             const path = await saveCsv(browserResult.csv, config, dashboardUid, panelId);
             const lines = browserResult.csv.split(/\r\n|\n/).filter((l) => l.length > 0);
             files.push({ path, rows: Math.max(0, lines.length - 1), columns: lines[0] ? parseCsvLine(lines[0]) : [] });
+          } else if (panel.mirrorsPanelIds) {
+            // Grafana's built-in "-- Dashboard --" datasource: no backend to
+            // query at all, so /api/ds/query always 404s here (the browser
+            // path above is the only way to actually get this panel's
+            // on-screen value; if it didn't run — no screenshotter — there's
+            // nothing left to fall back to).
+            throw new Error(
+              `Panel ${panelId} ("${panel.title ?? 'untitled'}") uses Grafana's built-in "-- Dashboard --" datasource ` +
+                `— it re-displays panel ${panel.mirrorsPanelIds.join(', ')}'s already-computed value client-side and ` +
+                `has no data of its own to export. Export panel ${panel.mirrorsPanelIds.join(', ')} instead.`,
+            );
           } else {
             const variables = dashboard.templating?.list ?? [];
             const materialized = await materializeVariables(client, variables, overrides, window);
