@@ -35,10 +35,11 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | --- | --- |
 | `get_alert_context` | Ingest an alert (webhook payload, pasted JSON, or a dashboard/panel/alert-rule URL) and resolve it to dashboard UID, panel ID, labels, threshold, and time range. Also attaches a matching "Timebuddy knowledge" panel when one has been published (see below). |
 | `get_product_context` | Look up a "Timebuddy knowledge" panel directly by product key, without an alert in hand. |
-| `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables. |
+| `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables — from a dashboard/panel/alert-rule URL (connection auto-detected) or a `dashboardUid` directly. Useful for finding a panel's id/type from its title before calling another tool by name. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. |
+| `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. Table panels export as-is (every raw column); timeseries/graph panels are pivoted wide (one UTC-timestamp column plus one column per series). |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
@@ -74,7 +75,7 @@ below.
 
 ## Claude Code skills
 
-This repo also ships as a Claude Code plugin (`.claude-plugin/plugin.json`) with two skills
+This repo also ships as a Claude Code plugin (`.claude-plugin/plugin.json`) with three skills
 that drive the tools above so nobody needs to know the tool names or the right call order:
 
 - `/timebuddy:explore` — a low-stakes health check: confirms the MCP server is connected,
@@ -83,10 +84,13 @@ that drive the tools above so nobody needs to know the tool names or the right c
 - `/timebuddy:investigate` — the reactive path: ingests an alert (a pasted URL, alert JSON,
   or webhook payload), replays it, checks baselines, looks for correlated signals, and
   writes an evidence-linked incident note.
+- `/timebuddy:export` — given a dashboard/panel URL and a panel name (or a direct panel link),
+  resolves the exact panel, writes its data to a CSV file, and optionally grabs a screenshot
+  alongside it — for archiving, reporting, or a presentation.
 
-See [`skills/explore/SKILL.md`](skills/explore/SKILL.md) and
-[`skills/investigate/SKILL.md`](skills/investigate/SKILL.md) for the exact pipeline each one
-follows.
+See [`skills/explore/SKILL.md`](skills/explore/SKILL.md),
+[`skills/investigate/SKILL.md`](skills/investigate/SKILL.md), and
+[`skills/export/SKILL.md`](skills/export/SKILL.md) for the exact pipeline each one follows.
 
 ## Running
 
@@ -280,6 +284,10 @@ confirms the `safeStorage` -> engine wiring works end to end (see
   testing, but distributing one to other people will hit Gatekeeper (macOS) or
   SmartScreen (Windows) warnings until it's signed with a real developer identity —
   a prerequisite for wider rollout, not something fixable in code.
+- `export_panel_csv` doesn't apply Grafana-side panel transformations (e.g. a "join by
+  field" used to merge several queries into one table on screen) — a table panel backed by
+  more than one query/frame is written to one CSV file per frame, not the merged table a
+  person sees in Grafana.
 
 ## Acknowledgments
 

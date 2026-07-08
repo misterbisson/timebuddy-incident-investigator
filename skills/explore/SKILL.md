@@ -67,6 +67,9 @@ person who has never successfully used this tool won't reach for it under real p
    than an exact metric or label, use `find_related_dashboards`'s `query` param — it does a
    free-text substring match against metric names and dashboard/panel titles, which is exactly
    for this case. Matches that are themselves alert-backed sort first in the results.
+   - Mention `export_panel_csv` as an option too — if they want a panel's data as a real,
+     downloadable file (for a report, a presentation, or to poke at in another tool) rather
+     than just seeing it summarized here, that tool writes it to disk and hands back the path.
    - If they name a product by its key rather than asking to browse, try `get_product_context`
      directly — some folders publish a "Timebuddy knowledge" dashboard with product-specific
      context (owner, runbook links, known false positives). An empty `matches` array just means

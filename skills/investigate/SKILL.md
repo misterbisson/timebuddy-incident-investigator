@@ -141,6 +141,14 @@ skill exists to handle for them.
    returned a `knowledge` field (step 1), weave its content into the note (e.g. a known false
    positive, an owning team, a runbook link) rather than leaving it as a separate, unexplained blob.
 
+**If asked to archive, export, or hand off a panel's data** (not just describe it) — for a
+postmortem, a report, or further analysis in another tool — use `export_panel_csv` on that panel
+rather than pasting numbers by hand. It writes a real CSV file to disk and returns its path; state
+that path in your response the same way you would a `screenshot_panel` `savedTo` path. Table panels
+export as-is; timeseries/graph panels come out as one UTC-timestamp column plus one column per
+series. This is a follow-up action once someone has a specific panel in mind, not a replacement for
+`execute_query_window`'s stats/threshold analysis during the investigation itself.
+
 **Never read this server's cached index/data files directly, even if you can find where they're
 stored on disk — always go through the MCP tools above.** Tool output is redacted before it
 reaches you; a raw file read isn't. If a tool doesn't seem to cover what you need, that's a sign

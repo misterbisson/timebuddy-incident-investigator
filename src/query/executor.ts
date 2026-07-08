@@ -25,7 +25,7 @@ export interface WindowQueryResult {
   errors: Record<string, string>;
 }
 
-function buildDsQueryTarget(target: ResolvedTarget, maxDataPoints: number): DsQueryTarget {
+export function buildDsQueryTarget(target: ResolvedTarget, maxDataPoints: number): DsQueryTarget {
   if (!target.datasourceUid) {
     throw new Error(`Target ${target.refId} has no resolvable datasource uid`);
   }
