@@ -170,7 +170,8 @@ td button + button {
 }
 
 .modal-content input[type='text'],
-.modal-content input[type='password'] {
+.modal-content input[type='password'],
+.modal-content select {
   width: 100%;
   background-color: #1e1e1e;
   border: 1px solid #3c3c3c;
@@ -178,6 +179,12 @@ td button + button {
   padding: 6px 8px;
   color: #d4d4d4;
   font-size: 13px;
+}
+
+.field-hint {
+  color: #9c9c9c;
+  font-size: 11px;
+  margin: 4px 0 0;
 }
 
 .auth-type {

@@ -7,6 +7,9 @@ import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
 import { buildDashboardUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
+import type { GraylogClient } from '../graylog/client.js';
+import type { LogConnectionRegistry } from '../graylog/registry.js';
+import { buildGraylogSearchUrl, type GraylogSearchUrlOptions } from '../graylog/urlBuilder.js';
 
 /**
  * A time boundary as either a raw epoch-ms number or an ISO 8601 date/time
@@ -65,6 +68,33 @@ export function dashboardUrlFor(
   const connection = registry.list().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildDashboardUrl(connection.url, dashboardUid, opts);
+}
+
+/**
+ * Resolves which log connection a tool call should use — same "explicit id
+ * wins, else the sole configured connection, else error listing what's
+ * available" logic as resolveToolClient, but for log connections. No hintUrl
+ * support: unlike an alert link, there's no incoming URL to infer a log
+ * connection's hostname from.
+ */
+export function resolveLogToolClient(
+  logRegistry: LogConnectionRegistry,
+  input: { connection?: string },
+): { client: GraylogClient; connectionId: string } {
+  const { connection } = resolveConnection({ explicitId: input.connection }, logRegistry.list(), 'log');
+  return { client: logRegistry.get(connection.id), connectionId: connection.id };
+}
+
+/** Same rationale as dashboardUrlFor, for a Graylog search URL. */
+export function logSearchUrlFor(
+  logRegistry: LogConnectionRegistry,
+  connectionId: string,
+  query: string,
+  opts?: GraylogSearchUrlOptions,
+): string | undefined {
+  const connection = logRegistry.list().find((c) => c.id === connectionId);
+  if (!connection) return undefined;
+  return buildGraylogSearchUrl(connection.url, query, opts);
 }
 
 /**

@@ -23,6 +23,12 @@ export function clampMaxDataPoints(requested: number | undefined, config: Config
   return Math.min(requested, config.maxDataPoints);
 }
 
+/** Same rationale as clampMaxDataPoints, for search_logs/correlate_logs's `limit`. */
+export function clampLogLines(requested: number | undefined, config: Config): number {
+  if (!requested) return config.maxLogLines;
+  return Math.min(requested, config.maxLogLines);
+}
+
 /**
  * Hard backstop on returned series: the `maxDataPoints` sent to /api/ds/query is only a hint,
  * and datasources that don't time-bucket the query themselves (e.g. raw InfluxQL with no

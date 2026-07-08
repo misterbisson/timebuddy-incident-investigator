@@ -93,6 +93,39 @@ build a metric/measurement -> dashboard reverse index, cached to
 `find_related_dashboards({forceRefresh: true})` or `detect_correlated_anomalies` when it
 needs to auto-discover candidates), not tied to the per-alert investigation flow.
 
+Log investigation (`list_log_sources`/`search_logs`/`correlate_logs`) is a parallel track
+alongside the Grafana one, not layered on top of it: `graylog/client.ts`,
+`graylog/registry.ts` (`LogConnectionRegistry`), and `graylog/urlBuilder.ts` mirror their
+`grafana/` counterparts field-for-field — same closed-allowlist client, same lazy
+per-id-cached registry keyed off a `LogConnectionsSource` thunk, same
+`resolveConnection()` from `connections/resolve.ts` (now generic over
+`GrafanaConnection`/`LogConnection`, see its `ResolvableConnection` constraint) picking
+which connection a call uses. `correlate_logs` additionally vendors
+`@liquescent/log-correlator-core`/`-query-parser` (pinned exact versions, not `^`) for
+their PromQL-inspired join engine and query language only — **not** that project's own
+Loki/Graylog adapters, which are hardcoded to live-tail relative to `Date.now()` and can't
+answer a fixed historical window. `logs/adapter.ts`'s `HistoricalGraylogAdapter`
+implements that package's `DataSourceAdapter` interface by wrapping one bounded
+`GraylogClient.searchAbsolute()` call per `correlate_logs` invocation — it always answers
+from the fixed `fromMs`/`toMs` the tool call was given, ignoring the query language's own
+`[duration]` range-vector suffix entirely (that suffix is required syntax, not a real
+lookback here). `logs/correlate.ts` builds a fresh `CorrelationEngine` per call and always
+`engine.destroy()`s it in `finally` — it sets internal GC/processing-interval timers that
+would otherwise leak past the call. See `NOTICE.md` for the attribution/scope of what was
+vendored vs. written fresh.
+
+**Gotcha, easy to lose if `package.json`'s `overrides` block is ever "cleaned up":** the
+root `package.json` pins `lru-cache` (a transitive dependency of
+`@liquescent/log-correlator-core`, which itself depends on `lru-cache@^11.x`) down to
+`^10.4.3` via npm `overrides`. `lru-cache@11` uses `node:diagnostics_channel`'s
+`tracingChannel`, added in Node 18.19/19.9 — but Electron 28 (this repo's pinned Electron
+major, see `electron/package.json`) bundles Node 18.18.2, one minor version too old. Without
+this override, the Electron app's `--mcp-server` mode crashes on startup with `TypeError:
+(0 , U.tracingChannel) is not a function` — a confusing failure with no obvious link back
+to `lru-cache` or Electron's Node version unless you already know this. Confirmed by
+actually booting `--mcp-server` mode, not just inferred. Re-check this whenever bumping
+either Electron or `@liquescent/log-correlator-core`.
+
 The webhook listener (`src/webhook/listener.ts`) is a separate, optional process — it's
 not part of the MCP server itself. It only accepts `POST /` and appends to
 `<DATA_DIR>/alerts.jsonl`; `get_alert_context` reads from that store when called with no
@@ -100,10 +133,11 @@ arguments. Keep it that minimal — it exists solely so Grafana's contact-point 
 somewhere to land.
 
 `electron/` is a separate npm workspace: the distributed app end users actually install.
-Launched normally it's a connection-manager GUI (adds Grafana connections into a
-`safeStorage`-encrypted local store, one per Grafana endpoint/region/tier); launched with
-`--mcp-server` it skips the window and runs this same MCP server, sourcing connections
-from that store via the `ConnectionsSource` thunk above instead of env vars. Both modes
+Launched normally it's a connection-manager GUI (adds Grafana and/or log connections,
+distinguished by a `kind` field, into a `safeStorage`-encrypted local store); launched with
+`--mcp-server` it skips the window and runs this same MCP server, sourcing both connection
+kinds from that store via the `ConnectionsSource`/`LogConnectionsSource` thunks above
+instead of env vars. Both modes
 are the same binary/process — that's what lets connection secrets stay OS-keychain-encrypted
 end to end, with no separate server process that would need a plaintext credential on
 disk. See `electron/README.md` for the storage format and

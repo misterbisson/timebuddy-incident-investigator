@@ -1,8 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import type { Config, GrafanaConnection } from './config.js';
+import type { Config, GrafanaConnection, LogConnection } from './config.js';
 import { loadConfig } from './config.js';
 import { ConnectionRegistry, type ConnectionsSource } from './grafana/registry.js';
+import { LogConnectionRegistry, type LogConnectionsSource } from './graylog/registry.js';
 import { registerAllTools } from './tools/registerAll.js';
 
 /**
@@ -10,13 +11,20 @@ import { registerAllTools } from './tools/registerAll.js';
  * connections, but does not connect a transport — callers decide how the
  * server talks to its client (stdio for the CLI entrypoint in index.ts, or
  * whatever transport an embedding app like the Electron connection manager
- * chooses). `source` may be a thunk (see ConnectionsSource) so the registry
- * re-reads the live connection store on every tool call rather than freezing
- * whatever was configured at process startup — `config.connections` itself
- * stays a plain startup snapshot, only used for the zero-connections guard
- * and startup logging.
+ * chooses). `source`/`logSource` may each be a thunk (see ConnectionsSource/
+ * LogConnectionsSource) so the registries re-read the live connection store
+ * on every tool call rather than freezing whatever was configured at process
+ * startup — `config.connections`/`config.logConnections` themselves stay
+ * plain startup snapshots, only used for the zero-connections guard and
+ * startup logging. `logSource` defaults to `[]`: unlike Grafana connections,
+ * having no log connections configured is a normal, fully supported state —
+ * only the log tools become unusable, not the server.
  */
-export function createServer(source: ConnectionsSource, configOverrides: Partial<Config> = {}): McpServer {
+export function createServer(
+  source: ConnectionsSource,
+  configOverrides: Partial<Config> = {},
+  logSource: LogConnectionsSource = [],
+): McpServer {
   const startupSnapshot = typeof source === 'function' ? source() : source;
   if (startupSnapshot.length === 0) {
     throw new Error(
@@ -24,16 +32,23 @@ export function createServer(source: ConnectionsSource, configOverrides: Partial
         'connection manager app (see README).',
     );
   }
+  const logStartupSnapshot = typeof logSource === 'function' ? logSource() : logSource;
 
-  const config: Config = { ...loadConfig(), ...configOverrides, connections: startupSnapshot };
+  const config: Config = {
+    ...loadConfig(),
+    ...configOverrides,
+    connections: startupSnapshot,
+    logConnections: logStartupSnapshot,
+  };
   const registry = new ConnectionRegistry(source, config);
+  const logRegistry = new LogConnectionRegistry(logSource, config);
 
   const server = new McpServer({
     name: 'timebuddy-incident-investigator',
     version: '0.1.0',
   });
 
-  registerAllTools(server, { registry, config });
+  registerAllTools(server, { registry, logRegistry, config });
   return server;
 }
 
@@ -46,12 +61,14 @@ export function createServer(source: ConnectionsSource, configOverrides: Partial
 export async function startMcpServer(
   source: ConnectionsSource,
   configOverrides: Partial<Config> = {},
+  logSource: LogConnectionsSource = [],
 ): Promise<McpServer> {
-  const server = createServer(source, configOverrides);
+  const server = createServer(source, configOverrides, logSource);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;
 }
 
-export type { Config, GrafanaConnection } from './config.js';
+export type { Config, GrafanaConnection, LogConnection } from './config.js';
 export type { ConnectionsSource } from './grafana/registry.js';
+export type { LogConnectionsSource } from './graylog/registry.js';

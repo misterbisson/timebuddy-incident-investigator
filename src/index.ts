@@ -11,9 +11,10 @@ import { startMcpServer } from './server.js';
  */
 async function main() {
   const config = loadConfig();
-  await startMcpServer(config.connections, config);
+  await startMcpServer(config.connections, config, config.logConnections);
   console.error(
-    `timebuddy-incident-investigator MCP server running on stdio (${config.connections.length} Grafana connection(s): ${config.connections.map((c) => c.id).join(', ')})`,
+    `timebuddy-incident-investigator MCP server running on stdio (${config.connections.length} Grafana connection(s): ${config.connections.map((c) => c.id).join(', ')}` +
+      `; ${config.logConnections.length} log connection(s): ${config.logConnections.map((c) => c.id).join(', ')})`,
   );
 }
 

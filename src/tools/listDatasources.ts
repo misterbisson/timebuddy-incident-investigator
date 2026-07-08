@@ -41,7 +41,9 @@ export function registerListDatasources(server: McpServer, { registry, config }:
         'panel\'s datasource UID); if nothing close appears, the datasource was genuinely deleted/renamed with no ' +
         'trace and no tool can resolve that reference, only a Grafana-side fix can. Pass "query" to filter by a ' +
         'case-insensitive substring match against name/type. Pass "connection" to check one connection; omit it to ' +
-        'check every configured connection.',
+        'check every configured connection. connectionTags reports each connection\'s configured tags — cross-' +
+        'reference against list_log_sources\' tags to pair a Grafana connection with the log connection covering ' +
+        'the same environment, rather than guessing.',
       inputSchema: {
         query: z.string().optional().describe('Case-insensitive substring match against datasource name or type'),
         connection: z.string().optional().describe('Check only this connection; omit to fan out across every configured connection'),
@@ -70,6 +72,9 @@ export function registerListDatasources(server: McpServer, { registry, config }:
 
           const result = {
             datasourcesByConnection: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.datasources])),
+            connectionTags: Object.fromEntries(
+              fulfilled.map((r) => [r.value.connectionId, registry.list().find((c) => c.id === r.value.connectionId)?.tags ?? []]),
+            ),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });

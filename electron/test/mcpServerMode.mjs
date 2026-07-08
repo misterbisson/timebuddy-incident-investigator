@@ -1,10 +1,12 @@
-// Integration check for the merged app: seed a connection through
-// connectionStore.js, then spawn the real Electron binary in --mcp-server
-// mode using the actual @modelcontextprotocol/sdk Client + StdioClientTransport
-// (the same spawn-and-speak-stdio-JSON-RPC mechanism Claude Code/Desktop use)
-// and confirm it lists the 9 real tools and that a tool call actually reaches
-// out using the seeded connection's real URL/token (proving safeStorage ->
-// GrafanaClient wiring works end to end, not just that the process boots).
+// Integration check for the merged app: seed a Grafana connection and a
+// Graylog connection through connectionStore.js, then spawn the real
+// Electron binary in --mcp-server mode using the actual
+// @modelcontextprotocol/sdk Client + StdioClientTransport (the same
+// spawn-and-speak-stdio-JSON-RPC mechanism Claude Code/Desktop use) and
+// confirm it lists the 12 real tools and that a tool call on each connection
+// kind actually reaches out using the seeded connection's real URL/token
+// (proving safeStorage -> GrafanaClient/GraylogClient wiring works end to
+// end, not just that the process boots).
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { spawnSync } from 'node:child_process';
@@ -60,6 +62,9 @@ try {
     'validate_baseline',
     'summarize_findings',
     'list_datasources',
+    'list_log_sources',
+    'search_logs',
+    'correlate_logs',
   ];
   const actualNames = tools.map((t) => t.name).sort();
   const missing = expectedNames.filter((n) => !actualNames.includes(n));
@@ -79,6 +84,17 @@ try {
     fail(`fetch_dashboard failed at connection resolution, not at the network call: ${text}`);
   }
   console.log(`OK: fetch_dashboard got past connection resolution to a real network attempt: ${text}`);
+
+  const logResult = await client.callTool({
+    name: 'search_logs',
+    arguments: { query: 'service:frontend', startsAtMs: Date.now() - 60_000, endsAtMs: Date.now() },
+  });
+  const logText = logResult.content?.[0]?.text ?? '';
+  // Same rationale as fetch_dashboard above, for the seeded Graylog connection.
+  if (/no log connections configured/i.test(logText) || /could not determine which/i.test(logText)) {
+    fail(`search_logs failed at connection resolution, not at the network call: ${logText}`);
+  }
+  console.log(`OK: search_logs got past connection resolution to a real network attempt: ${logText}`);
 
   await client.close();
   rmSync(userDataDir, { recursive: true, force: true });

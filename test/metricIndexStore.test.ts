@@ -10,11 +10,13 @@ let dataDir: string;
 function config(): Config {
   return {
     connections: [],
+    logConnections: [],
     tlsVerify: true,
     requestTimeoutMs: 1000,
     maxConcurrency: 4,
     maxLookbackHours: 720,
     maxDataPoints: 2000,
+    maxLogLines: 500,
     redactionPatterns: [],
     dataDir,
     webhookPort: 4318,

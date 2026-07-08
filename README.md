@@ -15,7 +15,9 @@ src/
   server.ts       library entrypoint: createServer()/startMcpServer() build the MCP server for any caller
   index.ts        standalone CLI wrapper around server.ts (env-only connections; dev/CI use, not the distributed app)
   grafana/        read-only Grafana HTTP client + per-connection client registry
-  connections/    resolves which Grafana connection a tool call should use
+  graylog/        read-only Graylog HTTP client + per-connection client registry (log-side counterpart to grafana/)
+  logs/           wraps a bounded, historical Graylog fetch as a vendored log-correlator DataSourceAdapter for correlate_logs
+  connections/    resolves which Grafana/log connection a tool call should use
   alerts/         normalizes a webhook payload / pasted alert JSON / Grafana URL into an AlertContext
   webhook/        a small companion HTTP listener that receives Grafana's webhook contact-point POSTs
   dashboards/     panel/target extraction + Grafana template-variable substitution
@@ -23,8 +25,8 @@ src/
   index-builder/  crawls dashboards into a metric/measurement -> dashboard reverse index (cached locally, per connection)
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
-  tools/          the 9 MCP tools, each a thin wrapper over the modules above
-electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
+  tools/          the 12 MCP tools, each a thin wrapper over the modules above
+electron/         the distributed app: a GUI for managing Grafana and log connections that is *also* the MCP
                   server (launched with --mcp-server instead of opening a window) — see electron/README.md
 ```
 
@@ -41,6 +43,9 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
 | `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle — it does not generate prose; the calling agent writes the human-readable note from this bundle. |
 | `list_datasources` | List a connection's configured datasources (uid/name/type/default) — mainly for checking whether a panel's literal-name datasource reference still exists under some other UID. |
+| `list_log_sources` | List configured log (Graylog) connections and their tags — the log-side counterpart to `list_datasources`; also lists a connection's available streams. |
+| `search_logs` | Search one Graylog connection over a bounded, historical time window — works the same for an incident from days ago as one from five minutes ago. |
+| `correlate_logs` | Join two or more log queries on a shared field (e.g. `request_id`) over one bounded window, using a vendored PromQL-inspired join-query language. |
 
 ## Setup
 
@@ -52,7 +57,10 @@ hand-edit, no plaintext credential file anywhere.
 
 1. `cd electron && npm install && npm run dev` — opens the connection manager.
 2. Add a connection for each Grafana endpoint you use (one per region/tier, etc.) —
-   Bearer token or Basic auth, your choice. "Test connection" before saving.
+   Bearer token or Basic auth, your choice. "Test connection" before saving. Optionally add
+   a log (Graylog) connection too, the same way — pick "Log source (Graylog)" as the
+   connection type — and give matching Grafana/log connections the same tag(s) so an
+   investigation can pair them automatically (see "Multiple connections" below).
 3. In the app's "Register with Claude" section, copy the command (Claude Code) or JSON
    snippet (Claude Desktop) shown there — it already has this app's own path filled in —
    and add it to your Claude client.
@@ -93,8 +101,10 @@ from its own `safeStorage`-backed store, no env vars needed. See
 [`electron/README.md`](electron/README.md).
 
 **Standalone CLI (dev/CI only)** — `src/index.ts` compiled to `dist/index.js`, using
-`GRAFANA_URL`/`GRAFANA_TOKEN` for a single connection. Not what end users install; this is
-for iterating on the engine itself without going through Electron:
+`GRAFANA_URL`/`GRAFANA_TOKEN` for a single Grafana connection and, optionally,
+`GRAYLOG_URL`/`GRAYLOG_TOKEN` (or `GRAYLOG_USERNAME`/`GRAYLOG_PASSWORD`) for a single log
+connection — see `.env.example`. Not what end users install; this is for iterating on the
+engine itself without going through Electron:
 
 ```bash
 npm run build
@@ -124,30 +134,37 @@ npm run webhook
 It writes received alerts to `<DATA_DIR>/alerts.jsonl`; `get_alert_context` reads the
 latest one (or a specific fingerprint) from there when called with no arguments.
 
-## Multiple Grafana connections
+## Multiple connections
 
 Every tool takes an optional `connection` parameter (a connection id). When it's
 omitted:
 
-- `get_alert_context` auto-detects the right connection by matching the alert's own
-  URL (panel/dashboard/generator link) against each configured connection's `url` (or its
-  `matchHosts`, for cases like a load balancer alias) — and returns `resolvedConnectionId`
-  for you to pass into every subsequent call for that incident.
+- `get_alert_context` auto-detects the right Grafana connection by matching the alert's
+  own URL (panel/dashboard/generator link) against each configured connection's `url` (or
+  its `matchHosts`, for cases like a load balancer alias) — and returns
+  `resolvedConnectionId` for you to pass into every subsequent call for that incident.
 - Single-target tools (`fetch_dashboard`, `resolve_panel_queries`, `execute_query_window`,
-  `validate_baseline`, and the primary panel in `detect_correlated_anomalies`) fall back to
-  the one configured connection if there's only one, otherwise error out listing the
-  available connection ids — they never guess.
-- The two search tools (`find_related_dashboards`, and `detect_correlated_anomalies` when
-  auto-discovering candidates) fan out across every configured connection and merge
-  results, each tagged with its `connectionId`.
+  `validate_baseline`, `search_logs`, `correlate_logs`, and the primary panel in
+  `detect_correlated_anomalies`) fall back to the one configured connection if there's only
+  one, otherwise error out listing the available connection ids — they never guess.
+- The search tools (`find_related_dashboards`, `list_log_sources`, and
+  `detect_correlated_anomalies` when auto-discovering candidates) fan out across every
+  configured connection and merge results, each tagged with its `connectionId`.
+
+Log connections have no alert URL to auto-detect from, so pairing a log connection with the
+Grafana connection an investigation is already using instead relies on a shared, free-form
+`tags` field on both connection types (e.g. `["prod", "us-east"]`) — `list_datasources` and
+`list_log_sources` both report each connection's `tags` so a caller (or one of the bundled
+skills) can match them and ask rather than guess when the match is ambiguous.
 
 ## Security model
 
-- The Grafana client (`src/grafana/client.ts`) is a fixed allowlist of read-only endpoints.
-  There is no "make an arbitrary Grafana request" tool — nothing built on top of it can
-  reach a mutating endpoint, even if asked to.
-- `security/limits.ts` caps query time-range span and max data points, and caps
-  concurrent outgoing Grafana requests.
+- The Grafana and Graylog clients (`src/grafana/client.ts`, `src/graylog/client.ts`) are
+  each a fixed allowlist of read-only endpoints. There is no "make an arbitrary
+  Grafana/Graylog request" tool — nothing built on top of them can reach a mutating
+  endpoint, even if asked to.
+- `security/limits.ts` caps query time-range span, max data points, and max log lines, and
+  caps concurrent outgoing Grafana/Graylog requests.
 - `security/redact.ts` masks secret-shaped fields and any configured
   customer-identifier patterns before data is returned to the model.
 - `security/audit.ts` appends every tool invocation to a local JSONL audit log.
@@ -195,11 +212,22 @@ confirms the `safeStorage` -> engine wiring works end to end (see
   testing, but distributing one to other people will hit Gatekeeper (macOS) or
   SmartScreen (Windows) warnings until it's signed with a real developer identity —
   a prerequisite for wider rollout, not something fixable in code.
+- Log investigation supports Graylog only (Loki is not implemented yet) and, within
+  Graylog, only the legacy (2.x-5.x) Universal Search API — Graylog 6.x's Views API
+  returns CSV and needs materially different parsing, deferred for now.
+- `correlate_logs` vendors `@liquescent/log-correlator-core`/`-query-parser` for their
+  join-query language only; it does not use that project's own Loki/Graylog adapters,
+  which are built for live tailing and can't answer a fixed historical window (see
+  [`NOTICE.md`](NOTICE.md)). Every `graylog(...)[duration]` term in a query is answered
+  from the same explicit `startsAtMs`/`endsAtMs` window, never "the last `[duration]` from
+  now" — the bracket is required syntax, not a real relative lookback.
 
 ## Acknowledgments
 
 The `electron/` connection-manager app's UI and auth model are adapted from
-[Time Buddy](https://github.com/Liquescent-Development/time-buddy) by Richard Kiene /
-Liquescent Development (AGPL-3.0-only, the same license this repository uses). See
-[`NOTICE.md`](NOTICE.md) for exactly what was adapted and what was deliberately changed
-(credential storage, most notably).
+[Time Buddy](https://github.com/Liquescent-Development/time-buddy), and `correlate_logs`'s
+join-query engine/language is vendored from
+[log-correlator](https://github.com/Liquescent-Development/timebridge) — both by Richard
+Kiene / Liquescent Development (AGPL-3.0-only, the same license this repository uses). See
+[`NOTICE.md`](NOTICE.md) for exactly what was adapted/vendored and what was deliberately
+changed or not used (credential storage and the live-tail log adapters, most notably).

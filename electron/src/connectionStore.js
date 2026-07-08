@@ -46,31 +46,73 @@ function decryptSecret(encoded) {
 }
 
 /**
+ * A record with no `kind` predates this field entirely (it was added after
+ * Grafana-only connections already existed in the wild) — treat that as
+ * 'grafana' rather than migrating stored files, so existing connections keep
+ * working with zero user action.
+ */
+function kindOf(meta) {
+  return meta.kind ?? 'grafana';
+}
+
+function decryptedSecretFor(meta, secrets) {
+  const encoded = secrets[meta.id];
+  return encoded ? decryptSecret(encoded) : undefined;
+}
+
+function withSecret(meta, secret) {
+  return {
+    token: secret?.authType === 'bearer' ? secret.token : undefined,
+    username: secret?.authType === 'basic' ? secret.username : meta.username,
+    password: secret?.authType === 'basic' ? secret.password : undefined,
+  };
+}
+
+/**
  * Builds the fully-populated GrafanaConnection[] the MCP engine needs
  * (secrets included), decrypting via safeStorage entirely in memory. This
  * is only ever called from this same Electron process's headless
  * --mcp-server mode (see main.js) — the return value is never written back
  * to disk in any form, so no plaintext secret exists anywhere, ever.
  */
-function getConnectionsForEngine() {
+function getGrafanaConnectionsForEngine() {
   const { connections } = readConnectionsFile();
   const { secrets } = readSecretsFile();
 
-  return connections.map((meta) => {
-    const encoded = secrets[meta.id];
-    const secret = encoded ? decryptSecret(encoded) : undefined;
-    return {
+  return connections
+    .filter((meta) => kindOf(meta) === 'grafana')
+    .map((meta) => ({
       id: meta.id,
       name: meta.name,
       url: meta.url,
       authType: meta.authType,
       matchHosts: meta.matchHosts,
       tlsVerify: meta.tlsVerify,
-      token: secret?.authType === 'bearer' ? secret.token : undefined,
-      username: secret?.authType === 'basic' ? secret.username : meta.username,
-      password: secret?.authType === 'basic' ? secret.password : undefined,
-    };
-  });
+      tags: meta.tags,
+      ...withSecret(meta, decryptedSecretFor(meta, secrets)),
+    }));
+}
+
+/** Same rationale as getGrafanaConnectionsForEngine(), for LogConnection[]. */
+function getLogConnectionsForEngine() {
+  const { connections } = readConnectionsFile();
+  const { secrets } = readSecretsFile();
+
+  return connections
+    .filter((meta) => kindOf(meta) === 'graylog')
+    .map((meta) => ({
+      id: meta.id,
+      name: meta.name,
+      sourceType: 'graylog',
+      url: meta.url,
+      authType: meta.authType,
+      apiVersion: meta.apiVersion ?? 'legacy',
+      streamId: meta.streamId,
+      streamName: meta.streamName,
+      tlsVerify: meta.tlsVerify,
+      tags: meta.tags,
+      ...withSecret(meta, decryptedSecretFor(meta, secrets)),
+    }));
 }
 
 /** Non-secret connection list for the UI table — never includes a password/token. */
@@ -94,16 +136,24 @@ function upsertConnection(draft) {
   const id = draft.id ?? crypto.randomUUID();
   const existing = existingIndex >= 0 ? connectionsFile.connections[existingIndex] : undefined;
 
+  const kind = draft.kind ?? 'grafana';
   const meta = {
     id,
+    kind,
     name: draft.name,
     url: draft.url.replace(/\/+$/, ''),
     authType: draft.authType,
     username: draft.authType === 'basic' ? draft.username : undefined,
-    matchHosts: draft.matchHosts,
     tlsVerify: draft.tlsVerify,
+    tags: draft.tags,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    // Grafana-only.
+    ...(kind === 'grafana' ? { matchHosts: draft.matchHosts } : {}),
+    // Graylog-only.
+    ...(kind === 'graylog'
+      ? { apiVersion: draft.apiVersion ?? 'legacy', streamId: draft.streamId, streamName: draft.streamName }
+      : {}),
   };
 
   if (existingIndex >= 0) {
@@ -144,5 +194,6 @@ module.exports = {
   listConnectionsForDisplay,
   upsertConnection,
   deleteConnection,
-  getConnectionsForEngine,
+  getGrafanaConnectionsForEngine,
+  getLogConnectionsForEngine,
 };

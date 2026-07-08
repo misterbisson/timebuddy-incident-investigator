@@ -23,6 +23,7 @@
       <thead>
         <tr>
           <th>Name</th>
+          <th>Type</th>
           <th>URL</th>
           <th>Auth</th>
           <th>Status</th>
@@ -30,7 +31,7 @@
         </tr>
       </thead>
       <tbody id="connectionsTableBody">
-        <tr class="empty-row"><td colspan="5">No connections yet. Click "Add connection" to create one.</td></tr>
+        <tr class="empty-row"><td colspan="6">No connections yet. Click "Add connection" to create one.</td></tr>
       </tbody>
     </table>
 
@@ -58,6 +59,12 @@
       <div class="modal-content">
         <h2 id="connectionFormTitle">Add connection</h2>
 
+        <fieldset class="auth-type">
+          <legend>Connection type</legend>
+          <label><input type="radio" name="connectionKind" value="grafana" checked /> Grafana</label>
+          <label><input type="radio" name="connectionKind" value="graylog" /> Log source (Graylog)</label>
+        </fieldset>
+
         <label for="connectionName">Name</label>
         <input id="connectionName" type="text" placeholder="e.g. prod-us-east" />
 
@@ -82,8 +89,28 @@
           <input id="connectionPassword" type="password" placeholder="Leave blank to keep the current password" />
         </div>
 
-        <label for="connectionMatchHosts">Extra match hosts (optional)</label>
-        <input id="connectionMatchHosts" type="text" placeholder="comma-separated, e.g. grafana-lb.internal" />
+        <div id="grafanaFields" class="auth-fields">
+          <label for="connectionMatchHosts">Extra match hosts (optional)</label>
+          <input id="connectionMatchHosts" type="text" placeholder="comma-separated, e.g. grafana-lb.internal" />
+        </div>
+
+        <div id="graylogFields" class="auth-fields hidden">
+          <label for="connectionApiVersion">Graylog API version</label>
+          <select id="connectionApiVersion">
+            <option value="legacy" selected>Legacy (2.x-5.x, JSON search API)</option>
+          </select>
+          <label for="connectionStreamId">Default stream id (optional)</label>
+          <input id="connectionStreamId" type="text" placeholder="Restrict searches to one stream, e.g. 5f1e2a3b4c5d6e7f80912345" />
+          <label for="connectionStreamName">Stream name (optional, display only)</label>
+          <input id="connectionStreamName" type="text" placeholder="e.g. Production Logs" />
+        </div>
+
+        <label for="connectionTags">Tags (optional)</label>
+        <input id="connectionTags" type="text" placeholder="comma-separated, e.g. prod, us-east" />
+        <p class="field-hint">
+          Shared between a Grafana and a log connection covering the same environment, so an investigation can pair
+          the two automatically instead of asking which log source to use.
+        </p>
 
         <label class="checkbox-row"><input id="connectionTlsVerify" type="checkbox" checked /> Verify TLS certificate</label>
 

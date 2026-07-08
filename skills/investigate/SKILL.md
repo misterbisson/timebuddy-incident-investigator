@@ -83,15 +83,42 @@ skill exists to handle for them.
    up, say so plainly rather than retrying — that dashboard needs a Grafana-side fix, not something
    any tool call here can resolve.
 
-6. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
+6. **Pull in corroborating log evidence, if any log connections are configured.** Call
+   `list_log_sources` with no arguments. If it returns no `sources`, skip this step entirely —
+   log investigation isn't set up, and that's a normal, unremarkable state, not something to
+   flag as a problem.
+   - **Pair the log connection to the Grafana connection by shared tags, don't guess.** Compare
+     `list_log_sources`' `sources[].tags` against `list_datasources`' `connectionTags` for the
+     `resolvedConnectionId` from step 2. If exactly one log connection shares a tag, use it. If
+     none share a tag and only one log connection exists at all, it's reasonable to use it. If
+     several share a tag, or none do and several are configured, ask which log connection covers
+     this environment rather than guessing — the same "never guess, ask" rule step 2 already
+     follows for Grafana connections applies here too.
+   - Once you have a log connection, use `startsAtMs`/`endsAtMs` matching the same incident
+     window you replayed in step 3 (`alertContext.startsAt`, and the same `endsAtMs` you used
+     there, not "now" — see that step's window-size warning for why an implicit "now" is wrong
+     for anything but a still-firing alert). Start with `search_logs` for a targeted query (e.g.
+     the affected service and an error level) to confirm what's actually in the logs during the
+     window. If you need to tie a symptom on one side to its cause on another (e.g. matching a
+     frontend request that failed to the backend log line that explains why), use
+     `correlate_logs` with a join query like
+     `graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m]` — the
+     `[5m]` suffix is required syntax but doesn't change what's fetched; the tool call's own
+     `startsAtMs`/`endsAtMs` control the actual window, not that suffix.
+   - Both tools return a ready-to-click Graylog search `url` at the right query and time
+     window — carry it into the evidence bundle in the next step the same way a Grafana
+     dashboard/panel `url` is, never hand-built.
+
+7. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
    and an `evidence` array of dashboard/panel links you gathered along the way. Every tool above
    (`get_alert_context`'s `dashboardUrl`, `execute_query_window`/`validate_baseline`'s `url`,
    `detect_correlated_anomalies`'s `primaryUrl` and each correlated result's `url`,
-   `find_related_dashboards`'s per-match `url`) already returns a ready-to-click Grafana link at
-   the exact panel and time window — use those directly as `evidence[].url`. **Never construct a
-   dashboard URL yourself** (e.g. by guessing at `/d/{uid}` or copying a base URL from somewhere
+   `find_related_dashboards`'s per-match `url`, and `search_logs`/`correlate_logs`'s `url` from
+   step 6 when you used it) already returns a ready-to-click link at the exact panel/query and
+   time window — use those directly as `evidence[].url`. **Never construct a dashboard or log
+   search URL yourself** (e.g. by guessing at `/d/{uid}` or copying a base URL from somewhere
    else) — the tools already know the right connection's base URL and the right query params;
-   hand-building one risks pointing at the wrong Grafana instance or a broken link.
+   hand-building one risks pointing at the wrong instance or a broken link.
    `summarize_findings` returns **structured data only — no prose**. Reading its `reasons` and
    `evidence` fields, write the actual human-readable incident note yourself: what fired, whether
    it's real, why (cite the specific baseline/correlation numbers), and the links you collected so

@@ -32,3 +32,25 @@ was used; this repository only needed connection management.
 
 Time Buddy is Copyright © Richard Kiene / Liquescent Development. See its repository for
 full license text and authorship details.
+
+## log-correlator attribution
+
+Log correlation (the `correlate_logs` tool) is built on
+[`@liquescent/log-correlator-core`](https://github.com/Liquescent-Development/timebridge)
+and `@liquescent/log-correlator-query-parser` (npm-published from that same repository),
+also by Richard Kiene / Liquescent Development, licensed AGPL-3.0-only — the same license
+this repository uses. These two packages (pinned to `0.0.7`) provide the PromQL-inspired
+join-query language and correlation engine only (`and on(...)`, `unless`, `within()`,
+`group_left()`, etc.) — both are pure, transport-agnostic pieces with no networking or
+streaming code of their own.
+
+Deliberately **not** used: the same repository's own `LokiAdapter`/`GraylogAdapter`
+packages. Those are built exclusively for live tailing (every "historical" fetch they
+support is hardcoded to `from = now - window, to = now`), which is incompatible with this
+server's incident-review model of a fixed, often days-old historical window. Instead,
+`src/graylog/client.ts` and `src/logs/adapter.ts` in this repository query Graylog's own
+absolute-range search endpoint directly and feed the result into the vendored engine as a
+one-shot, bounded `DataSourceAdapter` — none of the upstream adapter code was used.
+
+log-correlator is Copyright © Richard Kiene / Liquescent Development. See its repository
+for full license text and authorship details.

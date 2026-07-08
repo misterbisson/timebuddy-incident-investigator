@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
+const { testGraylogConnection } = require('./graylogTest.js');
 
 // safeStorage's encryption key is scoped to the app's identity (name) in the
 // OS keychain. Set it explicitly rather than relying on package.json
@@ -33,33 +34,39 @@ function createWindow() {
 }
 
 async function runMcpServer() {
-  const startupConnections = store.getConnectionsForEngine();
+  const startupConnections = store.getGrafanaConnectionsForEngine();
+  const startupLogConnections = store.getLogConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
   const { startMcpServer } = await import('timebuddy-incident-investigator');
-  // Pass a thunk, not the snapshot above, so the engine re-reads
+  // Pass thunks, not the snapshots above, so the engine re-reads
   // connections.json/secrets.enc.json on every tool call — a connection
   // added or edited in the GUI takes effect on the next tool call, with no
   // need to restart this MCP server process (restarting the GUI window
   // alone never did anything here anyway: it's a separate process from the
   // one Claude Code/Desktop is already talking to over stdio).
-  await startMcpServer(() => store.getConnectionsForEngine(), {
-    // The engine's own default (DATA_DIR env var, else './.data') is
-    // relative to process.cwd() — but Claude Code/Desktop controls what cwd
-    // this process is spawned with, not us, and it isn't necessarily
-    // consistent. Confirmed in practice: the metric-index cache ended up
-    // split across two different .data folders depending on cwd, and the
-    // one Claude Code actually used kept serving stale (pre-bugfix) data
-    // that a fresh run elsewhere had already proven fixed. Anchoring to
-    // Electron's own per-OS userData dir (already used for
-    // connections.json/secrets.enc.json) makes the cache location the same
-    // every time, regardless of how this process gets launched.
-    dataDir: path.join(app.getPath('userData'), 'data'),
-  });
+  await startMcpServer(
+    () => store.getGrafanaConnectionsForEngine(),
+    {
+      // The engine's own default (DATA_DIR env var, else './.data') is
+      // relative to process.cwd() — but Claude Code/Desktop controls what cwd
+      // this process is spawned with, not us, and it isn't necessarily
+      // consistent. Confirmed in practice: the metric-index cache ended up
+      // split across two different .data folders depending on cwd, and the
+      // one Claude Code actually used kept serving stale (pre-bugfix) data
+      // that a fresh run elsewhere had already proven fixed. Anchoring to
+      // Electron's own per-OS userData dir (already used for
+      // connections.json/secrets.enc.json) makes the cache location the same
+      // every time, regardless of how this process gets launched.
+      dataDir: path.join(app.getPath('userData'), 'data'),
+    },
+    () => store.getLogConnectionsForEngine(),
+  );
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
   console.error(
-    `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')})`,
+    `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')}` +
+      `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})`,
   );
 }
 
@@ -86,7 +93,9 @@ app.on('window-all-closed', () => {
 ipcMain.handle('connections:list', () => store.listConnectionsForDisplay());
 ipcMain.handle('connections:upsert', (_event, connection) => store.upsertConnection(connection));
 ipcMain.handle('connections:delete', (_event, id) => store.deleteConnection(id));
-ipcMain.handle('connections:test', (_event, draft) => testConnection(draft));
+ipcMain.handle('connections:test', (_event, draft) =>
+  (draft.kind ?? 'grafana') === 'graylog' ? testGraylogConnection(draft) : testConnection(draft),
+);
 ipcMain.handle('connections:registrationInfo', () => ({
   execPath: app.getPath('exe'),
   appName: app.getName(),

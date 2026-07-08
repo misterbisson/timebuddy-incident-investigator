@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { clampSeriesPoints } from '../src/security/limits.js';
+import { clampLogLines, clampSeriesPoints } from '../src/security/limits.js';
 import type { Config } from '../src/config.js';
 import type { QuerySeries } from '../src/query/executor.js';
 
 const config: Config = {
   connections: [],
+  logConnections: [],
   tlsVerify: true,
   requestTimeoutMs: 1000,
   maxConcurrency: 4,
   maxLookbackHours: 720,
   maxDataPoints: 5,
+  maxLogLines: 500,
   redactionPatterns: [],
   dataDir: '.data',
   webhookPort: 4318,
@@ -42,5 +44,19 @@ describe('clampSeriesPoints', () => {
     const [result] = clampSeriesPoints([series(1000)], config);
     const times = result?.points.map((p) => p.t) ?? [];
     expect(times).toEqual([...times].sort((a, b) => a - b));
+  });
+});
+
+describe('clampLogLines', () => {
+  it('falls back to config.maxLogLines when nothing was requested', () => {
+    expect(clampLogLines(undefined, config)).toBe(config.maxLogLines);
+  });
+
+  it('passes a requested value under the cap through unchanged', () => {
+    expect(clampLogLines(100, { ...config, maxLogLines: 500 })).toBe(100);
+  });
+
+  it('caps a requested value over the limit', () => {
+    expect(clampLogLines(10_000, { ...config, maxLogLines: 500 })).toBe(500);
   });
 });

@@ -7,11 +7,13 @@ import type { DsQueryResponse } from '../src/grafana/types.js';
 
 const config: Config = {
   connections: [{ id: 'test', name: 'test', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' }],
+  logConnections: [],
   tlsVerify: true,
   requestTimeoutMs: 1000,
   maxConcurrency: 4,
   maxLookbackHours: 720,
   maxDataPoints: 2000,
+  maxLogLines: 500,
   redactionPatterns: [],
   dataDir: '.data',
   webhookPort: 4318,
