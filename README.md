@@ -24,7 +24,7 @@ src/
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
   knowledge/      looks up an adopter-published "Timebuddy knowledge" dashboard/panel for a product, with caching
-  tools/          the 11 MCP tools, each a thin wrapper over the modules above
+  tools/          the 13 MCP tools (12 always registered, screenshot_panel only in the Electron app), each a thin wrapper over the modules above
 electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
                   server (launched with --mcp-server instead of opening a window) — see electron/README.md
 ```
@@ -40,6 +40,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. `includePoints: false` drops each series' raw points (stats/runs are still returned) for a wide window that would otherwise overflow. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. `includePoints: false` drops raw points from every panel's series for a compact, stats-only survey. A panel mirroring another via Grafana's built-in "-- Dashboard --" datasource (see below) is reported with `mirrorsPanelIds`, never executed or errored. |
 | `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. In the Electron app, first tries to capture the panel's real on-screen data by driving a hidden browser to Grafana's own Inspect > Data view with "Apply panel transformations" checked (`transformationsApplied: true` in the result) — so a join/reduce/rename configured on the panel comes back exactly as shown, not just the raw query result. Otherwise (no transformations configured, or no Electron/`screenshotter`) falls back to a direct export: table panels as-is (every raw column); timeseries/graph panels pivoted wide (one UTC-timestamp column plus one column per series). |
+| `screenshot_panel` | *Electron app only.* Captures a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed, on-screen content isn't visible in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). The one tool whose output is **not** passed through the redaction layer. |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
@@ -140,12 +141,12 @@ omitted:
   URL (panel/dashboard/generator link) against each configured connection's `url` (or its
   `matchHosts`, for cases like a load balancer alias) — and returns `resolvedConnectionId`
   for you to pass into every subsequent call for that incident.
-- Single-target tools (`fetch_dashboard`, `resolve_panel_queries`, `execute_query_window`,
-  `render_dashboard`, `validate_baseline`, and the primary panel in
-  `detect_correlated_anomalies`) fall back to the one configured connection if there's only
-  one, otherwise error out listing the available connection ids — they never guess.
-  `render_dashboard` additionally auto-detects the connection from a `url`'s host, the same
-  way `get_alert_context` does.
+- Single-target tools (`resolve_panel_queries`, `execute_query_window`, `validate_baseline`,
+  `get_product_context`, `list_datasources`, and the primary panel in `detect_correlated_anomalies`)
+  fall back to the one configured connection if there's only one, otherwise error out listing the
+  available connection ids — they never guess. `fetch_dashboard`, `render_dashboard`,
+  `export_panel_csv`, and `screenshot_panel` additionally auto-detect the connection from a `url`'s
+  host (before the same fallback), the same way `get_alert_context` does.
 - The two search tools (`find_related_dashboards`, and `detect_correlated_anomalies` when
   auto-discovering candidates) fan out across every configured connection and merge
   results, each tagged with its `connectionId`.
@@ -238,11 +239,13 @@ datasource. There's no backend behind it, so replaying it through `/api/ds/query
 query-execution tool here does) always 404s with "data source not found" — a recurring,
 mechanically-detectable pattern seen across real dashboards, not a misconfiguration. Rather
 than surface that 404 (or require fetching the dashboard's raw JSON to explain it, as an
-investigation previously had to), `render_dashboard`, `resolve_panel_queries`,
-`execute_query_window`, `validate_baseline`, `detect_correlated_anomalies`, and
-`export_panel_csv` all detect this case up front and report it as `mirrorsPanelIds` (the
-panel id(s) it mirrors) instead of an error — read the referenced panel(s) directly for the
-real data.
+investigation previously had to), `render_dashboard` and `resolve_panel_queries` detect this
+case up front and report it as `mirrorsPanelIds` (the panel id(s) it mirrors) instead of an
+error — read the referenced panel(s) directly for the real data. `export_panel_csv` does the
+same when the Electron browser-capture path is available; otherwise (and always for
+`execute_query_window`, `validate_baseline`, and `detect_correlated_anomalies`, which resolve
+panels through a different, non-graceful path) a mirror panel surfaces as a thrown error
+instead — its message still names the mirrored panel id(s) to call directly.
 
 ## Security model
 

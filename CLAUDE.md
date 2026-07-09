@@ -110,9 +110,10 @@ disk. See `electron/README.md` for the storage format and
 `electron/test/mcpServerMode.mjs` for how it's tested (spawns the real binary in
 `--mcp-server` mode via the actual MCP SDK client/transport; no live Grafana needed).
 
-`skills/explore/SKILL.md` and `skills/investigate/SKILL.md` (packaged as a Claude Code
-plugin via `.claude-plugin/plugin.json`, invoked as `/timebuddy:explore` /
-`/timebuddy:investigate`) are prose runbooks that drive these tools in the right order for
+`skills/explore/SKILL.md`, `skills/investigate/SKILL.md`, and `skills/export/SKILL.md`
+(packaged as a Claude Code plugin via `.claude-plugin/plugin.json`, invoked as
+`/timebuddy:explore` / `/timebuddy:investigate` / `/timebuddy:export`) are prose runbooks
+that drive these tools in the right order for
 an agent. Treat them as part of the interface, not just docs: if a tool's params, return
 shape, or behavior changes in a way that would make a skill's instructions wrong or
 stale, update the skill in the same change.

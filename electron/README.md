@@ -60,7 +60,7 @@ snippet (Claude Desktop), both pointing at this app's own executable path with
 `test/mcpServerMode.mjs` seeds a connection directly through `connectionStore.js` (bypassing
 the GUI), then spawns this app's real binary in `--mcp-server` mode using the actual
 `@modelcontextprotocol/sdk` `Client`/`StdioClientTransport` — the same mechanism a real MCP
-client uses — and confirms `tools/list` returns all 8 tools and a tool call reaches a real
+client uses — and confirms `tools/list` returns the full expected tool set and a tool call reaches a real
 network attempt using the seeded, `safeStorage`-decrypted credential (not a
 connection-resolution error). Run it with:
 
