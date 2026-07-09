@@ -45,9 +45,11 @@ export async function loadKnowledgeCache(config: Config, connectionId: string): 
     const parsed = JSON.parse(text) as KnowledgeCache;
     if (parsed.schemaVersion !== CURRENT_SCHEMA_VERSION) return emptyCache();
     return parsed;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyCache();
-    throw err;
+  } catch {
+    // Any read/parse failure (missing file, or a corrupted/truncated write
+    // from a crash mid-save) falls back to a fresh cache, same as a schema
+    // mismatch above.
+    return emptyCache();
   }
 }
 

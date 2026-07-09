@@ -93,9 +93,11 @@ export async function loadIndex(config: Config, connectionId: string): Promise<M
     // written; backfill so older cache files on disk don't crash consumers
     // that assume every field is present.
     return { ...parsed, alertBackedPanels: parsed.alertBackedPanels ?? [] };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw err;
+  } catch {
+    // Any read/parse failure (missing file, or a corrupted/truncated write
+    // from a crash mid-save) should fall back to "no cache" so the caller
+    // rebuilds, not crash the whole index lookup.
+    return undefined;
   }
 }
 

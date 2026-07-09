@@ -137,14 +137,16 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
             }
           }
 
-          const redacted = redact(alertContext, config.redactionPatterns);
-          const result = {
-            summary: summarize(alertContext),
-            alertContext: redacted,
-            resolvedConnectionId,
-            dashboardUrl,
-            knowledge: knowledge ? redact(knowledge, config.redactionPatterns) : undefined,
-          };
+          const result = redact(
+            {
+              summary: summarize(alertContext),
+              alertContext,
+              resolvedConnectionId,
+              dashboardUrl,
+              knowledge,
+            },
+            config.redactionPatterns,
+          );
           return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
         });
       } catch (err) {

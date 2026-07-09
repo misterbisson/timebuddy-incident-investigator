@@ -88,6 +88,22 @@ describe('compareToBaseline', () => {
     const result = compareToBaseline(incident, controls);
     expect(result.briefExcursions).toEqual([]);
   });
+
+  it('pools between-window variance, not just within-window variance, when control means differ (seasonality)', () => {
+    // Each control window is individually rock-steady (stddev 0), but the
+    // three windows' means differ by day-of-week seasonality (10 / 20 / 30).
+    // A pooled stddev that only averaged within-window variance would come
+    // out to 0, making any incident value classify as infinitely unusual.
+    const incident = points([20, 20, 20, 20]);
+    const controls = [
+      { label: 'prior-hour', points: points([10, 10, 10, 10]) },
+      { label: 'same-hour-yesterday', points: points([20, 20, 20, 20]) },
+      { label: 'same-hour-last-week', points: points([30, 30, 30, 30]) },
+    ];
+    const result = compareToBaseline(incident, controls);
+    expect(result.pooledBaselineStddev).toBeGreaterThan(0);
+    expect(result.classification).toBe('common-during-normal-operations');
+  });
 });
 
 describe('detectOnset', () => {

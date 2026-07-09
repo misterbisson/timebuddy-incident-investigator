@@ -5,6 +5,7 @@ import { computeWindows, excludeOverlapping, type TimeWindow } from '../query/wi
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
 import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -67,9 +68,22 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
           const overrides = variableOverrides ?? {};
           const allWindows: TimeWindow[] = [windowSet.incident, ...windowSet.controls];
 
+          // Live-resolve any "$__all" query-type variable once against the
+          // incident window, same as execute_query_window — otherwise a
+          // baseline window could silently resolve to a different host list
+          // than the incident and corrupt the apples-to-apples comparison.
+          const { dashboard } = await client.getDashboard(dashboardUid);
+          const variables = dashboard.templating?.list ?? [];
+          const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(
+            client,
+            variables,
+            overrides,
+            windowSet.incident,
+          );
+
           const executed = await Promise.all(
             allWindows.map(async (window) => {
-              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, overrides, window, panelTitle);
+              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
               return { window, result: await executeQueryWindow(client, targets, window, config) };
             }),
           );
@@ -122,7 +136,14 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
           });
-          const result = { url, window: windowSet.incident, controls: windowSet.controls, series: seriesResults, warnings };
+          const result = {
+            url,
+            window: windowSet.incident,
+            controls: windowSet.controls,
+            series: seriesResults,
+            warnings,
+            ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
+          };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {

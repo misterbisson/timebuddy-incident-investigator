@@ -102,6 +102,36 @@ describe('resolveAlertContext', () => {
     expect(ctx.variables).toEqual({ host: ['db1'] });
   });
 
+  it('drops a var-* override with query-breaking characters and warns, rather than passing it through', async () => {
+    const injected = encodeURIComponent('x"} or up{job="evil');
+    const ctx = await resolveAlertContext(
+      { url: `https://grafana.example.com/d/dash3/slug?viewPanel=9&var-host=${injected}` },
+      () => fakeClient(),
+    );
+    expect(ctx.variables).toEqual({});
+    expect(ctx.warnings.some((w) => w.includes('host'))).toBe(true);
+  });
+
+  it('drops an unsafe var-* value recovered from a pasted alert panelURL and warns', async () => {
+    const injected = encodeURIComponent("bad';drop");
+    const ctx = await resolveAlertContext(
+      {
+        alertJson: {
+          fingerprint: 'fp1',
+          status: { state: 'firing' },
+          labels: { alertname: 'A' },
+          annotations: {},
+          startsAt: 't1',
+          endsAt: 't2',
+          panelURL: `https://grafana.example.com/d/dash2/slug?viewPanel=3&var-service=checkout&var-host=${injected}`,
+        },
+      },
+      () => fakeClient(),
+    );
+    expect(ctx.variables).toEqual({ service: ['checkout'] });
+    expect(ctx.warnings.some((w) => w.includes('host'))).toBe(true);
+  });
+
   it('stamps panelURL from a bare panel URL so connection auto-resolution has a hostname to match', async () => {
     const ctx = await resolveAlertContext(
       { url: 'https://grafana.example.com/d/dash3/slug?viewPanel=9&var-host=db1' },

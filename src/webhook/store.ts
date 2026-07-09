@@ -24,16 +24,25 @@ export async function storeWebhook(payload: WebhookPayload, config: Config): Pro
 }
 
 async function readAll(config: Config): Promise<StoredWebhook[]> {
+  let text: string;
   try {
-    const text = await readFile(alertsFilePath(config), 'utf8');
-    return text
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as StoredWebhook);
+    text = await readFile(alertsFilePath(config), 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
+  // A single malformed/truncated line (partial write from a crash, disk
+  // full, etc.) shouldn't break reads of every other record in the file.
+  return text
+    .split('\n')
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as StoredWebhook];
+      } catch {
+        return [];
+      }
+    });
 }
 
 export async function getLatestWebhook(config: Config): Promise<StoredWebhook | undefined> {

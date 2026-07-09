@@ -70,6 +70,12 @@ function extractDashboardLink(alert: AlertmanagerAlert, warnings: string[]): {
     try {
       const parsed = parseGrafanaUrl(link);
       if (parsed.type === 'dashboard') {
+        if (parsed.rejectedVars?.length) {
+          warnings.push(
+            `Dropped var-* override(s) with unsafe characters: ${parsed.rejectedVars.join(', ')} — falling back to ` +
+              'the dashboard\'s default value for those variables.',
+          );
+        }
         return { dashboardUid: parsed.uid, panelId: parsed.panelId, variables: parsed.vars };
       }
     } catch {
@@ -165,7 +171,12 @@ export async function resolveAlertContext(
         panelURL: parsed.panelId !== undefined ? input.url : undefined,
         dashboardURL: parsed.panelId === undefined ? input.url : undefined,
         variables: parsed.vars,
-        warnings: [],
+        warnings: parsed.rejectedVars?.length
+          ? [
+              `Dropped var-* override(s) with unsafe characters: ${parsed.rejectedVars.join(', ')} — falling back to ` +
+                'the dashboard\'s default value for those variables.',
+            ]
+          : [],
       };
     }
 

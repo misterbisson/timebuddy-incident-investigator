@@ -4,8 +4,29 @@ export interface ParsedDashboardUrl {
   slug?: string;
   panelId?: number;
   vars: Record<string, string[]>;
+  /** var-* names that had one or more values dropped for containing characters unsafe to substitute into a query string (see isSafeVariableValue). */
+  rejectedVars?: string[];
   from?: string;
   to?: string;
+}
+
+/**
+ * A var-* value ends up substituted raw into a PromQL/InfluxQL query string
+ * (dashboards/variables.ts's default formatValues branch escapes nothing),
+ * and these values can originate from an attacker-controlled webhook payload
+ * or pasted URL (alerts/ingest.ts) — not just a human clicking a real Grafana
+ * link. Rather than escaping (which would risk diverging from what Grafana
+ * itself would literally send for a given variable), reject values carrying
+ * characters that could break out of the intended label/string context:
+ * quotes and backtick (close a quoted string), backslash (escape sequences),
+ * semicolon (InfluxQL statement separator), curly braces (PromQL matcher
+ * block boundaries), "$" (macro/variable re-injection), and control
+ * characters/newlines.
+ */
+const UNSAFE_VAR_VALUE_RE = /[\x00-\x1f\x7f"'`\\;{}$]/;
+
+function isSafeVariableValue(value: string): boolean {
+  return !UNSAFE_VAR_VALUE_RE.test(value);
 }
 
 export interface ParsedAlertRuleUrl {
@@ -27,10 +48,15 @@ export function parseGrafanaUrl(rawUrl: string): ParsedGrafanaUrl {
   if (dashboardMatch) {
     const [, uid, slug] = dashboardMatch;
     const vars: Record<string, string[]> = {};
+    const rejectedVars = new Set<string>();
     for (const [key, value] of url.searchParams.entries()) {
       if (key.startsWith('var-')) {
         const name = key.slice('var-'.length);
-        (vars[name] ??= []).push(value);
+        if (isSafeVariableValue(value)) {
+          (vars[name] ??= []).push(value);
+        } else {
+          rejectedVars.add(name);
+        }
       }
     }
     const panelIdRaw = url.searchParams.get('viewPanel') ?? url.searchParams.get('panelId');
@@ -40,6 +66,7 @@ export function parseGrafanaUrl(rawUrl: string): ParsedGrafanaUrl {
       slug,
       panelId: panelIdRaw ? Number.parseInt(panelIdRaw, 10) : undefined,
       vars,
+      ...(rejectedVars.size > 0 ? { rejectedVars: [...rejectedVars] } : {}),
       from: url.searchParams.get('from') ?? undefined,
       to: url.searchParams.get('to') ?? undefined,
     };

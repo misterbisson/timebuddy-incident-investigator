@@ -88,8 +88,15 @@ export function compareToBaseline(
   }
 
   const pooledBaselineMean = validControls.reduce((a, c) => a + c.stats.mean, 0) / validControls.length;
-  const pooledBaselineStddev =
-    Math.sqrt(validControls.reduce((a, c) => a + c.stats.stddev ** 2, 0) / validControls.length) || 0;
+  // Law of total variance: the pooled spread must include how much control
+  // *means* vary from each other (e.g. day-of-week seasonality across
+  // prior-hour/yesterday/last-week), not just each window's own internal
+  // variance — averaging only within-window stddevs understates the true
+  // baseline spread and biases toward false "statistically-unusual" verdicts.
+  const withinVariance = validControls.reduce((a, c) => a + c.stats.stddev ** 2, 0) / validControls.length;
+  const betweenVariance =
+    validControls.reduce((a, c) => a + (c.stats.mean - pooledBaselineMean) ** 2, 0) / validControls.length;
+  const pooledBaselineStddev = Math.sqrt(withinVariance + betweenVariance) || 0;
   const stddev = effectiveStddev(pooledBaselineMean, pooledBaselineStddev);
   const zScore = (incidentStats.mean - pooledBaselineMean) / stddev;
 

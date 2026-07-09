@@ -35,6 +35,27 @@ describe('parseGrafanaUrl', () => {
     const parsed = parseGrafanaUrl('https://grafana.example.com/d/xyz/slug');
     expect(parsed).toEqual({ type: 'dashboard', uid: 'xyz', slug: 'slug', panelId: undefined, vars: {}, from: undefined, to: undefined });
   });
+
+  it('drops a var-* value containing query-breaking characters and reports it in rejectedVars', () => {
+    const url =
+      'https://grafana.example.com/d/abc123/my-dashboard?var-service=checkout&var-host=' +
+      encodeURIComponent('x"} or up{job="evil');
+    const parsed = parseGrafanaUrl(url);
+    expect(parsed).toMatchObject({
+      type: 'dashboard',
+      vars: { service: ['checkout'] },
+      rejectedVars: ['host'],
+    });
+  });
+
+  it('keeps other safe values for a variable when only one of several is unsafe', () => {
+    const url =
+      'https://grafana.example.com/d/abc123/my-dashboard?var-region=us-east-1&var-region=' +
+      encodeURIComponent('bad;value');
+    const parsed = parseGrafanaUrl(url);
+    expect(parsed.vars).toEqual({ region: ['us-east-1'] });
+    expect(parsed.rejectedVars).toEqual(['region']);
+  });
 });
 
 describe('parseGrafanaTimeExpr', () => {
