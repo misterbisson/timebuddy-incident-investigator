@@ -41,8 +41,8 @@ export function resolveConnection(
 ): ResolvedConnection {
   if (connections.length === 0) {
     throw new Error(
-      'No Grafana connections configured. Set GRAFANA_URL/GRAFANA_TOKEN, or run the connection manager app ' +
-        'and point GRAFANA_CONNECTIONS_DIR at its storage location (see README).',
+      'No Grafana connections configured. Set GRAFANA_URL/GRAFANA_TOKEN, or add connections in the ' +
+        'connection manager app (see README).',
     );
   }
 

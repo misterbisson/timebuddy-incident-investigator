@@ -16,6 +16,7 @@ const seriesStatsSchema = z.object({
   min: nullableNumber,
   max: nullableNumber,
   count: z.number(),
+  nonZeroCount: z.number().optional().default(0),
 });
 
 const baselineSchema = z.object({
@@ -91,6 +92,7 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
                 min: toNaN(args.baseline.incidentStats.min),
                 max: toNaN(args.baseline.incidentStats.max),
                 count: args.baseline.incidentStats.count,
+                nonZeroCount: args.baseline.incidentStats.nonZeroCount,
               },
               controlStats: args.baseline.controlStats.map((c) => ({
                 label: c.label,
@@ -100,16 +102,20 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
                   min: toNaN(c.stats.min),
                   max: toNaN(c.stats.max),
                   count: c.stats.count,
+                  nonZeroCount: c.stats.nonZeroCount,
                 },
               })),
               pooledBaselineMean: toNaN(args.baseline.pooledBaselineMean),
               pooledBaselineStddev: toNaN(args.baseline.pooledBaselineStddev),
               zScore: toNaN(args.baseline.zScore),
               classification: args.baseline.classification,
+              // Not part of this tool's input schema yet — summarizeFindings()
+              // doesn't read it, only validate_baseline's own output does.
+              briefExcursions: [],
             },
           };
           const report = summarizeFindings(input);
-          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(report, config.redactionPatterns), null, 2) }] };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(redact(report, config.redactionPatterns)) }] };
         });
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };

@@ -5,6 +5,7 @@ import type {
   DatasourceInfo,
   DsQueryRequest,
   DsQueryResponse,
+  FolderInfo,
   GrafanaAnnotation,
   RulerAlertRule,
   RulerRuleGroup,
@@ -31,6 +32,26 @@ class Semaphore {
       if (next) next();
     }
   }
+}
+
+/**
+ * Builds the Authorization header value for a connection. Exported so
+ * callers outside GrafanaClient's own fetch() calls (screenshot_panel's
+ * headless-browser capture, which needs the identical header applied to a
+ * real browser's outgoing requests) can authenticate exactly the same way,
+ * without duplicating the bearer/basic branching.
+ */
+export function buildAuthHeader(connection: GrafanaConnection): string {
+  if (connection.authType === 'basic') {
+    if (!connection.username || !connection.password) {
+      throw new Error(`Connection "${connection.id}" is authType=basic but missing username/password`);
+    }
+    return `Basic ${Buffer.from(`${connection.username}:${connection.password}`).toString('base64')}`;
+  }
+  if (!connection.token) {
+    throw new Error(`Connection "${connection.id}" is authType=bearer but missing token`);
+  }
+  return `Bearer ${connection.token}`;
 }
 
 export class GrafanaApiError extends Error {
@@ -66,16 +87,7 @@ export class GrafanaClient {
   }
 
   private authHeader(): string {
-    if (this.connection.authType === 'basic') {
-      if (!this.connection.username || !this.connection.password) {
-        throw new Error(`Connection "${this.connection.id}" is authType=basic but missing username/password`);
-      }
-      return `Basic ${Buffer.from(`${this.connection.username}:${this.connection.password}`).toString('base64')}`;
-    }
-    if (!this.connection.token) {
-      throw new Error(`Connection "${this.connection.id}" is authType=bearer but missing token`);
-    }
-    return `Bearer ${this.connection.token}`;
+    return buildAuthHeader(this.connection);
   }
 
   private async getDispatcher(): Promise<unknown> {
@@ -143,6 +155,11 @@ export class GrafanaClient {
 
   async getDashboard(uid: string): Promise<DashboardGetResponse> {
     return this.request<DashboardGetResponse>('GET', `/api/dashboards/uid/${encodeURIComponent(uid)}`);
+  }
+
+  /** Used to walk a folder's ancestor chain (Grafana has no single "chain" endpoint) when looking up a knowledge dashboard scoped to a parent folder. */
+  async getFolder(uid: string): Promise<FolderInfo> {
+    return this.request<FolderInfo>('GET', `/api/folders/${encodeURIComponent(uid)}`);
   }
 
   async listDatasources(): Promise<DatasourceInfo[]> {

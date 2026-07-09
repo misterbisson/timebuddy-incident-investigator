@@ -11,15 +11,21 @@ export interface QueryWindow {
  * Resolves the effective value(s) for one variable: an explicit override
  * (e.g. captured from the `var-*` params of the panel URL an alert linked
  * to — what a human clicking the link would actually have seen) wins;
- * otherwise fall back to the dashboard's saved `current.value`.
+ * otherwise fall back to the dashboard's saved `current.value`. Either
+ * source can carry the literal `$__all` sentinel — a URL built by Grafana
+ * itself for a multi-value variable with "Include All" selected renders as
+ * `var-name=$__all`, not as every individual option — so both are expanded
+ * the same way: to the variable's configured allValue, else its cached
+ * option list. (Confirmed against a real incident: before this expanded
+ * override values too, an alert URL with `var-host=$__all` sent the literal
+ * string "$__all" into the replayed query, which every real datasource
+ * predictably matched nothing against — this tool reported "no data" over a
+ * live, ongoing outage the dashboard itself showed clearly.)
  */
-function effectiveValues(variable: TemplateVariable, overrides: Record<string, string[]>): string[] {
+export function effectiveValues(variable: TemplateVariable, overrides: Record<string, string[]>): string[] {
   const override = overrides[variable.name];
-  if (override && override.length > 0) return override;
-
   const current = variable.current?.value;
-  if (current === undefined) return [];
-  const values = Array.isArray(current) ? current : [current];
+  const values = override && override.length > 0 ? override : current === undefined ? [] : Array.isArray(current) ? current : [current];
 
   if (values.includes('$__all')) {
     if (variable.allValue) return [variable.allValue];
@@ -29,7 +35,22 @@ function effectiveValues(variable: TemplateVariable, overrides: Record<string, s
 }
 
 function formatValues(values: string[], format: string | undefined): string {
-  if (values.length === 0) return '';
+  if (values.length === 0) {
+    // Only reachable via an unresolved "All" selection in effectiveValues:
+    // no explicit allValue, and no options cached in the dashboard's saved
+    // JSON (common for query-type variables, whose options Grafana populates
+    // live at render time rather than storing). The default/regex formats
+    // build an alternation meant to sit inside the datasource's own regex
+    // matcher (InfluxQL's `/^$host$/`, PromQL's `label=~"$service"`); leaving
+    // it empty produces an anchored empty-string match that silently zeroes
+    // out every result. Confirmed against a real incident: this masked a live
+    // outage as "no data" on every panel of an affected dashboard. Failing
+    // open (match everything) is far safer here than failing closed (match
+    // nothing) for an incident-investigation tool. Other formats (csv/json/
+    // sqlstring/pipe/lucene) aren't naturally regex contexts, so they're left
+    // as '' rather than guessing at wildcard syntax that may not apply there.
+    return format === undefined || format === 'regex' ? '.*' : '';
+  }
   switch (format) {
     case 'csv':
       return values.join(',');
@@ -111,7 +132,15 @@ export function substituteVariables(
   return result;
 }
 
-/** Applies substituteVariables to a target's query-string fields (`expr` for Prometheus, `query` for InfluxQL). */
+/**
+ * Applies substituteVariables to a target's query-string fields (`expr` for
+ * Prometheus, `query` for raw-mode InfluxQL) as well as the string fields of
+ * InfluxQL's structured query builder (`measurement`, `policy`, and each
+ * `tags[].value`) — a builder-mode tag filter like `/^$host$/` embeds the
+ * variable reference inside a larger string rather than being the whole
+ * field, so it needs the same substitution pass, not just a straight
+ * override lookup.
+ */
 export function substituteTargetFields(
   raw: PanelTarget,
   variables: TemplateVariable[],
@@ -125,6 +154,18 @@ export function substituteTargetFields(
   if (typeof raw.query === 'string') {
     substituted.query = substituteVariables(raw.query, variables, overrides, window);
   }
+  if (typeof raw.measurement === 'string') {
+    substituted.measurement = substituteVariables(raw.measurement, variables, overrides, window);
+  }
+  if (typeof raw.policy === 'string') {
+    substituted.policy = substituteVariables(raw.policy, variables, overrides, window);
+  }
+  if (Array.isArray(raw.tags)) {
+    substituted.tags = raw.tags.map((tag) => ({
+      ...tag,
+      value: substituteVariables(tag.value, variables, overrides, window),
+    }));
+  }
   return substituted;
 }
 
@@ -136,4 +177,41 @@ export function mergeVariableOverrides(...sources: Array<Record<string, string[]
     for (const [k, v] of Object.entries(source)) merged[k] = v;
   }
   return merged;
+}
+
+/** Extracts the variable name from a `$name` / `${name}` / `${name:format}` reference, or undefined if it isn't one. */
+function templateVariableName(ref: string): string | undefined {
+  return (ref.match(/^\$\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}$/) ?? ref.match(/^\$([a-zA-Z0-9_]+)$/))?.[1];
+}
+
+/**
+ * Resolves a panel/target's datasource reference when it's a Grafana
+ * datasource-picker template variable ($datasource, ${DS_PROMETHEUS}, ...)
+ * rather than a fixed UID. Grafana resolves this at render time from the
+ * variable's current selection; without doing the same, the literal
+ * variable-reference string gets sent to /api/ds/query verbatim and Grafana
+ * rejects it with "404 Data source not found".
+ *
+ * Returns the ref unchanged if it isn't a variable reference (nothing to
+ * resolve — this covers both a real UID and a legacy literal datasource
+ * name, neither of which this function can tell apart from each other).
+ * Returns undefined if it IS a variable reference this dashboard doesn't
+ * define, or one with no current value — an unresolvable reference, not a
+ * guess.
+ *
+ * The resolved value may itself be a UID (modern Grafana) or a datasource
+ * name (older Grafana) rather than a UID — callers with access to a
+ * GrafanaClient should fall back to a name lookup via listDatasources() if
+ * it doesn't match a known UID; see tools/shared.ts's resolveTargetDatasource.
+ */
+export function resolveDatasourceVariable(
+  ref: string,
+  variables: TemplateVariable[],
+  overrides: Record<string, string[]>,
+): string | undefined {
+  const name = templateVariableName(ref);
+  if (!name) return ref;
+  const variable = variables.find((v) => v.name === name);
+  if (!variable) return undefined;
+  return effectiveValues(variable, overrides)[0];
 }

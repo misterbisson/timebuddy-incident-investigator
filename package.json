@@ -4,6 +4,13 @@
   "description": "Grafana Incident Review MCP server: read-only tools for AI-assisted incident investigation of dashboards, metrics, and logs.",
   "type": "module",
   "license": "AGPL-3.0-only",
+  "workspaces": [
+    "electron"
+  ],
+  "main": "dist/server.js",
+  "exports": {
+    ".": "./dist/server.js"
+  },
   "bin": {
     "timebuddy-incident-investigator": "dist/index.js"
   },

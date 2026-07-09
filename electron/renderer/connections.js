@@ -11,7 +11,7 @@ function $(id) {
 }
 
 function currentAuthType() {
-  return document.querySelector('input[name="authType"]').value;
+  return document.querySelector('input[name="authType"]:checked').value;
 }
 
 function setAuthType(type) {
@@ -49,6 +49,24 @@ function openModalForEdit(connection) {
   $('connectionUrl').value = connection.url;
   // Secrets are never sent back to the renderer — leaving these blank and
   // saving keeps whatever is already stored (see connectionStore.js).
+  $('connectionToken').value = '';
+  $('connectionUsername').value = connection.username ?? '';
+  $('connectionPassword').value = '';
+  $('connectionMatchHosts').value = (connection.matchHosts ?? []).join(', ');
+  $('connectionTlsVerify').checked = connection.tlsVerify ?? true;
+  $('testResult').textContent = '';
+  $('testResult').className = 'test-result';
+  setAuthType(connection.authType);
+  $('connectionModal').classList.remove('hidden');
+}
+
+function openModalForDuplicate(connection) {
+  editingConnectionId = null;
+  $('connectionFormTitle').textContent = `Duplicate connection: ${connection.name}`;
+  $('connectionName').value = `${connection.name} (copy)`;
+  $('connectionUrl').value = connection.url;
+  // Secrets never reach the renderer, so a duplicate can't carry the
+  // original's token/password along — re-enter it for the new connection.
   $('connectionToken').value = '';
   $('connectionUsername').value = connection.username ?? '';
   $('connectionPassword').value = '';
@@ -119,6 +137,10 @@ async function renderConnections() {
     editBtn.type = 'button';
     editBtn.textContent = 'Edit';
     editBtn.addEventListener('click', () => openModalForEdit(connection));
+    const duplicateBtn = document.createElement('button');
+    duplicateBtn.type = 'button';
+    duplicateBtn.textContent = 'Duplicate';
+    duplicateBtn.addEventListener('click', () => openModalForDuplicate(connection));
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.textContent = 'Delete';
@@ -129,17 +151,12 @@ async function renderConnections() {
       }
     });
     actionsCell.appendChild(editBtn);
+    actionsCell.appendChild(duplicateBtn);
     actionsCell.appendChild(deleteBtn);
     row.appendChild(actionsCell);
 
     body.appendChild(row);
   }
-}
-
-async function loadStorageInfo() {
-  const { dir } = await window.connectionManager.storageInfo();
-  $('storageDir').textContent = `Storage location: ${dir}`;
-  $('copyStorageDirBtn').dataset.dir = dir;
 }
 
 $('addConnectionBtn').addEventListener('click', openModalForAdd);
@@ -166,8 +183,50 @@ $('testConnectionBtn').addEventListener('click', async () => {
   resultEl.className = `test-result ${result.ok ? 'status-ok' : 'status-warn'}`;
 });
 
-$('copyStorageDirBtn').addEventListener('click', () => window.connectionManager.copyStorageDir());
-$('openStorageDirBtn').addEventListener('click', () => window.connectionManager.openStorageDir());
+// Claude Code's exact `mcp add` flags can vary by version — this is the
+// documented `name -- command [args...]` shape as of when this was written;
+// if it doesn't match your installed version, `claude mcp add --help` has
+// the current syntax. The Claude Desktop JSON, by contrast, is the same
+// mcpServers shape every local MCP server uses, and won't drift.
+async function loadRegistrationInfo() {
+  const { execPath, isPackaged, appPath } = await window.connectionManager.registrationInfo();
+  const quote = (s) => (s.includes(' ') ? `"${s}"` : s);
 
-loadStorageInfo();
+  // The raw dev Electron binary needs the app directory as an explicit
+  // argument, or it just prints its own --help and never loads main.js —
+  // only a packaged executable can be told to just run with --mcp-server on
+  // its own. See main.js's registrationInfo handler for why.
+  const args = isPackaged ? ['--mcp-server'] : [appPath, '--mcp-server'];
+
+  const codeCommand = `claude mcp add timebuddy-incident-investigator -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
+  $('claudeCodeCommand').textContent = codeCommand;
+
+  const desktopSnippet = JSON.stringify(
+    {
+      mcpServers: {
+        'timebuddy-incident-investigator': {
+          command: execPath,
+          args,
+        },
+      },
+    },
+    null,
+    2,
+  );
+  $('claudeDesktopSnippet').textContent = desktopSnippet;
+
+  if (!isPackaged) {
+    const note = document.createElement('p');
+    note.className = 'subtitle';
+    note.textContent =
+      'Running from a dev checkout, not a packaged build — these commands include the app directory as an ' +
+      'explicit argument, which a packaged install won\'t need.';
+    $('claudeCodeCommand').insertAdjacentElement('beforebegin', note);
+  }
+
+  $('copyClaudeCodeBtn').addEventListener('click', () => navigator.clipboard.writeText(codeCommand));
+  $('copyClaudeDesktopBtn').addEventListener('click', () => navigator.clipboard.writeText(desktopSnippet));
+}
+
+loadRegistrationInfo();
 renderConnections();

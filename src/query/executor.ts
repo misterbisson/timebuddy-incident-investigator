@@ -2,7 +2,7 @@ import type { Config } from '../config.js';
 import type { GrafanaClient } from '../grafana/client.js';
 import type { DsQueryRequest, DsQueryResponse, DsQueryTarget } from '../grafana/types.js';
 import type { ResolvedTarget } from '../dashboards/panelQueries.js';
-import { clampMaxDataPoints, enforceWindowLimit } from '../security/limits.js';
+import { clampMaxDataPoints, clampSeriesPoints, enforceWindowLimit } from '../security/limits.js';
 import type { TimeWindow } from './windows.js';
 
 export interface SeriesPoint {
@@ -14,6 +14,8 @@ export interface QuerySeries {
   refId: string;
   labels: Record<string, string>;
   points: SeriesPoint[];
+  /** Untruncated point count. Larger than points.length when the datasource ignored maxDataPoints and this series was downsampled. */
+  pointsTotal: number;
 }
 
 export interface WindowQueryResult {
@@ -23,7 +25,7 @@ export interface WindowQueryResult {
   errors: Record<string, string>;
 }
 
-function buildDsQueryTarget(target: ResolvedTarget, maxDataPoints: number): DsQueryTarget {
+export function buildDsQueryTarget(target: ResolvedTarget, maxDataPoints: number): DsQueryTarget {
   if (!target.datasourceUid) {
     throw new Error(`Target ${target.refId} has no resolvable datasource uid`);
   }
@@ -57,7 +59,7 @@ function parseFrames(response: DsQueryResponse): { series: QuerySeries[]; errors
           t: t as number,
           v: (values[i] as number | null) ?? null,
         }));
-        series.push({ refId: frame.schema.refId ?? refId, labels: field.labels ?? {}, points });
+        series.push({ refId: frame.schema.refId ?? refId, labels: field.labels ?? {}, points, pointsTotal: points.length });
       });
     }
   }
@@ -81,7 +83,7 @@ export async function executeQueryWindow(
   };
   const response = await client.queryDs(request);
   const { series, errors } = parseFrames(response);
-  return { window, series, errors };
+  return { window, series: clampSeriesPoints(series, config), errors };
 }
 
 /** Executes the same targets across several windows (incident + baselines) in parallel. */

@@ -26,6 +26,17 @@ export interface PanelTarget {
   [key: string]: unknown;
 }
 
+/** A Grafana "data link" — a URL template with macros like ${__from}/${__to}/${__data.fields["X"]}, resolved client-side in the Grafana UI when a row/point is clicked. */
+export interface PanelDataLinkConfig {
+  title?: string;
+  url: string;
+}
+
+export interface FieldConfigOverride {
+  matcher?: { id?: string; options?: unknown };
+  properties?: Array<{ id: string; value: unknown }>;
+}
+
 export interface Panel {
   id: number;
   title?: string;
@@ -33,6 +44,14 @@ export interface Panel {
   datasource?: DatasourceRef | string | null;
   targets?: PanelTarget[];
   panels?: Panel[]; // row/nested panels
+  fieldConfig?: {
+    /** Applies to every field. */
+    defaults?: { links?: PanelDataLinkConfig[] };
+    /** Applies only to fields matched by e.g. { id: 'byName', options: '<field name>' }. */
+    overrides?: FieldConfigOverride[];
+  };
+  /** Populated for a "text" panel (type: 'text'); its markdown/HTML body. */
+  options?: { content?: string; mode?: string };
 }
 
 export interface TemplateVariableOption {
@@ -61,6 +80,8 @@ export interface DashboardJson {
   panels?: Panel[];
   templating?: { list?: TemplateVariable[] };
   time?: { from: string; to: string };
+  /** Bumped by Grafana on every save; used to detect a changed dashboard without diffing its body. */
+  version?: number;
 }
 
 export interface DashboardGetResponse {
@@ -70,7 +91,15 @@ export interface DashboardGetResponse {
     folderTitle?: string;
     url?: string;
     slug?: string;
+    updated?: string;
   };
+}
+
+/** `GET /api/folders/:uid`. `parentUid` is only present when nested folders are enabled and this isn't a root folder. */
+export interface FolderInfo {
+  uid: string;
+  title: string;
+  parentUid?: string;
 }
 
 export interface SearchResultItem {
@@ -146,6 +175,11 @@ export interface RulerAlertQuery {
   relativeTimeRange?: { from: number; to: number };
 }
 
+/**
+ * The shape of a single rule from the provisioning API
+ * (`/api/v1/provisioning/alert-rules/{uid}`, see GrafanaClient.getAlertRuleByUid)
+ * — annotations/labels live directly on this object there.
+ */
 export interface RulerAlertRule {
   uid: string;
   title: string;
@@ -159,7 +193,21 @@ export interface RulerAlertRule {
 export interface RulerRuleGroup {
   name: string;
   folderUid?: string;
-  rules: Array<{ grafana_alert: RulerAlertRule; for?: string }>;
+  /**
+   * The bulk ruler API (`/api/ruler/grafana/api/v1/rules`, see
+   * GrafanaClient.getRuleGroups) nests each rule differently from the
+   * provisioning API above: annotations/labels are siblings of
+   * grafana_alert, not fields on it — grafana_alert itself only carries
+   * uid/title/condition/data/... Confirmed against a real Grafana instance;
+   * getting this wrong means every rule's annotations read as undefined
+   * with no error, which is exactly what happened before this was fixed.
+   */
+  rules: Array<{
+    grafana_alert: Omit<RulerAlertRule, 'annotations' | 'labels' | 'for'>;
+    annotations?: Record<string, string>;
+    labels?: Record<string, string>;
+    for?: string;
+  }>;
 }
 
 export interface GrafanaAnnotation {

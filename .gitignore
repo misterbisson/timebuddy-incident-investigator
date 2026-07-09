@@ -23,3 +23,6 @@ dist/
 # Local env and runtime data (alert store, metric index cache, audit log)
 .env
 .data/
+
+# macOS Finder metadata
+.DS_Store

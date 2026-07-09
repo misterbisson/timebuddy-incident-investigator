@@ -20,6 +20,12 @@ describe('computeStats', () => {
     expect(stats.count).toBe(0);
     expect(Number.isNaN(stats.mean)).toBe(true);
   });
+
+  it('counts non-zero, non-null points separately from count', () => {
+    const stats = computeStats([{ t: 0, v: 0 }, { t: 1, v: null }, { t: 2, v: 0 }, { t: 3, v: 5 }]);
+    expect(stats.count).toBe(3);
+    expect(stats.nonZeroCount).toBe(1);
+  });
 });
 
 describe('compareToBaseline', () => {
@@ -52,6 +58,35 @@ describe('compareToBaseline', () => {
   it('reports insufficient-data when the incident series itself is empty', () => {
     const result = compareToBaseline([], [{ label: 'prior-hour', points: points([1, 2, 3]) }]);
     expect(result.classification).toBe('insufficient-data');
+    expect(result.briefExcursions).toEqual([]);
+  });
+
+  it('finds a brief excursion even when the window-mean classification calls it common (the diluted-mean case)', () => {
+    // A near-constant health signal (1 = healthy) that's briefly fully down
+    // for 3 points inside a 200-point window. The dip is real, but averaged
+    // over the whole window it barely moves the mean.
+    const values = Array.from({ length: 200 }, () => 1);
+    values[100] = 0;
+    values[101] = 0;
+    values[102] = 0;
+    const incident = points(values);
+    const controls = [
+      { label: 'prior-hour', points: points(Array.from({ length: 50 }, () => 1)) },
+      { label: 'same-hour-yesterday', points: points(Array.from({ length: 50 }, () => 1)) },
+    ];
+    const result = compareToBaseline(incident, controls);
+
+    expect(result.classification).toBe('common-during-normal-operations');
+    expect(result.briefExcursions).toEqual([
+      { startMs: 100 * 60_000, endMs: 102 * 60_000, durationMs: 2 * 60_000, minValue: 0, maxValue: 0, pointCount: 3 },
+    ]);
+  });
+
+  it('reports no brief excursions when nothing deviates from the baseline', () => {
+    const incident = points(Array.from({ length: 50 }, () => 1));
+    const controls = [{ label: 'prior-hour', points: points(Array.from({ length: 50 }, () => 1)) }];
+    const result = compareToBaseline(incident, controls);
+    expect(result.briefExcursions).toEqual([]);
   });
 });
 

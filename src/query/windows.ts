@@ -66,3 +66,33 @@ export function computeWindows(params: ComputeWindowsParams): WindowSet {
 export function windowDurationMs(w: TimeWindow): number {
   return w.toMs - w.fromMs;
 }
+
+export function windowsOverlap(a: TimeWindow, b: TimeWindow): boolean {
+  return a.fromMs < b.toMs && b.fromMs < a.toMs;
+}
+
+/**
+ * A control window is a fixed-offset *shift* of the incident window, not a
+ * fixed-length "quiet period" — so a control's offset (e.g. prior-hour's 1h)
+ * can be smaller than the incident's own duration, in which case that
+ * "control" mostly overlaps the incident itself and is really just
+ * re-sampling the anomaly, not a baseline. Pooling it in anyway silently
+ * drags a baseline comparison toward "looks normal." Splits items (each
+ * carrying its own window) into the ones safe to use and the excluded labels,
+ * so a caller can both drop them from analysis and report what was excluded.
+ */
+export function excludeOverlapping<T extends { window: TimeWindow }>(
+  incident: TimeWindow,
+  items: T[],
+): { kept: T[]; excludedLabels: string[] } {
+  const kept: T[] = [];
+  const excludedLabels: string[] = [];
+  for (const item of items) {
+    if (windowsOverlap(incident, item.window)) {
+      excludedLabels.push(item.window.label);
+    } else {
+      kept.push(item);
+    }
+  }
+  return { kept, excludedLabels };
+}

@@ -1,44 +1,73 @@
-# Grafana connection manager
+# Grafana connection manager (and the MCP server itself)
 
-A small Electron app for managing the Grafana connections used by the
-`timebuddy-incident-investigator` MCP server, so each person authenticates as themselves
-(a personal Bearer token or their own Basic-auth username/password) instead of everyone
-sharing one admin-provisioned service-account token — and so an environment with more
-than one Grafana endpoint (per region/tier, etc.) can have all of them registered in one
-place.
+One Electron app, two modes:
 
-Its connection-list UI and auth model are adapted from
+- Launched normally (double-click, `npm run dev`/`npm start`), it's a small GUI for
+  managing Grafana connections, so each person authenticates as themselves (a personal
+  Bearer token or their own Basic-auth username/password) instead of everyone sharing one
+  admin-provisioned service-account token — and so an environment with more than one
+  Grafana endpoint (per region/tier, etc.) can have all of them registered in one place.
+- Launched with a `--mcp-server` flag — which is how Claude Code/Desktop should be
+  configured to run it — it skips the window entirely and *is* the
+  `timebuddy-incident-investigator` MCP server, talking to its client over stdio.
+
+Both modes are the same binary and the same process type, which is what lets connection
+secrets stay `safeStorage`-encrypted end to end: there's no separate server process that
+can't call `safeStorage`, so there's never a reason to write a credential to disk in
+plaintext.
+
+The connection-list UI and auth model are adapted from
 [Time Buddy](https://github.com/Liquescent-Development/time-buddy) — see
 [`../NOTICE.md`](../NOTICE.md) for what was and wasn't carried over. Unlike Time Buddy,
-this app is scoped to connection management only: no query IDE, no AI analytics, no
-charting.
+this app is scoped to connection management (plus being the MCP server): no query IDE, no
+AI analytics, no charting.
 
 ## Running
 
 ```bash
 cd electron
-npm install
-npm run dev
+npm install        # also links the root engine package via the npm workspace
+npm run dev         # builds the root package, then opens the GUI
+```
+
+To run in MCP-server mode directly (what Claude Code/Desktop will do):
+
+```bash
+electron . --mcp-server
 ```
 
 ## How it stores data
 
-Connections and credentials live under Electron's per-OS `userData` directory (shown in
-the app's UI, with a "copy path" button). Three files:
+Connections live under Electron's per-OS `userData` directory (shown in the app's UI,
+with a "copy path" button), in two files:
 
-- `connections.json` — non-secret metadata (name, URL, auth type, etc.). Read by both
-  this app and the MCP server.
-- `secrets.enc.json` — this app's own working copy of tokens/passwords, encrypted with
-  Electron's `safeStorage` (backed by the OS keychain: macOS Keychain, Windows DPAPI, or
-  libsecret on Linux). Only this app ever reads it.
-- `credentials.json` — the MCP server's read path. `safeStorage` is an Electron-only
-  API, so a plain Node process can't decrypt `secrets.enc.json`; this file is a
-  `0600`-permissioned plaintext hand-off instead, the same posture as `~/.aws/credentials`
-  or a kubeconfig. This is the one deliberate gap in "everything is encrypted" — flagged
-  here rather than glossed over.
+- `connections.json` — non-secret metadata (name, URL, auth type, etc.), plaintext (it
+  holds nothing sensitive).
+- `secrets.enc.json` — every token/password, `safeStorage`-encrypted (backed by the OS
+  keychain: macOS Keychain, Windows DPAPI, or libsecret on Linux). Decrypted only
+  in-memory, only inside this same process, when `--mcp-server` mode needs to build a
+  Grafana client — the decrypted form is never written back to disk.
 
-## Pointing the MCP server at this app's connections
+## Registering with Claude
 
-Set `GRAFANA_CONNECTIONS_DIR` in the MCP server's environment to the directory shown in
-this app's UI (defaults to `<DATA_DIR>/connections` if unset). See the root
-[`README.md`](../README.md) for the full setup flow.
+Once you've added your connections, the app's "Register with Claude" section shows a
+ready-to-run `claude mcp add` command (Claude Code) and a ready-to-paste `mcpServers` JSON
+snippet (Claude Desktop), both pointing at this app's own executable path with
+`--mcp-server`. See the root [`README.md`](../README.md) for the full setup flow.
+
+## Testing
+
+`test/mcpServerMode.mjs` seeds a connection directly through `connectionStore.js` (bypassing
+the GUI), then spawns this app's real binary in `--mcp-server` mode using the actual
+`@modelcontextprotocol/sdk` `Client`/`StdioClientTransport` — the same mechanism a real MCP
+client uses — and confirms `tools/list` returns all 8 tools and a tool call reaches a real
+network attempt using the seeded, `safeStorage`-decrypted credential (not a
+connection-resolution error). Run it with:
+
+```bash
+node test/mcpServerMode.mjs
+```
+
+No live Grafana instance is required; the seeded connection points at a placeholder URL
+specifically so the test can assert the call got *past* connection resolution, not that it
+succeeded against a real Grafana.

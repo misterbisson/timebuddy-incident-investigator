@@ -4,6 +4,9 @@ import type { ToolContext } from './registerAll.js';
 import { resolveAlertContext } from '../alerts/ingest.js';
 import { getLatestWebhook, getWebhookByFingerprint } from '../webhook/store.js';
 import { resolveConnection } from '../connections/resolve.js';
+import { dashboardUrlFor } from './shared.js';
+import { resolveProductContext } from '../knowledge/lookup.js';
+import type { ProductKnowledge } from '../knowledge/types.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -33,7 +36,12 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
         'to dashboard UID, panel ID, labels, annotations, threshold, and time range, and produces a one-line ' +
         '"what fired and why" summary. When multiple Grafana connections are configured, also resolves which one ' +
         'the alert belongs to (by matching the alert\'s URL host, or the explicit "connection" param) and returns ' +
-        'it as resolvedConnectionId — pass that as "connection" on every subsequent tool call for this incident.',
+        'it as resolvedConnectionId — pass that as "connection" on every subsequent tool call for this incident. ' +
+        'Also returns "dashboardUrl", a ready-to-click link to the resolved dashboard/panel/time-window — always ' +
+        'share this link when referencing the dashboard, even if the alert itself already carried a URL. When a ' +
+        'folder in this Grafana estate publishes a "Timebuddy knowledge" dashboard (see README), also returns ' +
+        '"knowledge" - product-specific context (matched via the resolved dashboard\'s tags or the alert\'s own ' +
+        'labels) worth folding into your answer. Absent when nothing was published; this is purely additive.',
       inputSchema: {
         webhookPayload: z.unknown().optional().describe('A full Grafana Alertmanager webhook JSON body (has an "alerts" array)'),
         alertJson: z.unknown().optional().describe('A single pasted alert object (labels/annotations/status/...)'),
@@ -88,9 +96,56 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
             }
           }
 
+          // Synthesized fresh even when the alert already carried a
+          // panelURL/dashboardURL, since a webhook/pasted-JSON alert linked
+          // only via __dashboardUid__/__panelId__ annotations often has no
+          // URL at all — this is the one place that's guaranteed to produce
+          // a clickable link whenever a dashboard/panel was resolved.
+          const parseMsOrUndefined = (iso: string | undefined): number | undefined => {
+            if (!iso) return undefined;
+            const parsed = Date.parse(iso);
+            return Number.isFinite(parsed) ? parsed : undefined;
+          };
+          const dashboardUrl =
+            resolvedConnectionId && alertContext.dashboardUid
+              ? dashboardUrlFor(registry, resolvedConnectionId, alertContext.dashboardUid, {
+                  panelId: alertContext.panelId,
+                  fromMs: parseMsOrUndefined(alertContext.startsAt),
+                  toMs: parseMsOrUndefined(alertContext.endsAt),
+                  variables: alertContext.variables,
+                })
+              : undefined;
+
+          let knowledge: ProductKnowledge | undefined;
+          if (resolvedConnectionId && alertContext.dashboardUid) {
+            try {
+              const client = registry.get(resolvedConnectionId);
+              const { dashboard, meta } = await client.getDashboard(alertContext.dashboardUid);
+              const candidateKeys = [...(dashboard.tags ?? []), ...Object.values(alertContext.labels ?? {})];
+              knowledge = await resolveProductContext(client, config, resolvedConnectionId, {
+                startFolderUid: meta.folderUid,
+                candidateKeys,
+              });
+            } catch (err) {
+              // A knowledge-dashboard lookup failure is a nice-to-have gone
+              // missing, not a reason to fail an otherwise-successful alert
+              // resolution — degrade to "no knowledge attached" plus a
+              // warning, same as the connection-resolution fallback above.
+              alertContext.warnings.push(
+                `Could not check for a product knowledge dashboard: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+
           const redacted = redact(alertContext, config.redactionPatterns);
-          const result = { summary: summarize(alertContext), alertContext: redacted, resolvedConnectionId };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+          const result = {
+            summary: summarize(alertContext),
+            alertContext: redacted,
+            resolvedConnectionId,
+            dashboardUrl,
+            knowledge: knowledge ? redact(knowledge, config.redactionPatterns) : undefined,
+          };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
         });
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };

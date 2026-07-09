@@ -15,10 +15,6 @@ function secretsFilePath() {
   return path.join(storageDir(), 'secrets.enc.json');
 }
 
-function credentialsFilePath() {
-  return path.join(storageDir(), 'credentials.json');
-}
-
 function readJson(filePath, fallback) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -50,22 +46,31 @@ function decryptSecret(encoded) {
 }
 
 /**
- * Writes credentials.json, the MCP server's read path — 0600-permissioned
- * plaintext, because a plain Node stdio process can't call safeStorage.
- * This is the one deliberate tradeoff in this design: Electron's own copy
- * (secrets.enc.json) stays OS-keychain-encrypted; this hand-off file is the
- * same posture as ~/.aws/credentials or a kubeconfig. See NOTICE.md.
+ * Builds the fully-populated GrafanaConnection[] the MCP engine needs
+ * (secrets included), decrypting via safeStorage entirely in memory. This
+ * is only ever called from this same Electron process's headless
+ * --mcp-server mode (see main.js) — the return value is never written back
+ * to disk in any form, so no plaintext secret exists anywhere, ever.
  */
-function rewriteCredentialsFile(connections, secretsFile) {
-  const credentials = {};
-  for (const conn of connections) {
-    const encoded = secretsFile.secrets[conn.id];
-    if (!encoded) continue;
-    credentials[conn.id] = decryptSecret(encoded);
-  }
-  const file = { version: 1, credentials };
-  fs.writeFileSync(credentialsFilePath(), JSON.stringify(file, null, 2), { encoding: 'utf8', mode: 0o600 });
-  fs.chmodSync(credentialsFilePath(), 0o600);
+function getConnectionsForEngine() {
+  const { connections } = readConnectionsFile();
+  const { secrets } = readSecretsFile();
+
+  return connections.map((meta) => {
+    const encoded = secrets[meta.id];
+    const secret = encoded ? decryptSecret(encoded) : undefined;
+    return {
+      id: meta.id,
+      name: meta.name,
+      url: meta.url,
+      authType: meta.authType,
+      matchHosts: meta.matchHosts,
+      tlsVerify: meta.tlsVerify,
+      token: secret?.authType === 'bearer' ? secret.token : undefined,
+      username: secret?.authType === 'basic' ? secret.username : meta.username,
+      password: secret?.authType === 'basic' ? secret.password : undefined,
+    };
+  });
 }
 
 /** Non-secret connection list for the UI table — never includes a password/token. */
@@ -120,7 +125,6 @@ function upsertConnection(draft) {
   fs.mkdirSync(storageDir(), { recursive: true });
   fs.writeFileSync(connectionsFilePath(), JSON.stringify(connectionsFile, null, 2), 'utf8');
   fs.writeFileSync(secretsFilePath(), JSON.stringify(secretsFile, null, 2), 'utf8');
-  rewriteCredentialsFile(connectionsFile.connections, secretsFile);
 
   return { ...meta, hasSecret: Boolean(secretsFile.secrets[id]) };
 }
@@ -134,12 +138,11 @@ function deleteConnection(id) {
 
   fs.writeFileSync(connectionsFilePath(), JSON.stringify(connectionsFile, null, 2), 'utf8');
   fs.writeFileSync(secretsFilePath(), JSON.stringify(secretsFile, null, 2), 'utf8');
-  rewriteCredentialsFile(connectionsFile.connections, secretsFile);
 }
 
 module.exports = {
-  storageDir,
   listConnectionsForDisplay,
   upsertConnection,
   deleteConnection,
+  getConnectionsForEngine,
 };

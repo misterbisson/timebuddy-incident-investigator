@@ -7,7 +7,8 @@ import { computeStats, detectOnset } from '../analysis/baseline.js';
 import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../analysis/correlation.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { resolvePanelForWindow, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -33,12 +34,16 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         'strength, label overlap with the primary alert, and how closely their anomaly onset lines up with the ' +
         'primary\'s — a triage heuristic for blast radius, not a statistical proof of causation. When ' +
         'auto-discovering (candidates omitted), searches every configured Grafana connection, not just the ' +
-        'primary panel\'s.',
+        'primary panel\'s. A "$__all" selection on the primary panel\'s own variables is best-effort live-resolved ' +
+        '(e.g. an InfluxQL "SHOW TAG VALUES" query variable); when that can\'t be done it falls back to matching ' +
+        'everything and the variable name is listed in the top-level "unresolvedAllVariables" (omitted when empty) — ' +
+        'candidate panels are unaffected, since those already use each dashboard\'s own saved current values.',
       inputSchema: {
         primaryDashboardUid: z.string(),
         primaryPanelId: z.number(),
-        startsAtMs: z.number(),
-        endsAtMs: z.number().optional(),
+        primaryPanelTitle: z.string().optional().describe('Exact panel title — required only when primaryPanelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
+        startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time'),
+        endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601'),
         primaryLabels: z.record(z.string()).optional().describe('Alert labels, used for relevance ranking'),
         candidates: z
           .array(z.object({ dashboardUid: z.string(), panelId: z.number(), connectionId: z.string().optional() }))
@@ -50,31 +55,57 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
       },
       annotations: { readOnlyHint: true, title: 'Detect correlated anomalies' },
     },
-    async ({ primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit, connection }) => {
+    async ({ primaryDashboardUid, primaryPanelId, primaryPanelTitle, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit, connection }) => {
+      let primaryConnectionId: string | undefined;
       try {
         return await withAudit(
           'detect_correlated_anomalies',
           { primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs },
           config,
           async () => {
-            const { client: primaryClient, connectionId: primaryConnectionId } = resolveToolClient(registry, { connection });
+            const { client: primaryClient, connectionId } = resolveToolClient(registry, { connection });
+            primaryConnectionId = connectionId;
             const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets: [] });
+            // Fail fast, before running a single Grafana query, rather than
+            // executing an accidentally-huge window across every candidate —
+            // see execute_query_window for why. Only fires when endsAtMs was
+            // omitted.
+            const sizeWarning = windowSizeWarning(startsAtMs, endsAtMs, windowSet.incident.toMs);
+            if (sizeWarning) {
+              throw new Error(`${sizeWarning} No query was executed.`);
+            }
             const overrides = variableOverrides ?? {};
+
+            // Live-resolve any "$__all" query-type variable once, using the incident
+            // window — same rationale as execute_query_window: a baseline window
+            // resolving to a different value list than the incident window would
+            // break the comparison. Scoped to the primary panel only; auto-discovered
+            // candidate panels below already use {} overrides / saved current values.
+            const { dashboard: primaryDashboard } = await primaryClient.getDashboard(primaryDashboardUid);
+            const primaryVariables = primaryDashboard.templating?.list ?? [];
+            const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(
+              primaryClient,
+              primaryVariables,
+              overrides,
+              windowSet.incident,
+            );
 
             const primaryResolved = await resolvePanelForWindow(
               primaryClient,
               primaryDashboardUid,
               primaryPanelId,
-              overrides,
+              resolvedOverrides,
               windowSet.incident,
+              primaryPanelTitle,
             );
             const primaryIncident = await executeQueryWindow(primaryClient, primaryResolved.targets, windowSet.incident, config);
             const primaryPreWindowResolved = await resolvePanelForWindow(
               primaryClient,
               primaryDashboardUid,
               primaryPanelId,
-              overrides,
+              resolvedOverrides,
               windowSet.preWindow,
+              primaryPanelTitle,
             );
             const primaryPreWindow = await executeQueryWindow(primaryClient, primaryPreWindowResolved.targets, windowSet.preWindow, config);
 
@@ -92,7 +123,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
 
             let candidateRefs: CandidateRef[];
             if (candidates) {
-              candidateRefs = candidates.map((c) => ({ ...c, connectionId: c.connectionId ?? primaryConnectionId }));
+              candidateRefs = candidates.map((c) => ({ ...c, connectionId: c.connectionId ?? connectionId }));
             } else {
               const metricNames = new Set(
                 primaryResolved.panel.targets.flatMap((t) => extractQueryInfo(t.raw).metricNames),
@@ -107,20 +138,20 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               );
               for (const outcome of perConnection) {
                 if (outcome.status !== 'fulfilled') continue;
-                const { connectionId, index } = outcome.value;
+                const { connectionId: entryConnectionId, index } = outcome.value;
                 for (const metric of metricNames) {
                   for (const entry of index.entriesByMetric[metric] ?? []) {
                     if (
-                      connectionId === primaryConnectionId &&
+                      entryConnectionId === connectionId &&
                       entry.dashboardUid === primaryDashboardUid &&
                       entry.panelId === primaryPanelId
                     ) {
                       continue;
                     }
-                    const key = `${connectionId}|${entry.dashboardUid}|${entry.panelId}`;
+                    const key = `${entryConnectionId}|${entry.dashboardUid}|${entry.panelId}`;
                     if (seen.has(key)) continue;
                     seen.add(key);
-                    candidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId, connectionId });
+                    candidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId, connectionId: entryConnectionId });
                   }
                 }
               }
@@ -157,18 +188,36 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               }
             }
 
-            const ranked = rankCorrelatedAnomalies(candidateInputs, effectiveLabels, primaryOnsetMs);
+            const ranked = rankCorrelatedAnomalies(candidateInputs, effectiveLabels, primaryOnsetMs).map((r) => ({
+              ...r,
+              url: r.connectionId
+                ? dashboardUrlFor(registry, r.connectionId, r.dashboardUid, {
+                    panelId: r.panelId,
+                    fromMs: windowSet.incident.fromMs,
+                    toMs: windowSet.incident.toMs,
+                  })
+                : undefined,
+            }));
             const result = {
-              primaryConnectionId,
+              primaryConnectionId: connectionId,
+              primaryUrl: dashboardUrlFor(registry, connectionId, primaryDashboardUid, {
+                panelId: primaryPanelId,
+                fromMs: windowSet.incident.fromMs,
+                toMs: windowSet.incident.toMs,
+              }),
               primaryOnsetMs,
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),
+              ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
             };
-            return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns), null, 2) }] };
+            return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
           },
         );
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const url = primaryConnectionId
+          ? dashboardUrlFor(registry, primaryConnectionId, primaryDashboardUid, { panelId: primaryPanelId })
+          : undefined;
+        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
       }
     },
   );

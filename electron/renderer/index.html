@@ -15,12 +15,6 @@
       </p>
     </header>
 
-    <section class="storage-info">
-      <span id="storageDir">Storage location: (loading...)</span>
-      <button id="copyStorageDirBtn" type="button">Copy path</button>
-      <button id="openStorageDirBtn" type="button">Reveal in Finder</button>
-    </section>
-
     <section class="toolbar">
       <button id="addConnectionBtn" type="button" class="primary">Add connection</button>
     </section>
@@ -39,6 +33,26 @@
         <tr class="empty-row"><td colspan="5">No connections yet. Click "Add connection" to create one.</td></tr>
       </tbody>
     </table>
+
+    <section class="registration-info">
+      <h2>Register with Claude</h2>
+      <p class="subtitle">
+        Run once per Claude client you use. Both point at this same app, launched in MCP-server mode — add
+        your connections above first.
+      </p>
+
+      <div class="registration-block">
+        <h3>Claude Code</h3>
+        <pre id="claudeCodeCommand">(loading...)</pre>
+        <button id="copyClaudeCodeBtn" type="button">Copy command</button>
+      </div>
+
+      <div class="registration-block">
+        <h3>Claude Desktop</h3>
+        <pre id="claudeDesktopSnippet">(loading...)</pre>
+        <button id="copyClaudeDesktopBtn" type="button">Copy JSON</button>
+      </div>
+    </section>
 
     <div id="connectionModal" class="modal hidden">
       <div class="modal-content">
