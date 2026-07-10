@@ -4,7 +4,7 @@ import { flattenPanels } from '../dashboards/panelQueries.js';
 import { findKnowledgeDashboardUid, KNOWLEDGE_TAG } from './folderWalk.js';
 import { parseKnowledgePanel, productKeyFromPanelTitle } from './parsePanel.js';
 import {
-  isFolderWalkStale,
+  isCacheEntryStale,
   loadKnowledgeCache,
   saveKnowledgeCache,
   ROOT_FOLDER_KEY,
@@ -26,11 +26,22 @@ async function resolveKnowledgeDashboardUid(
 ): Promise<string | undefined> {
   const key = folderKey(startFolderUid);
   const cached = cache.folderWalk[key];
-  if (!isFolderWalkStale(cached, FOLDER_WALK_TTL_MS)) return cached!.knowledgeDashboardUid ?? undefined;
+  if (!isCacheEntryStale(cached, FOLDER_WALK_TTL_MS)) return cached!.knowledgeDashboardUid ?? undefined;
 
   const found = await findKnowledgeDashboardUid(client, startFolderUid);
   cache.folderWalk[key] = { knowledgeDashboardUid: found ?? null, resolvedAt: Date.now() };
   return found;
+}
+
+/** Same TTL/rationale as the folder-walk cache above — this list just backs the connection-wide fallback instead of the walk-up. */
+async function listAllKnowledgeDashboardUids(client: GrafanaClient, cache: KnowledgeCache): Promise<string[]> {
+  if (!isCacheEntryStale(cache.allKnowledgeDashboards, FOLDER_WALK_TTL_MS)) {
+    return cache.allKnowledgeDashboards!.uids;
+  }
+  const results = await client.searchDashboards({ tag: [KNOWLEDGE_TAG] });
+  const uids = results.map((r) => r.uid);
+  cache.allKnowledgeDashboards = { uids, resolvedAt: Date.now() };
+  return uids;
 }
 
 /**
@@ -71,12 +82,13 @@ export interface ResolveProductContextInput {
 /**
  * Single entry point for both get_alert_context's automatic attachment and
  * the standalone get_product_context tool. Returns undefined on any kind of
- * miss (no knowledge dashboard anywhere in the folder chain, or no panel
- * matching any candidate key) — silent, by design, so an adopter who has
- * published nothing sees no difference. Propagates real transport errors
- * (e.g. Grafana unreachable) rather than swallowing them here; callers for
- * whom this lookup is a non-essential enhancement (get_alert_context) should
- * catch and degrade gracefully themselves rather than fail their whole call.
+ * miss (no knowledge dashboard anywhere in the folder chain and none
+ * elsewhere on the connection either, or no panel matching any candidate
+ * key) — silent, by design, so an adopter who has published nothing sees no
+ * difference. Propagates real transport errors (e.g. Grafana unreachable)
+ * rather than swallowing them here; callers for whom this lookup is a
+ * non-essential enhancement (get_alert_context) should catch and degrade
+ * gracefully themselves rather than fail their whole call.
  */
 export async function resolveProductContext(
   client: GrafanaClient,
@@ -86,13 +98,39 @@ export async function resolveProductContext(
 ): Promise<ProductKnowledge | undefined> {
   const cache = await loadKnowledgeCache(config, connectionId);
   try {
-    const dashboardUid = await resolveKnowledgeDashboardUid(client, cache, input.startFolderUid);
-    if (!dashboardUid) return undefined;
+    const tryDashboard = async (dashboardUid: string): Promise<ProductKnowledge | undefined> => {
+      const panels = await loadDashboardPanels(client, cache, dashboardUid);
+      for (const key of input.candidateKeys) {
+        const entry = panels[key.trim().toLowerCase()];
+        if (entry) return { dashboardUid, matchedKey: key, ...entry };
+      }
+      return undefined;
+    };
 
-    const panels = await loadDashboardPanels(client, cache, dashboardUid);
-    for (const key of input.candidateKeys) {
-      const entry = panels[key.trim().toLowerCase()];
-      if (entry) return { dashboardUid, matchedKey: key, ...entry };
+    const walkedUid = await resolveKnowledgeDashboardUid(client, cache, input.startFolderUid);
+    if (walkedUid) {
+      const found = await tryDashboard(walkedUid);
+      if (found) return found;
+    }
+
+    // The folder walk-up is a scoping optimization, not a guarantee: an
+    // alerting/SLI dashboard is often filed in a folder tree that's never an
+    // ancestor of wherever knowledge actually got published (e.g. an
+    // "SLI-SLO" alert-rule folder vs. a separate "product-status" tree) —
+    // confirmed against a real investigation where this silently produced
+    // "no knowledge attached" even though the product's knowledge panel
+    // existed elsewhere on the same connection, forcing a manual, connection-
+    // wide get_product_context retry. Check every other knowledge dashboard
+    // before giving up. If more than one matches the same key (e.g. the same
+    // product published under two folder trees), take the first found —
+    // a same-product duplicate is still far more useful than nothing, and
+    // get_product_context (no dashboardUid) remains available to see every
+    // match when that distinction actually matters.
+    const allUids = await listAllKnowledgeDashboardUids(client, cache);
+    for (const uid of allUids) {
+      if (uid === walkedUid) continue; // already tried above
+      const found = await tryDashboard(uid);
+      if (found) return found;
     }
     return undefined;
   } finally {

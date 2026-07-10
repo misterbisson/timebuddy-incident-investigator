@@ -134,6 +134,19 @@ skill exists to handle for them.
    `candidates` to let it auto-discover across the metric index. This tells you what else moved
    around the same time, which is often the actual answer to "is this real."
 
+   **Call it once per `scope` tier, narrowest first, and report each tier's result before widening —
+   don't just call `all-connections` straight away.** Default (`scope: "product"`) checks the primary
+   dashboard plus whatever its own Timebuddy knowledge panel declares as its ops/SLI dashboards and
+   dependencies (falls back to just the primary dashboard alone if no knowledge is published for this
+   alert — check `productScope.source` to know which happened). Say what that tier found — even
+   "nothing correlated within the product" is a real, useful thing to report mid-investigation, not
+   just a step to silently pass through. Then look at `nextScope`/`nextScopeCandidateCount` in the
+   response: if `nextScopeCandidateCount` is `0`, there's nothing to gain by widening, say so and
+   move on. Otherwise call again with `scope: "connection"`, report that, and only escalate to
+   `scope: "all-connections"` — the broadest and most expensive tier — when you still don't have a
+   confident answer. Skipping straight to the widest scope costs several times the query volume for
+   no benefit when the narrower tier would have already answered it.
+
    **This only checks *other dashboards* — it won't catch a primary panel that's a narrow/synthetic
    signal (e.g. a health-check-style series) overstating impact that sibling panels on the *same*
    dashboard would reveal.** Especially for an undirected "find errors"/"what's going on" investigation

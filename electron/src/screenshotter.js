@@ -77,6 +77,13 @@ function createScreenshotter() {
       const activity = trackNetworkActivity(ses);
       const win = new BrowserWindow({
         show: false,
+        frame: false,
+        // Without this, width/height size the OS window frame rather than
+        // the page's own viewport - on macOS the (invisible, since show:
+        // false) title bar still ate ~28px of the requested height, so
+        // Grafana rendered the panel into a viewport shorter than the
+        // caller asked for and the capture came out silently cropped.
+        useContentSize: true,
         width,
         height,
         webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
@@ -102,6 +109,8 @@ function createScreenshotter() {
       const activity = trackNetworkActivity(ses);
       const win = new BrowserWindow({
         show: false,
+        frame: false,
+        useContentSize: true,
         width: 1400,
         height: 1000,
         webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },

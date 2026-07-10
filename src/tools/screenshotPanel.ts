@@ -16,8 +16,8 @@ import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 import type { Config } from '../config.js';
 
-const DEFAULT_WIDTH = 1000;
-const DEFAULT_HEIGHT = 500;
+const DEFAULT_WIDTH = 1600;
+const DEFAULT_HEIGHT = 900;
 
 /**
  * Persists the captured PNG to disk and returns its absolute path. The MCP

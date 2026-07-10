@@ -88,7 +88,7 @@ describe('resolveProductContext', () => {
     expect(result?.panelId).toBe(5);
   });
 
-  it('caches an explicit "nothing found" folder-walk result so a repeat call does not search again', async () => {
+  it('caches an explicit "nothing found" result (folder-walk and the connection-wide fallback) so a repeat call does not search again', async () => {
     let searchCalls = 0;
     const client = {
       searchDashboards: async () => {
@@ -105,7 +105,95 @@ describe('resolveProductContext', () => {
     const cfg = config();
 
     await resolveProductContext(client, cfg, 'conn1', { startFolderUid: 'folder-a', candidateKeys: ['x'] });
+    // First call costs two searches: the folder walk-up, then the connection-wide
+    // fallback once that comes up empty. Both are cached, so the repeat call below
+    // must not add any further searches.
+    expect(searchCalls).toBe(2);
     await resolveProductContext(client, cfg, 'conn1', { startFolderUid: 'folder-a', candidateKeys: ['x'] });
+    expect(searchCalls).toBe(2);
+  });
+
+  it('falls back to every other knowledge dashboard on the connection when the folder walk-up finds none', async () => {
+    // Simulates the real gap this fallback closes: the alerting dashboard's
+    // own folder tree ("folder-a") has no knowledge dashboard anywhere in its
+    // ancestor chain, but one is published elsewhere on the connection.
+    const dash: DashboardGetResponse = {
+      dashboard: { uid: 'kb-elsewhere', title: 'K', version: 1, panels: [{ id: 5, title: 'timebuddy: manageddatabase', type: 'text', options: { content: '```json\n{"owner":"db-team"}\n```\n', mode: 'markdown' } }] },
+      meta: { folderUid: 'other-folder' },
+    };
+    const client = {
+      // The folder walk-up's own scoped search (folderUid: 'folder-a') finds
+      // nothing; only the fallback's unscoped search (folderUid omitted) sees
+      // the dashboard published under a different folder tree.
+      searchDashboards: async ({ folderUid }: { folderUid?: string }) =>
+        folderUid === 'folder-a' ? [] : [{ uid: 'kb-elsewhere', title: 'K', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'other-folder', url: '' }],
+      getFolder: async (uid: string) => {
+        throw new GrafanaApiError('not found', 404, `/api/folders/${uid}`);
+      },
+      getDashboard: async (uid: string) => {
+        if (uid !== 'kb-elsewhere') throw new Error(`not found: ${uid}`);
+        return dash;
+      },
+    } as unknown as GrafanaClient;
+
+    const result = await resolveProductContext(client, config(), 'conn1', {
+      startFolderUid: 'folder-a',
+      candidateKeys: ['manageddatabase'],
+    });
+    expect(result?.dashboardUid).toBe('kb-elsewhere');
+    expect(result?.matchedKey).toBe('manageddatabase');
+  });
+
+  it('falls back to another knowledge dashboard when the walked one exists but has no matching panel', async () => {
+    const walkedDash = knowledgeDashboard(1, [{ id: 1, title: 'timebuddy: compute', content: '```json\n{}\n```\n' }]);
+    const elsewhereDash: DashboardGetResponse = {
+      dashboard: { uid: 'kb-elsewhere', title: 'K2', version: 1, panels: [{ id: 2, title: 'timebuddy: manageddatabase', type: 'text', options: { content: '```json\n{"owner":"db-team"}\n```\n', mode: 'markdown' } }] },
+      meta: { folderUid: 'other-folder' },
+    };
+    const client = {
+      searchDashboards: async ({ folderUid }: { folderUid?: string }) =>
+        folderUid === 'folder-a'
+          ? [{ uid: 'kb1', title: 'K', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'folder-a', url: '' }]
+          : [
+              { uid: 'kb1', title: 'K', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'folder-a', url: '' },
+              { uid: 'kb-elsewhere', title: 'K2', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'other-folder', url: '' },
+            ],
+      getFolder: async (uid: string) => {
+        throw new GrafanaApiError('not found', 404, `/api/folders/${uid}`);
+      },
+      getDashboard: async (uid: string) => (uid === 'kb1' ? walkedDash : elsewhereDash),
+    } as unknown as GrafanaClient;
+
+    const result = await resolveProductContext(client, config(), 'conn1', {
+      startFolderUid: 'folder-a',
+      candidateKeys: ['manageddatabase'],
+    });
+    expect(result?.dashboardUid).toBe('kb-elsewhere');
+  });
+
+  it('does not search further once the folder walk-up already found a match', async () => {
+    const dash = knowledgeDashboard(1, [
+      { id: 5, title: 'timebuddy: block-storage', content: '```json\n{"owner":"storage-team"}\n```\n' },
+    ]);
+    let searchCalls = 0;
+    const client = {
+      searchDashboards: async () => {
+        searchCalls++;
+        return [{ uid: 'kb1', title: 'K', type: 'dash-db', tags: ['timebuddy-knowledge'], folderUid: 'folder-a', url: '' }];
+      },
+      getFolder: async (uid: string) => {
+        throw new GrafanaApiError('not found', 404, `/api/folders/${uid}`);
+      },
+      getDashboard: async () => dash,
+    } as unknown as GrafanaClient;
+
+    const result = await resolveProductContext(client, config(), 'conn1', {
+      startFolderUid: 'folder-a',
+      candidateKeys: ['block-storage'],
+    });
+    expect(result?.matchedKey).toBe('block-storage');
+    // Folder walk-up's own search (for the knowledge-tagged dashboard) counts
+    // as one call; the fallback path must not run a second one on a hit.
     expect(searchCalls).toBe(1);
   });
 

@@ -16,12 +16,25 @@ export interface DashboardCacheEntry {
   panels: Record<string, CachedPanelContent>;
 }
 
+export interface AllDashboardsCacheEntry {
+  uids: string[];
+  resolvedAt: number;
+}
+
 export interface KnowledgeCache {
   schemaVersion: number;
   /** Keyed by the starting folder's uid, or ROOT_FOLDER_KEY. */
   folderWalk: Record<string, FolderWalkCacheEntry>;
   /** Keyed by knowledge dashboard uid. */
   dashboards: Record<string, DashboardCacheEntry>;
+  /**
+   * Every timebuddy-knowledge-tagged dashboard uid on the connection, refreshed on the
+   * same TTL as folderWalk. Backs resolveProductContext's connection-wide fallback (for
+   * when the folder walk-up finds nothing usable) so a repeat call within the TTL
+   * doesn't re-run that search every time. Optional so an older cache file on disk
+   * (written before this field existed) is simply treated as stale, not invalid.
+   */
+  allKnowledgeDashboards?: AllDashboardsCacheEntry;
 }
 
 export const CURRENT_SCHEMA_VERSION = 1;
@@ -58,7 +71,8 @@ export async function saveKnowledgeCache(cache: KnowledgeCache, config: Config, 
   await writeFile(cacheFilePath(config, connectionId), JSON.stringify(cache, null, 2), 'utf8');
 }
 
-export function isFolderWalkStale(entry: FolderWalkCacheEntry | undefined, ttlMs: number, nowMs = Date.now()): boolean {
+/** Shared staleness check for any cache entry carrying a resolvedAt timestamp (folder-walk results, the all-dashboards list). */
+export function isCacheEntryStale(entry: { resolvedAt: number } | undefined, ttlMs: number, nowMs = Date.now()): boolean {
   if (!entry) return true;
   return nowMs - entry.resolvedAt > ttlMs;
 }

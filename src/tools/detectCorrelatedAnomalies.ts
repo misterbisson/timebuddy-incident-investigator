@@ -9,6 +9,8 @@ import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
 import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
+import { resolveProductContext } from '../knowledge/lookup.js';
+import { extractRelatedDashboardUids } from '../knowledge/relatedDashboards.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -23,6 +25,15 @@ interface CandidateRef {
   connectionId: string;
 }
 
+const SCOPE_ORDER = ['product', 'connection', 'all-connections'] as const;
+type Scope = (typeof SCOPE_ORDER)[number];
+
+function tierOf(ref: CandidateRef, primaryConnectionId: string, productDashboardUids: Set<string>): Scope {
+  if (ref.connectionId === primaryConnectionId && productDashboardUids.has(ref.dashboardUid)) return 'product';
+  if (ref.connectionId === primaryConnectionId) return 'connection';
+  return 'all-connections';
+}
+
 export function registerDetectCorrelatedAnomalies(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
     'detect_correlated_anomalies',
@@ -33,11 +44,18 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         'reverse index via find_related_dashboards) over the same incident window. Ranks candidates by deviation ' +
         'strength, label overlap with the primary alert, and how closely their anomaly onset lines up with the ' +
         'primary\'s — a triage heuristic for blast radius, not a statistical proof of causation. When ' +
-        'auto-discovering (candidates omitted), searches every configured Grafana connection, not just the ' +
-        'primary panel\'s. A "$__all" selection on the primary panel\'s own variables is best-effort live-resolved ' +
-        '(e.g. an InfluxQL "SHOW TAG VALUES" query variable); when that can\'t be done it falls back to matching ' +
-        'everything and the variable name is listed in the top-level "unresolvedAllVariables" (omitted when empty) — ' +
-        'candidate panels are unaffected, since those already use each dashboard\'s own saved current values.',
+        'auto-discovering (candidates omitted), checks one "scope" tier per call, narrowest first: "product" (the ' +
+        'primary dashboard, plus its own ops/SLI dashboards and declared dependencies from its Timebuddy knowledge ' +
+        'panel when one is published for this alert — falls back to just the primary dashboard alone when none ' +
+        'is), then "connection" (everything else on the same Grafana connection), then "all-connections" (every ' +
+        'other configured connection) — call narrower scopes first, report what each found, and only widen when ' +
+        'warranted (nothing correlated yet, or the blast radius is still unclear); the response\'s "nextScope"/' +
+        '"nextScopeCandidateCount" tells you whether widening further would even find anything. Pass an explicit ' +
+        '"candidates" array to bypass scoping and check exactly those panels in one call instead. A "$__all" ' +
+        'selection on the primary panel\'s own variables is best-effort live-resolved (e.g. an InfluxQL "SHOW TAG ' +
+        'VALUES" query variable); when that can\'t be done it falls back to matching everything and the variable ' +
+        'name is listed in the top-level "unresolvedAllVariables" (omitted when empty) — candidate panels are ' +
+        'unaffected, since those already use each dashboard\'s own saved current values.',
       inputSchema: {
         primaryDashboardUid: z.string(),
         primaryPanelId: z.number(),
@@ -48,14 +66,22 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         candidates: z
           .array(z.object({ dashboardUid: z.string(), panelId: z.number(), connectionId: z.string().optional() }))
           .optional()
-          .describe('Panels to check; omit to auto-discover via the metric reverse index. connectionId defaults to the primary panel\'s connection.'),
+          .describe('Panels to check; omit to auto-discover via the metric reverse index, staged by "scope". connectionId defaults to the primary panel\'s connection.'),
+        scope: z
+          .enum(SCOPE_ORDER)
+          .optional()
+          .default('product')
+          .describe(
+            'Which auto-discovery tier to check this call, narrowest first: "product" (default), "connection", ' +
+              'then "all-connections". Ignored when "candidates" is given explicitly.',
+          ),
         variableOverrides: z.record(z.array(z.string())).optional(),
         limit: z.number().optional().default(10),
         connection: z.string().optional().describe('Connection id for the primary panel, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Detect correlated anomalies' },
     },
-    async ({ primaryDashboardUid, primaryPanelId, primaryPanelTitle, startsAtMs, endsAtMs, primaryLabels, candidates, variableOverrides, limit, connection }) => {
+    async ({ primaryDashboardUid, primaryPanelId, primaryPanelTitle, startsAtMs, endsAtMs, primaryLabels, candidates, scope, variableOverrides, limit, connection }) => {
       let primaryConnectionId: string | undefined;
       try {
         return await withAudit(
@@ -81,7 +107,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             // resolving to a different value list than the incident window would
             // break the comparison. Scoped to the primary panel only; auto-discovered
             // candidate panels below already use {} overrides / saved current values.
-            const { dashboard: primaryDashboard } = await primaryClient.getDashboard(primaryDashboardUid);
+            const { dashboard: primaryDashboard, meta: primaryMeta } = await primaryClient.getDashboard(primaryDashboardUid);
             const primaryVariables = primaryDashboard.templating?.list ?? [];
             const { overrides: resolvedOverrides, unresolvedAllVariables } = await materializeVariables(
               primaryClient,
@@ -122,14 +148,44 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             const effectiveLabels = primaryLabels ?? {};
 
             let candidateRefs: CandidateRef[];
+            let scopeInfo:
+              | { scope: Scope; productScope: { dashboardUids: string[]; source: 'knowledge-dependencies' | 'same-dashboard-only' }; nextScope?: Scope; nextScopeCandidateCount?: number }
+              | undefined;
             if (candidates) {
               candidateRefs = candidates.map((c) => ({ ...c, connectionId: c.connectionId ?? connectionId }));
             } else {
+              // Resolve the "product" tier's dashboard set: this alert's own
+              // Timebuddy knowledge panel (when one is published) declares its
+              // own ops/SLI dashboards plus explicit dependencies (e.g. MDS's
+              // compute/blockstorage/gage/iam/hermes) — the most accurate
+              // available signal for "what belongs to this product," far
+              // better than guessing from folder structure (an alerting/SLI
+              // dashboard is often filed in a folder shared by many unrelated
+              // products). Falls back to just the primary dashboard alone
+              // when nothing's published for this alert.
+              const productDashboardUids = new Set<string>([primaryDashboardUid]);
+              let productScopeSource: 'knowledge-dependencies' | 'same-dashboard-only' = 'same-dashboard-only';
+              try {
+                const candidateKeys = [...(primaryDashboard.tags ?? []), ...Object.values(effectiveLabels)];
+                const knowledge = candidateKeys.length
+                  ? await resolveProductContext(primaryClient, config, connectionId, { startFolderUid: primaryMeta.folderUid, candidateKeys })
+                  : undefined;
+                if (knowledge) {
+                  const related = extractRelatedDashboardUids(knowledge.json);
+                  if (related.length) productScopeSource = 'knowledge-dependencies';
+                  for (const uid of related) productDashboardUids.add(uid);
+                }
+              } catch {
+                // Best-effort scoping enhancement — a lookup failure just
+                // leaves the product tier at its same-dashboard-only fallback,
+                // same as "nothing published for this alert".
+              }
+
               const metricNames = new Set(
                 primaryResolved.panel.targets.flatMap((t) => extractQueryInfo(t.raw).metricNames),
               );
               const seen = new Set<string>();
-              candidateRefs = [];
+              const allCandidateRefs: CandidateRef[] = [];
               const perConnection = await Promise.allSettled(
                 registry.list().map(async (conn) => {
                   const index = await getOrBuildIndex(registry.get(conn.id), config, conn.id, {});
@@ -151,12 +207,23 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                     const key = `${entryConnectionId}|${entry.dashboardUid}|${entry.panelId}`;
                     if (seen.has(key)) continue;
                     seen.add(key);
-                    candidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId, connectionId: entryConnectionId });
+                    allCandidateRefs.push({ dashboardUid: entry.dashboardUid, panelId: entry.panelId, connectionId: entryConnectionId });
                   }
                 }
               }
+
+              const tiered: Record<Scope, CandidateRef[]> = { product: [], connection: [], 'all-connections': [] };
+              for (const ref of allCandidateRefs) tiered[tierOf(ref, connectionId, productDashboardUids)].push(ref);
+
+              const requestedScope = scope ?? 'product';
+              const nextScope = SCOPE_ORDER[SCOPE_ORDER.indexOf(requestedScope) + 1];
+              candidateRefs = tiered[requestedScope].slice(0, Math.max(limit! * 3, 15));
+              scopeInfo = {
+                scope: requestedScope,
+                productScope: { dashboardUids: [...productDashboardUids], source: productScopeSource },
+                ...(nextScope ? { nextScope, nextScopeCandidateCount: tiered[nextScope].length } : {}),
+              };
             }
-            candidateRefs = candidateRefs.slice(0, Math.max(limit! * 3, 15));
 
             const candidateInputs: (CorrelationCandidateInput & { connectionId: string })[] = [];
             const settled = await Promise.allSettled(
@@ -206,6 +273,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                 toMs: windowSet.incident.toMs,
               }),
               primaryOnsetMs,
+              ...(scopeInfo ?? {}),
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),
               ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
