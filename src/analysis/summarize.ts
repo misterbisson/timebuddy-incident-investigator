@@ -73,11 +73,17 @@ export function summarizeFindings(input: SummarizeFindingsInput): FindingsReport
 
   const unusual = input.baseline.classification === 'statistically-unusual';
   const zAbs = Math.abs(input.baseline.zScore);
+  const briefExcursions = input.baseline.briefExcursions ?? [];
 
   if (unusual && input.thresholdCrossed !== false) {
     reasons.push(
       `Incident window deviates ${zAbs.toFixed(1)}σ from the pooled baseline (prior hour/day/week), which is statistically unusual.`,
     );
+    if (briefExcursions.length > 0) {
+      reasons.push(
+        `${briefExcursions.length} brief excursion(s) beyond the baseline's 2σ band corroborate this independently of the whole-window mean.`,
+      );
+    }
     if (confirmedCorrelated.length > 0) {
       reasons.push(
         `${confirmedCorrelated.length} correlated signal(s) moved in the same window: ${confirmedCorrelated
@@ -104,6 +110,35 @@ export function summarizeFindings(input: SummarizeFindingsInput): FindingsReport
   }
 
   if (!unusual) {
+    // A whole-window mean can dilute a short, real event inside a long analysis window down
+    // below zThreshold (averaging is the wrong operation for "did something briefly go to
+    // zero") — briefExcursions catches this independently, at a fixed, more sensitive 2σ bar.
+    // Never call this a false positive while ignoring evidence that contradicts it; report
+    // inconclusive instead and point at exactly what needs a human/agent look before deciding.
+    if (briefExcursions.length > 0) {
+      reasons.push(
+        'Incident window\'s whole-window mean falls within normal baseline variation, but ' +
+          `${briefExcursions.length} brief excursion(s) crossed the baseline's stricter 2σ band — a short, real ` +
+          'event inside a long window can be diluted below the whole-window threshold. Check these excursions\' ' +
+          'times/magnitudes (and any correlated volume) before treating this as a false positive.',
+      );
+      return {
+        verdict: 'inconclusive',
+        confidence: 'low',
+        reasons,
+        triggeredSignal: {
+          alertName: input.alertName,
+          labels: input.labels,
+          zScore: input.baseline.zScore,
+          classification: input.baseline.classification,
+        },
+        correlatedSignals: confirmedCorrelated,
+        likelyScope: describeScope(confirmedCorrelated),
+        evidence: input.evidence,
+        missingData,
+      };
+    }
+
     reasons.push('Incident window falls within normal baseline variation (prior hour/day/week) for this signal.');
     return {
       verdict: 'likely-false-positive',

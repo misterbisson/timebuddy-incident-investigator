@@ -177,7 +177,14 @@ skill exists to handle for them.
    Grafana-side fix, not something any tool call here can resolve.
 
 6. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
-   and an `evidence` array of dashboard/panel links you gathered along the way. Every tool above
+   and an `evidence` array of dashboard/panel links you gathered along the way. Pass
+   `validate_baseline`'s `briefExcursions` through in `baseline` unchanged, not just the top-level
+   `classification` — `summarize_findings` now folds that in itself, so it never returns
+   `likely-false-positive` while brief excursions are sitting right there unexamined (it returns
+   `inconclusive` instead when the window-mean says "common" but excursions say otherwise). This
+   used to be entirely on the calling agent to catch by eye, per the `briefExcursions` guidance in
+   step 3 above — passing the array through now makes that check real instead of easy to forget.
+   Every tool above
    (`get_alert_context`'s `dashboardUrl`, `execute_query_window`/`validate_baseline`'s `url`,
    `detect_correlated_anomalies`'s `primaryUrl` and each correlated result's `url`,
    `find_related_dashboards`'s per-match `url`) already returns a ready-to-click Grafana link at

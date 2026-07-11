@@ -19,6 +19,15 @@ const seriesStatsSchema = z.object({
   nonZeroCount: z.number().optional().default(0),
 });
 
+const thresholdRunSchema = z.object({
+  startMs: z.number(),
+  endMs: z.number(),
+  durationMs: z.number(),
+  minValue: z.number(),
+  maxValue: z.number(),
+  pointCount: z.number(),
+});
+
 const baselineSchema = z.object({
   incidentStats: seriesStatsSchema,
   controlStats: z.array(z.object({ label: z.string(), stats: seriesStatsSchema })),
@@ -26,6 +35,11 @@ const baselineSchema = z.object({
   pooledBaselineStddev: nullableNumber,
   zScore: nullableNumber,
   classification: z.enum(['statistically-unusual', 'common-during-normal-operations', 'insufficient-data']),
+  briefExcursions: z
+    .array(thresholdRunSchema)
+    .optional()
+    .default([])
+    .describe('Carry over validate_baseline\'s own "briefExcursions" for this series unchanged - a whole-window classification of "common" can still hide a real, brief, diluted event that only this array would catch.'),
 });
 
 const correlationResultSchema = z.object({
@@ -59,6 +73,9 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
       description:
         'Assembles the outputs of get_alert_context, validate_baseline, and detect_correlated_anomalies into a ' +
         'structured verdict (real-anomaly / likely-false-positive / inconclusive) with an evidence-linked bundle. ' +
+        'Pass validate_baseline\'s own "briefExcursions" through in "baseline" unchanged - a whole-window mean can ' +
+        'dilute a real, brief, severe event into looking "common", so this never returns likely-false-positive when ' +
+        'brief excursions are present, even if the whole-window classification alone would suggest it. ' +
         'This tool does deterministic rule-based classification only — it does not generate prose. Write the ' +
         'human-readable incident note yourself from the returned reasons/evidence, so every claim in it traces back ' +
         'to a specific dashboard/panel/query result.',
@@ -109,9 +126,7 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
               pooledBaselineStddev: toNaN(args.baseline.pooledBaselineStddev),
               zScore: toNaN(args.baseline.zScore),
               classification: args.baseline.classification,
-              // Not part of this tool's input schema yet — summarizeFindings()
-              // doesn't read it, only validate_baseline's own output does.
-              briefExcursions: [],
+              briefExcursions: args.baseline.briefExcursions,
             },
           };
           const report = summarizeFindings(input);
