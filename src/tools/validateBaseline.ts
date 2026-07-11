@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows, excludeOverlapping, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -14,7 +14,7 @@ function seriesKey(series: QuerySeries): string {
   return `${series.refId}|${labelStr}`;
 }
 
-export function registerValidateBaseline(server: McpServer, { registry, config }: ToolContext): void {
+export function registerValidateBaseline(server: McpServer, { registry, config, activityLog }: ToolContext): void {
   server.registerTool(
     'validate_baseline',
     {
@@ -83,8 +83,8 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
 
           const executed = await Promise.all(
             allWindows.map(async (window) => {
-              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
-              return { window, result: await executeQueryWindow(client, targets, window, config) };
+              const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
+              return { window, panel, result: await executeQueryWindow(client, targets, window, config) };
             }),
           );
           const [incidentExec, ...allControlExecs] = executed;
@@ -135,6 +135,15 @@ export function registerValidateBaseline(server: McpServer, { registry, config }
             panelId,
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
+          });
+          recordActivity(registry, activityLog, {
+            toolName: 'validate_baseline',
+            connectionId,
+            dashboardUid,
+            dashboardTitle: dashboard.title,
+            panelId,
+            panelTitle: incidentExec!.panel.title,
+            url,
           });
           const result = {
             url,

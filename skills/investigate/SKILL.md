@@ -142,8 +142,12 @@ skill exists to handle for them.
    "nothing correlated within the product" is a real, useful thing to report mid-investigation, not
    just a step to silently pass through. Then look at `nextScope`/`nextScopeCandidateCount` in the
    response: if `nextScopeCandidateCount` is `0`, there's nothing to gain by widening, say so and
-   move on. Otherwise call again with `scope: "connection"`, report that, and only escalate to
-   `scope: "all-connections"` — the broadest and most expensive tier — when you still don't have a
+   move on. If `nextScopeCandidateCount` is missing instead of a number, it's genuinely unknown (not
+   zero) — widening to `scope: "connection"`/`"all-connections"` involves crawling every dashboard on
+   a connection the first time (or once its cache goes stale), which this tool only ever does for
+   connections the requested scope actually needs, so it won't pay that cost just to answer a count
+   you didn't ask for. Otherwise call again with `scope: "connection"`, report that, and only escalate
+   to `scope: "all-connections"` — the broadest and most expensive tier — when you still don't have a
    confident answer. Skipping straight to the widest scope costs several times the query volume for
    no benefit when the narrower tier would have already answered it.
 

@@ -24,9 +24,11 @@ src/
   analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
   knowledge/      looks up an adopter-published "Timebuddy knowledge" dashboard/panel for a product, with caching
+  activity/       in-memory log of panels actually queried/screenshotted, surfaced by the Electron app's Activity window
   tools/          the 13 MCP tools (12 always registered, screenshot_panel only in the Electron app), each a thin wrapper over the modules above
 electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
-                  server (launched with --mcp-server instead of opening a window) — see electron/README.md
+                  server (launched with --mcp-server instead of opening a window) — see electron/README.md,
+                  including its "Activity window" section for the live investigation log/viewer
 ```
 
 ## Tools

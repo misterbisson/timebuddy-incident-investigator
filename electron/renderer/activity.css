@@ -1,0 +1,144 @@
+/* Activity window layout — same dark palette as styles.css, laid out as a sidebar + detail pane instead of a table. */
+
+.activity-body {
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.activity-layout {
+  display: flex;
+  height: 100vh;
+}
+
+.activity-sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  border-right: 1px solid #2d2d30;
+  background-color: #1e1e1e;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.activity-sidebar-header {
+  padding: 16px 16px 12px;
+}
+
+.activity-sidebar-header h1 {
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.activity-list .empty-row {
+  padding: 24px 16px;
+  color: #9c9c9c;
+  font-size: 12px;
+}
+
+.activity-item {
+  padding: 8px 16px;
+  border-bottom: 1px solid #2d2d30;
+  cursor: pointer;
+}
+
+.activity-item:hover {
+  background-color: #2a2d2e;
+}
+
+.activity-item.selected {
+  background-color: #094771;
+}
+
+.activity-item-time {
+  font-size: 11px;
+  color: #9c9c9c;
+}
+
+.activity-item-title {
+  font-size: 13px;
+  color: #d4d4d4;
+  margin: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-item-meta {
+  font-size: 11px;
+  color: #9c9c9c;
+}
+
+.activity-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px 20px;
+}
+
+.activity-empty-state {
+  color: #9c9c9c;
+  font-size: 13px;
+  margin-top: 40px;
+  text-align: center;
+}
+
+.activity-detail-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.activity-detail-content.hidden,
+.activity-empty-state.hidden {
+  display: none;
+}
+
+.activity-detail-header h2 {
+  font-size: 16px;
+  margin: 0 0 4px;
+}
+
+.activity-detail-actions {
+  margin: 8px 0 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.activity-detail-view {
+  flex: 1;
+  overflow: auto;
+  background-color: #101010;
+  border: 1px solid #2d2d30;
+  border-radius: 4px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.activity-detail-view img {
+  max-width: 100%;
+  display: block;
+}
+
+.activity-detail-view img.hidden {
+  display: none;
+}
+
+.activity-detail-view webview {
+  width: 100%;
+  height: 100%;
+}
+
+.hidden {
+  display: none;
+}

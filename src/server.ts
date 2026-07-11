@@ -4,6 +4,7 @@ import type { Config, GrafanaConnection } from './config.js';
 import { loadConfig } from './config.js';
 import { ConnectionRegistry, type ConnectionsSource } from './grafana/registry.js';
 import type { Screenshotter } from './screenshot/types.js';
+import type { ActivityLog } from './activity/activityLog.js';
 import { registerAllTools } from './tools/registerAll.js';
 
 /**
@@ -21,6 +22,7 @@ export function createServer(
   source: ConnectionsSource,
   configOverrides: Partial<Config> = {},
   screenshotter?: Screenshotter,
+  activityLog?: ActivityLog,
 ): McpServer {
   const startupSnapshot = typeof source === 'function' ? source() : source;
   if (startupSnapshot.length === 0) {
@@ -38,7 +40,7 @@ export function createServer(
     version: '0.1.0',
   });
 
-  registerAllTools(server, { registry, config, screenshotter });
+  registerAllTools(server, { registry, config, screenshotter, activityLog });
   return server;
 }
 
@@ -52,8 +54,9 @@ export async function startMcpServer(
   source: ConnectionsSource,
   configOverrides: Partial<Config> = {},
   screenshotter?: Screenshotter,
+  activityLog?: ActivityLog,
 ): Promise<McpServer> {
-  const server = createServer(source, configOverrides, screenshotter);
+  const server = createServer(source, configOverrides, screenshotter, activityLog);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;
@@ -62,3 +65,6 @@ export async function startMcpServer(
 export type { Config, GrafanaConnection } from './config.js';
 export type { ConnectionsSource } from './grafana/registry.js';
 export type { Screenshotter, CapturePanelRequest } from './screenshot/types.js';
+export { createActivityLog } from './activity/activityLog.js';
+export type { ActivityLog, ActivityEntry } from './activity/activityLog.js';
+export { buildAuthHeader } from './grafana/client.js';

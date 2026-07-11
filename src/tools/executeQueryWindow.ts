@@ -5,7 +5,7 @@ import { computeWindows, windowsOverlap } from '../query/windows.js';
 import { executeQueryWindows, type WindowQueryResult } from '../query/executor.js';
 import { findThresholdRuns } from '../analysis/runs.js';
 import { computeStats } from '../analysis/baseline.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -44,7 +44,7 @@ function annotateSeries(
   };
 }
 
-export function registerExecuteQueryWindow(server: McpServer, { registry, config }: ToolContext): void {
+export function registerExecuteQueryWindow(server: McpServer, { registry, config, activityLog }: ToolContext): void {
   server.registerTool(
     'execute_query_window',
     {
@@ -130,9 +130,11 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
 
           // Variable values don't depend on the window, but $__interval/$timeFilter
           // do — resolve targets once per window rather than once overall.
+          let resolvedPanelTitle: string | undefined;
           const resultsPerWindow = await Promise.all(
             allWindows.map(async (window) => {
-              const { targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
+              const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
+              resolvedPanelTitle ??= panel.title;
               const [result] = await executeQueryWindows(client, targets, [window], config);
               return annotateSeries(result!, threshold, thresholdDirection, includePoints);
             }),
@@ -149,6 +151,15 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             panelId,
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
+          });
+          recordActivity(registry, activityLog, {
+            toolName: 'execute_query_window',
+            connectionId,
+            dashboardUid,
+            dashboardTitle: dashboard.title,
+            panelId,
+            panelTitle: resolvedPanelTitle,
+            url,
           });
           const result = {
             url,

@@ -10,7 +10,7 @@ import { mergeVariableOverrides } from '../dashboards/variables.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildSoloPanelUrl } from '../grafana/urlBuilder.js';
 import { enforceWindowLimit } from '../security/limits.js';
-import { dashboardUrlFor, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveToolClient, toolErrorText } from './shared.js';
 import { resolveRenderWindow } from './renderDashboard.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -38,7 +38,7 @@ async function saveScreenshot(png: Buffer, dashboardUid: string, panelId: number
 }
 
 export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { screenshotter: Screenshotter }): void {
-  const { registry, config, screenshotter } = ctx;
+  const { registry, config, screenshotter, activityLog } = ctx;
   server.registerTool(
     'screenshot_panel',
     {
@@ -156,8 +156,19 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
           });
           const savedTo = await saveScreenshot(png, dashboardUid, panelId, config);
 
+          const resultUrl = dashboardUrlFor(registry, connectionId, dashboardUid, { panelId, fromMs, toMs, variables: overrides });
+          recordActivity(registry, activityLog, {
+            toolName: 'screenshot_panel',
+            connectionId,
+            dashboardUid,
+            dashboardTitle: dashboard.title,
+            panelId,
+            panelTitle: panel.title,
+            url: resultUrl,
+            screenshotPath: savedTo,
+          });
           const result = {
-            url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId, fromMs, toMs, variables: overrides }),
+            url: resultUrl,
             dashboardUid,
             panelId,
             title: panel.title,

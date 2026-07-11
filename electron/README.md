@@ -48,6 +48,24 @@ with a "copy path" button), in two files:
   in-memory, only inside this same process, when `--mcp-server` mode needs to build a
   Grafana client — the decrypted form is never written back to disk.
 
+## Activity window
+
+While running in `--mcp-server` mode, this app also shows a companion "Timebuddy
+Activity" window — created the moment the first dashboard/panel is actually queried (not
+at process start, so nothing pops up before an investigation begins). It's a live,
+clickable log of what's being inspected: each entry is one panel a tool call actually
+pulled data from or screenshotted (not every dashboard/panel link a tool result happens to
+mention — see `src/tools/shared.ts`'s `recordActivity` for exactly which tool calls log an
+entry and why). Clicking an entry shows either the screenshot `screenshot_panel` saved for
+it, or a live, authenticated view of the real Grafana panel in an embedded `<webview>` —
+authenticated the same way `screenshotter.js`'s one-shot captures are (a connection's own
+bearer/basic header injected via `webRequest`), just against a long-lived, persistent
+session instead of a destroy-after-one-shot window (see `setupLiveViewSession` in
+`main.js`).
+
+The log is in-memory only, for this MCP-server process's lifetime — nothing is written to
+disk, and it resets on restart.
+
 ## Registering with Claude
 
 Once you've added your connections, the app's "Register with Claude" section shows a

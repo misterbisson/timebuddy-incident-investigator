@@ -149,7 +149,10 @@ describe('detect_correlated_anomalies scope tiering', () => {
     expect(connectionParsed.candidatesChecked).toBe(1);
     expect(connectionParsed.correlated.map((c: { dashboardUid: string }) => c.dashboardUid)).toEqual(['other-dash']);
     expect(connectionParsed.nextScope).toBe('all-connections');
-    expect(connectionParsed.nextScopeCandidateCount).toBe(1);
+    // conn2's index hasn't been built yet at this point (a "connection"-scope call never forces
+    // a build for connections beyond the primary - see detectCorrelatedAnomalies.ts), so the
+    // count for the next, wider tier is intentionally omitted rather than guessed.
+    expect(connectionParsed.nextScopeCandidateCount).toBeUndefined();
 
     const allConnections = (await call('detect_correlated_anomalies', { ...base, scope: 'all-connections' })) as { content: Array<{ text: string }> };
     const allParsed = JSON.parse(allConnections.content[0]!.text);
@@ -157,6 +160,13 @@ describe('detect_correlated_anomalies scope tiering', () => {
     expect(allParsed.candidatesChecked).toBe(1);
     expect(allParsed.correlated.map((c: { dashboardUid: string }) => c.dashboardUid)).toEqual(['dash2']);
     expect(allParsed.nextScope).toBeUndefined();
+
+    // Now that the all-connections call above has built and cached conn2's index, a later
+    // "connection"-scope call can report the next tier's count cheaply, from that cache, without
+    // forcing a fresh crawl.
+    const connectionScopeAgain = (await call('detect_correlated_anomalies', { ...base, scope: 'connection' })) as { content: Array<{ text: string }> };
+    const connectionAgainParsed = JSON.parse(connectionScopeAgain.content[0]!.text);
+    expect(connectionAgainParsed.nextScopeCandidateCount).toBe(1);
   });
 
   it('pulls a knowledge-declared dependency into the product tier instead of leaving it for the connection tier', async () => {
@@ -192,7 +202,9 @@ describe('detect_correlated_anomalies scope tiering', () => {
     const connectionParsed = JSON.parse(connectionScope.content[0]!.text);
     expect(connectionParsed.candidatesChecked).toBe(0);
     expect(connectionParsed.nextScope).toBe('all-connections');
-    expect(connectionParsed.nextScopeCandidateCount).toBe(1);
+    // Same reasoning as the other test above: conn2 was never indexed by the "product" call
+    // (which never needs any connection but the primary), so this hint is omitted, not guessed.
+    expect(connectionParsed.nextScopeCandidateCount).toBeUndefined();
   });
 
   it('ignores scope entirely when explicit candidates are given', async () => {

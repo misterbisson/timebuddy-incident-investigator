@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { buildMetricIndex } from '../src/index-builder/metricIndex.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildMetricIndex, getCachedIndexIfFresh, getOrBuildIndex } from '../src/index-builder/metricIndex.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
+import type { Config } from '../src/config.js';
 import type { DashboardGetResponse, RulerRuleGroup } from '../src/grafana/types.js';
 
 function fakeClient(
@@ -218,5 +222,63 @@ describe('buildMetricIndex', () => {
 
     const index = await buildMetricIndex(client);
     expect(index.dashboardsScanned).toBe(1);
+  });
+});
+
+describe('getOrBuildIndex / getCachedIndexIfFresh', () => {
+  let dataDir: string;
+
+  function config(): Config {
+    return {
+      connections: [],
+      tlsVerify: true,
+      requestTimeoutMs: 1000,
+      screenshotTimeoutMs: 45000,
+      maxConcurrency: 4,
+      maxLookbackHours: 720,
+      maxDataPoints: 2000,
+      redactionPatterns: [],
+      dataDir,
+      webhookPort: 4318,
+    };
+  }
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'get-or-build-index-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  function fakeClient(): { client: GrafanaClient; getDashboard: ReturnType<typeof vi.fn> } {
+    const getDashboard = vi.fn(async (uid: string) => ({ dashboard: { uid, title: uid, panels: [] }, meta: {} }));
+    const client = {
+      searchDashboards: async () => [{ uid: 'd1', title: 'D1', type: 'dash-db', tags: [], url: '' }],
+      listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
+      getDashboard,
+    } as unknown as GrafanaClient;
+    return { client, getDashboard };
+  }
+
+  it('builds and persists on a cache miss, then reuses the cached copy without re-crawling', async () => {
+    const { client, getDashboard } = fakeClient();
+    const first = await getOrBuildIndex(client, config(), 'conn1', {});
+    expect(first.dashboardsScanned).toBe(1);
+    expect(getDashboard).toHaveBeenCalledTimes(1);
+
+    const second = await getOrBuildIndex(client, config(), 'conn1', {});
+    expect(second).toEqual(first);
+    expect(getDashboard).toHaveBeenCalledTimes(1); // not called again - served from disk cache
+  });
+
+  it('getCachedIndexIfFresh never triggers a build - undefined on a miss, the cached copy once one exists', async () => {
+    const { client, getDashboard } = fakeClient();
+    expect(await getCachedIndexIfFresh(config(), 'conn1')).toBeUndefined();
+    expect(getDashboard).not.toHaveBeenCalled();
+
+    const built = await getOrBuildIndex(client, config(), 'conn1', {});
+    expect(await getCachedIndexIfFresh(config(), 'conn1')).toEqual(built);
   });
 });

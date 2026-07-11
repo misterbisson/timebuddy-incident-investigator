@@ -7,6 +7,7 @@ import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
 import { buildDashboardUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
+import type { ActivityLog } from '../activity/activityLog.js';
 
 /**
  * A time boundary as either a raw epoch-ms number or an ISO 8601 date/time
@@ -65,6 +66,34 @@ export function dashboardUrlFor(
   const connection = registry.list().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildDashboardUrl(connection.url, dashboardUid, opts);
+}
+
+/**
+ * Records one entry in the Electron app's Activity log (undefined/no-op in
+ * the standalone CLI, which has no window to show it in) — called only at
+ * the point a tool actually queries a specific panel's data or captures a
+ * screenshot, not every place a dashboard/panel URL happens to get built
+ * (fetch_dashboard's panel listing, an error-path link, a skipped/
+ * non-queryable panel) — those never actually reached Grafana for data, so
+ * logging them as "inspected" would be misleading.
+ */
+export function recordActivity(
+  registry: ConnectionRegistry,
+  activityLog: ActivityLog | undefined,
+  entry: {
+    toolName: string;
+    connectionId: string;
+    dashboardUid: string;
+    dashboardTitle?: string;
+    panelId?: number;
+    panelTitle?: string;
+    url?: string;
+    screenshotPath?: string;
+  },
+): void {
+  if (!activityLog) return;
+  const connectionName = registry.list().find((c) => c.id === entry.connectionId)?.name;
+  activityLog.record({ ...entry, connectionName });
 }
 
 /**

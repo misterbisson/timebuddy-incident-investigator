@@ -15,7 +15,7 @@ import { enforceWindowLimit, clampMaxDataPoints } from '../security/limits.js';
 import { buildSeriesColumnNames, frameToCsv, parseCsvLine, seriesToCsv } from '../export/csv.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildInspectDataUrl } from '../grafana/urlBuilder.js';
-import { dashboardUrlFor, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
 import { resolveRenderWindow } from './renderDashboard.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
@@ -87,7 +87,7 @@ async function saveCsv(csv: string, config: Config, dashboardUid: string, panelI
   return path;
 }
 
-export function registerExportPanelCsv(server: McpServer, { registry, config, screenshotter }: ToolContext): void {
+export function registerExportPanelCsv(server: McpServer, { registry, config, screenshotter, activityLog }: ToolContext): void {
   server.registerTool(
     'export_panel_csv',
     {
@@ -298,8 +298,18 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
             }
           }
 
+          const resultUrl = dashboardUrlFor(registry, connectionId, dashboardUid, { panelId, fromMs, toMs, variables: overrides });
+          recordActivity(registry, activityLog, {
+            toolName: 'export_panel_csv',
+            connectionId,
+            dashboardUid,
+            dashboardTitle: dashboard.title,
+            panelId,
+            panelTitle: panel.title,
+            url: resultUrl,
+          });
           const resultOut = {
-            url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId, fromMs, toMs, variables: overrides }),
+            url: resultUrl,
             dashboardUid,
             panelId,
             title: panel.title,

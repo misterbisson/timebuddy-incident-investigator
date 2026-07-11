@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import type { Screenshotter } from '../screenshot/types.js';
+import type { ActivityLog } from '../activity/activityLog.js';
 import { registerGetAlertContext } from './getAlertContext.js';
 import { registerGetProductContext } from './getProductContext.js';
 import { registerFetchDashboard } from './fetchDashboard.js';
@@ -21,6 +22,8 @@ export interface ToolContext {
   config: Config;
   /** Only supplied by the Electron app's --mcp-server mode; see screenshot/types.ts. */
   screenshotter?: Screenshotter;
+  /** Only supplied by the Electron app's --mcp-server mode, feeding its Activity window; see activity/activityLog.ts. */
+  activityLog?: ActivityLog;
 }
 
 export function registerAllTools(server: McpServer, ctx: ToolContext): void {

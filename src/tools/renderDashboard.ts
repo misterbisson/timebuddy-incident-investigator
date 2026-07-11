@@ -10,7 +10,7 @@ import { substituteTargetFields, mergeVariableOverrides } from '../dashboards/va
 import { executeQueryWindow } from '../query/executor.js';
 import { computeStats } from '../analysis/baseline.js';
 import { enforceWindowLimit } from '../security/limits.js';
-import { dashboardUrlFor, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -73,7 +73,7 @@ export function resolveRenderWindow(input: ResolveRenderWindowInput): { fromMs: 
   return { fromMs, toMs };
 }
 
-export function registerRenderDashboard(server: McpServer, { registry, config }: ToolContext): void {
+export function registerRenderDashboard(server: McpServer, { registry, config, activityLog }: ToolContext): void {
   server.registerTool(
     'render_dashboard',
     {
@@ -200,12 +200,22 @@ export function registerRenderDashboard(server: McpServer, { registry, config }:
                 })),
               );
               const result = await executeQueryWindow(client, targets, { label: 'render', fromMs, toMs }, config);
+              const url = dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides });
+              recordActivity(registry, activityLog, {
+                toolName: 'render_dashboard',
+                connectionId,
+                dashboardUid: dashboardUid!,
+                dashboardTitle: dashboard.title,
+                panelId: panel.panelId,
+                panelTitle: panel.title,
+                url,
+              });
               return {
                 panelId: panel.panelId,
                 title: panel.title,
                 type: panel.type,
                 hasTargets: true,
-                url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides }),
+                url,
                 targets: targets.map((t) => ({ refId: t.refId, datasourceUid: t.datasourceUid, resolvedQuery: t.raw })),
                 series: result.series.map((s) => {
                   const { points, ...rest } = s;

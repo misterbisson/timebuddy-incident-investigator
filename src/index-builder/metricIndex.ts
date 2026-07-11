@@ -179,7 +179,20 @@ export async function getOrBuildIndex(
     const cached = await loadIndex(config, connectionId);
     if (cached && !isStale(cached, opts.ttlMs ?? DEFAULT_TTL_MS)) return cached;
   }
+  // A full crawl (searchDashboards + getDashboard per dashboard) confirmed to take on the order
+  // of minutes per connection on a real estate (~600-860 dashboards) - without this, a caller has
+  // no way to tell "building the index" apart from "hung," since nothing else logs during it.
+  console.error(`[metric-index] Building index for connection "${connectionId}" (crawling all dashboards - this can take several minutes)...`);
+  const startedAt = Date.now();
   const fresh = await buildMetricIndex(client);
+  console.error(`[metric-index] Finished "${connectionId}": ${fresh.dashboardsScanned} dashboards scanned in ${Date.now() - startedAt}ms.`);
   await saveIndex(fresh, config, connectionId);
   return fresh;
+}
+
+/** Reads the on-disk cache without ever triggering a rebuild - returns undefined on a cache miss or stale entry rather than paying for a fresh crawl. For best-effort cross-connection hints where forcing a build isn't warranted. */
+export async function getCachedIndexIfFresh(config: Config, connectionId: string, ttlMs: number = DEFAULT_TTL_MS): Promise<MetricIndex | undefined> {
+  const cached = await loadIndex(config, connectionId);
+  if (cached && !isStale(cached, ttlMs)) return cached;
+  return undefined;
 }

@@ -5,9 +5,10 @@ import { computeWindows } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { computeStats, detectOnset } from '../analysis/baseline.js';
 import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../analysis/correlation.js';
-import { getOrBuildIndex } from '../index-builder/metricIndex.js';
+import { getCachedIndexIfFresh, getOrBuildIndex } from '../index-builder/metricIndex.js';
+import type { MetricIndex } from '../index-builder/store.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { dashboardUrlFor, epochMsSchema, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { resolveProductContext } from '../knowledge/lookup.js';
 import { extractRelatedDashboardUids } from '../knowledge/relatedDashboards.js';
@@ -34,7 +35,7 @@ function tierOf(ref: CandidateRef, primaryConnectionId: string, productDashboard
   return 'all-connections';
 }
 
-export function registerDetectCorrelatedAnomalies(server: McpServer, { registry, config }: ToolContext): void {
+export function registerDetectCorrelatedAnomalies(server: McpServer, { registry, config, activityLog }: ToolContext): void {
   server.registerTool(
     'detect_correlated_anomalies',
     {
@@ -50,8 +51,12 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         'is), then "connection" (everything else on the same Grafana connection), then "all-connections" (every ' +
         'other configured connection) — call narrower scopes first, report what each found, and only widen when ' +
         'warranted (nothing correlated yet, or the blast radius is still unclear); the response\'s "nextScope"/' +
-        '"nextScopeCandidateCount" tells you whether widening further would even find anything. Pass an explicit ' +
-        '"candidates" array to bypass scoping and check exactly those panels in one call instead. A "$__all" ' +
+        '"nextScopeCandidateCount" tells you whether widening further would even find anything - each connection\'s ' +
+        'metric index is crawled fresh from every dashboard the first time (or once its cache goes stale), which ' +
+        'can take minutes on a large Grafana estate, so this call only ever builds the index(es) the requested ' +
+        '"scope" actually needs; "nextScopeCandidateCount" is omitted (not guessed) when the next tier would need ' +
+        'a connection whose index isn\'t already built and cached - call that wider scope directly to find out. ' +
+        'Pass an explicit "candidates" array to bypass scoping and check exactly those panels in one call instead. A "$__all" ' +
         'selection on the primary panel\'s own variables is best-effort live-resolved (e.g. an InfluxQL "SHOW TAG ' +
         'VALUES" query variable); when that can\'t be done it falls back to matching everything and the variable ' +
         'name is listed in the top-level "unresolvedAllVariables" (omitted when empty) — candidate panels are ' +
@@ -145,6 +150,21 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               .filter((t): t is number => t !== undefined);
             const primaryOnsetMs = primaryOnsets.length ? Math.min(...primaryOnsets) : undefined;
 
+            const primaryUrl = dashboardUrlFor(registry, connectionId, primaryDashboardUid, {
+              panelId: primaryPanelId,
+              fromMs: windowSet.incident.fromMs,
+              toMs: windowSet.incident.toMs,
+            });
+            recordActivity(registry, activityLog, {
+              toolName: 'detect_correlated_anomalies',
+              connectionId,
+              dashboardUid: primaryDashboardUid,
+              dashboardTitle: primaryDashboard.title,
+              panelId: primaryPanelId,
+              panelTitle: primaryResolved.panel.title,
+              url: primaryUrl,
+            });
+
             const effectiveLabels = primaryLabels ?? {};
 
             let candidateRefs: CandidateRef[];
@@ -186,15 +206,41 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               );
               const seen = new Set<string>();
               const allCandidateRefs: CandidateRef[] = [];
-              const perConnection = await Promise.allSettled(
-                registry.list().map(async (conn) => {
-                  const index = await getOrBuildIndex(registry.get(conn.id), config, conn.id, {});
-                  return { connectionId: conn.id, index };
-                }),
-              );
-              for (const outcome of perConnection) {
-                if (outcome.status !== 'fulfilled') continue;
-                const { connectionId: entryConnectionId, index } = outcome.value;
+
+              const requestedScope = scope ?? 'product';
+              const nextScope = SCOPE_ORDER[SCOPE_ORDER.indexOf(requestedScope) + 1];
+              // The "product"/"connection" tiers only ever draw candidates from the primary
+              // connection's own index - only "all-connections" needs every configured
+              // connection's index, which means a full dashboard crawl per connection whose
+              // cache is missing/stale (confirmed in practice: ~13 minutes across 7
+              // connections/600-860 dashboards each). Building all of them up front made every
+              // narrow-scope call pay that cost regardless of what was actually asked for.
+              const otherConnections = registry.list().filter((c) => c.id !== connectionId);
+              const indexByConnection = new Map<string, MetricIndex>();
+              indexByConnection.set(connectionId, await getOrBuildIndex(registry.get(connectionId), config, connectionId, {}));
+
+              let haveAllOtherConnections = true;
+              if (requestedScope === 'all-connections') {
+                const rest = await Promise.allSettled(
+                  otherConnections.map(async (conn) => ({ connectionId: conn.id, index: await getOrBuildIndex(registry.get(conn.id), config, conn.id, {}) })),
+                );
+                for (const outcome of rest) {
+                  if (outcome.status === 'fulfilled') indexByConnection.set(outcome.value.connectionId, outcome.value.index);
+                  else haveAllOtherConnections = false;
+                }
+              } else if (nextScope === 'all-connections') {
+                // Only needed to report nextScopeCandidateCount below - use whatever's already
+                // cached and fresh, never force a rebuild just to populate a hint field.
+                const rest = await Promise.allSettled(
+                  otherConnections.map(async (conn) => ({ connectionId: conn.id, index: await getCachedIndexIfFresh(config, conn.id) })),
+                );
+                for (const outcome of rest) {
+                  if (outcome.status === 'fulfilled' && outcome.value.index) indexByConnection.set(outcome.value.connectionId, outcome.value.index);
+                  else haveAllOtherConnections = false;
+                }
+              }
+
+              for (const [entryConnectionId, index] of indexByConnection) {
                 for (const metric of metricNames) {
                   for (const entry of index.entriesByMetric[metric] ?? []) {
                     if (
@@ -215,13 +261,15 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               const tiered: Record<Scope, CandidateRef[]> = { product: [], connection: [], 'all-connections': [] };
               for (const ref of allCandidateRefs) tiered[tierOf(ref, connectionId, productDashboardUids)].push(ref);
 
-              const requestedScope = scope ?? 'product';
-              const nextScope = SCOPE_ORDER[SCOPE_ORDER.indexOf(requestedScope) + 1];
               candidateRefs = tiered[requestedScope].slice(0, Math.max(limit! * 3, 15));
               scopeInfo = {
                 scope: requestedScope,
                 productScope: { dashboardUids: [...productDashboardUids], source: productScopeSource },
-                ...(nextScope ? { nextScope, nextScopeCandidateCount: tiered[nextScope].length } : {}),
+                // Omit nextScopeCandidateCount rather than report an undercount when widening to
+                // "all-connections" and some other connection's cache wasn't already fresh (see
+                // above - we don't force a rebuild just to fill in this hint).
+                ...(nextScope && haveAllOtherConnections ? { nextScope, nextScopeCandidateCount: tiered[nextScope].length } : {}),
+                ...(nextScope && !haveAllOtherConnections ? { nextScope } : {}),
               };
             }
 
@@ -240,6 +288,19 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             for (const outcome of settled) {
               if (outcome.status !== 'fulfilled') continue;
               const { ref, dashboard, panel, incidentResult, preResult } = outcome.value;
+              recordActivity(registry, activityLog, {
+                toolName: 'detect_correlated_anomalies',
+                connectionId: ref.connectionId,
+                dashboardUid: ref.dashboardUid,
+                dashboardTitle: dashboard.title,
+                panelId: ref.panelId,
+                panelTitle: panel.title,
+                url: dashboardUrlFor(registry, ref.connectionId, ref.dashboardUid, {
+                  panelId: ref.panelId,
+                  fromMs: windowSet.incident.fromMs,
+                  toMs: windowSet.incident.toMs,
+                }),
+              });
               for (const series of incidentResult.series) {
                 const preSeries = preResult.series.find((s) => seriesKey(s) === seriesKey(series));
                 candidateInputs.push({
@@ -267,11 +328,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             }));
             const result = {
               primaryConnectionId: connectionId,
-              primaryUrl: dashboardUrlFor(registry, connectionId, primaryDashboardUid, {
-                panelId: primaryPanelId,
-                fromMs: windowSet.incident.fromMs,
-                toMs: windowSet.incident.toMs,
-              }),
+              primaryUrl,
               primaryOnsetMs,
               ...(scopeInfo ?? {}),
               candidatesChecked: candidateRefs.length,

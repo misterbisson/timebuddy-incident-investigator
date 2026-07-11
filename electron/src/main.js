@@ -1,8 +1,14 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
 const path = require('node:path');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
+
+// Populated once runMcpServer() has dynamically imported the engine package —
+// null in the normal (non --mcp-server) GUI launch, since there's no
+// investigation activity to show there.
+let activityLog = null;
+let activityWindow = null;
 
 // safeStorage's encryption key is scoped to the app's identity (name) in the
 // OS keychain. Set it explicitly rather than relying on package.json
@@ -33,11 +39,78 @@ function createWindow() {
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
 
+// One persistent, shared session for the Activity window's live-view
+// <webview> (partition name matched in renderer/activity.html), authenticated
+// the same way screenshotter.js authenticates its one-shot capture windows —
+// injecting a connection's own Authorization header via webRequest — but
+// long-lived instead of destroyed after one call, and picking which
+// connection's header to inject per-request by matching the request's host
+// against every configured connection's URL, since one <webview> may be
+// pointed at panels from different connections over the life of the window.
+function setupLiveViewSession(buildAuthHeader) {
+  const ses = session.fromPartition('persist:activity-live-view', { cache: false });
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    let requestHost;
+    try {
+      requestHost = new URL(details.url).host;
+    } catch {
+      callback({});
+      return;
+    }
+    const connection = store.getConnectionsForEngine().find((c) => {
+      try {
+        return new URL(c.url).host === requestHost;
+      } catch {
+        return false;
+      }
+    });
+    if (!connection) {
+      callback({});
+      return;
+    }
+    try {
+      callback({ requestHeaders: { ...details.requestHeaders, Authorization: buildAuthHeader(connection) } });
+    } catch {
+      // Misconfigured connection (e.g. bearer auth with no token saved yet) —
+      // load without auth rather than crash the whole live-view session.
+      callback({});
+    }
+  });
+}
+
+/** Created lazily on the first activity entry, and re-created the same way if the user closes it and a later entry arrives. */
+function getOrCreateActivityWindow() {
+  if (activityWindow && !activityWindow.isDestroyed()) return activityWindow;
+  activityWindow = new BrowserWindow({
+    width: 960,
+    height: 680,
+    title: 'Timebuddy Activity',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-activity.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true,
+    },
+  });
+  activityWindow.loadFile(path.join(__dirname, '..', 'renderer', 'activity.html'));
+  activityWindow.on('closed', () => {
+    activityWindow = null;
+  });
+  return activityWindow;
+}
+
 async function runMcpServer() {
   const startupConnections = store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
-  const { startMcpServer } = await import('timebuddy-incident-investigator');
+  const { startMcpServer, createActivityLog, buildAuthHeader } = await import('timebuddy-incident-investigator');
+
+  activityLog = createActivityLog();
+  activityLog.onEntry((entry) => {
+    getOrCreateActivityWindow().webContents.send('activity:entry', entry);
+  });
+  setupLiveViewSession(buildAuthHeader);
+
   // Pass a thunk, not the snapshot above, so the engine re-reads
   // connections.json/secrets.enc.json on every tool call — a connection
   // added or edited in the GUI takes effect on the next tool call, with no
@@ -62,6 +135,7 @@ async function runMcpServer() {
     // Only the Electron app has a bundled Chromium to drive a headless
     // capture with — this is what gates screenshot_panel's registration.
     createScreenshotter(),
+    activityLog,
   );
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
@@ -94,6 +168,20 @@ ipcMain.handle('connections:list', () => store.listConnectionsForDisplay());
 ipcMain.handle('connections:upsert', (_event, connection) => store.upsertConnection(connection));
 ipcMain.handle('connections:delete', (_event, id) => store.deleteConnection(id));
 ipcMain.handle('connections:test', (_event, draft) => testConnection(draft));
+ipcMain.handle('activity:list', () => (activityLog ? activityLog.list() : []));
+ipcMain.handle('activity:openExternal', (_event, url) => {
+  // Every activity entry's url is built by this app's own buildDashboardUrl()
+  // (never renderer-supplied), but guard the scheme anyway since this handler
+  // hands the string straight to the OS - only ever open http(s) links.
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.protocol === 'http:' || parsed.protocol === 'https:') shell.openExternal(url);
+});
+
 ipcMain.handle('connections:registrationInfo', () => ({
   execPath: app.getPath('exe'),
   appName: app.getName(),
