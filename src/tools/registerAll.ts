@@ -16,6 +16,7 @@ import { registerDetectCorrelatedAnomalies } from './detectCorrelatedAnomalies.j
 import { registerValidateBaseline } from './validateBaseline.js';
 import { registerSummarizeFindings } from './summarizeFindings.js';
 import { registerListDatasources } from './listDatasources.js';
+import { registerDiscoverInfluxdbSchema } from './discoverInfluxdbSchema.js';
 
 export interface ToolContext {
   registry: ConnectionRegistry;
@@ -39,6 +40,7 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerValidateBaseline(server, ctx);
   registerSummarizeFindings(server, ctx);
   registerListDatasources(server, ctx);
+  registerDiscoverInfluxdbSchema(server, ctx);
   // No browser to drive the client-side capture with in the standalone CLI —
   // omit the tool entirely rather than registering something that always errors.
   if (ctx.screenshotter) registerScreenshotPanel(server, ctx as ToolContext & { screenshotter: Screenshotter });

@@ -137,6 +137,14 @@ skill exists to handle for them.
    or label value, use `find_related_dashboards`'s `query` param instead — a free-text substring
    match against metric names and dashboard/panel titles. Then proceed as in step 3 once you have
    a candidate panel.
+   - **If `find_related_dashboards` comes back empty for a specific metric/measurement name you
+     have independent evidence should exist** (it's named in the alert itself, an error message, or
+     a log line — not just a hunch), and the environment is InfluxDB-backed, `discover_influxdb_schema`
+     is a last-resort fallback: it queries the datasource's own schema directly rather than only
+     what's been dashboarded. Use it only in that specific situation, not as a routine step or a
+     first move — pass the exact name as `searchTerm`. `find_related_dashboards` coming back empty
+     just means no dashboard visualizes it yet; that's itself worth reporting (a real observability
+     gap on the dashboard-owning team's side), separate from whether the metric exists at all.
 
 5. **Check blast radius**, once you have a primary panel: `detect_correlated_anomalies` with
    `primaryDashboardUid`/`primaryPanelId`/`startsAtMs`/`primaryLabels`/`connection` — omit

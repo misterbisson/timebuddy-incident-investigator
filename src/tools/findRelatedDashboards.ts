@@ -119,7 +119,10 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         'knowledgeDashboards is likewise a standing overview, independent of metricName/labels/query, of every ' +
         '"Timebuddy knowledge" dashboard found (identified by the timebuddy-knowledge tag) with the product keys ' +
         'each one publishes — use this to discover what get_product_context can answer without already knowing a ' +
-        'product key to ask for.',
+        'product key to ask for. If this comes back empty for a metric you have independent evidence should exist ' +
+        '(named in an alert, error, or log line — not a hunch), that means no dashboard visualizes it yet, not ' +
+        'that it doesn\'t exist; discover_influxdb_schema can check an InfluxDB datasource\'s own schema directly ' +
+        'as a last resort in that specific situation.',
       inputSchema: {
         metricName: z.string().optional().describe('Exact Prometheus metric name or InfluxDB measurement name'),
         labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),

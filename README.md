@@ -25,7 +25,7 @@ src/
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
   knowledge/      looks up an adopter-published "Timebuddy knowledge" dashboard/panel for a product, with caching
   activity/       in-memory log of panels actually queried/screenshotted, surfaced by the Electron app's Activity window
-  tools/          the 13 MCP tools (12 always registered, screenshot_panel only in the Electron app), each a thin wrapper over the modules above
+  tools/          the 14 MCP tools (13 always registered, screenshot_panel only in the Electron app), each a thin wrapper over the modules above
 electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
                   server (launched with --mcp-server instead of opening a window) — see electron/README.md,
                   including its "Activity window" section for the live investigation log/viewer
@@ -48,6 +48,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
 | `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle — it does not generate prose; the calling agent writes the human-readable note from this bundle. |
 | `list_datasources` | List a connection's configured datasources (uid/name/type/default) — mainly for checking whether a panel's literal-name datasource reference still exists under some other UID. |
+| `discover_influxdb_schema` | Queries an InfluxDB datasource directly for its own measurement/field/tag schema — not dashboarded data. A last-resort fallback for when `find_related_dashboards` finds nothing for a metric you have independent evidence should exist (index-builder only ever knows about metrics some panel already visualizes). Requires a `searchTerm`; there's no "list everything" mode by design. InfluxDB only, for now. |
 
 ## Setup
 
