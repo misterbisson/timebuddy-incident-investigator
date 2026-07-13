@@ -113,6 +113,15 @@ skill exists to handle for them.
      **Do this instead of fetching raw points and writing jq/python to find dip boundaries
      yourself** — that's exactly what `threshold` is for, and scripting it ad hoc from a saved
      tool-output file is slower and more error-prone mid-incident.
+   - **A query against an InfluxDB-backed panel that times out or aborts is often hitting
+     InfluxDB's own hard ~15s query timeout, not a transient fluke** — this server's own default
+     request timeout is coincidentally the same ~15s, so a heavy query (a fine-grained `GROUP BY
+     time(5s)`-style aggregate over a wide window is the usual culprit) can fail on either side of
+     that race. Don't just retry the identical call, and especially don't retry several of them in
+     parallel expecting one to get through — that adds load and makes the timeout *more* likely, not
+     less. Instead narrow the window, drop to a coarser aggregation, or fall back to a cheaper/
+     non-aggregated target for that same series, and prefer calling sequentially over an
+     InfluxDB-backed datasource rather than in parallel once you've seen one timeout.
    - `validate_baseline` with the same panel/window to get a real classification
      (`statistically-unusual` vs `common-during-normal-operations`) instead of eyeballing numbers.
      **Always check each series' `briefExcursions` too, even when `classification` says common** —
