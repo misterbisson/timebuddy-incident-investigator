@@ -30,21 +30,77 @@ What the self-signed cert *does* buy in the meantime:
    auto-discovery behaves the same way it will once this is swapped for a real cert.
 3. **Identity Type**: Self-Signed Root. **Certificate Type**: Code Signing. Leave "Let me
    override defaults" unchecked unless you need a longer validity period.
-4. Find it in Keychain Access, right-click → **Export…**, save as `.p12`, and set an
-   export password (you'll need this for the `MACOS_CERTIFICATE_PWD` secret).
+4. `.p12` export only works on an **identity** (certificate + its private key together) —
+   not on the certificate alone. Certificate Assistant generates both and stores them in
+   the same keychain, but Keychain Access only shows them paired under the **My
+   Certificates** category in the sidebar, not under plain **Certificates** (which lists
+   certs without their keys and only offers `.cer`/`.pem` export). So: click **My
+   Certificates** in the sidebar, find the cert there (it has a disclosure triangle you
+   can expand to see the paired private key underneath), select it, and **File → Export
+   Items…** (or right-click → Export). `.p12` should now be an option. Exporting shows
+   **two separate password prompts, back to back** — easy to conflate:
+   - First, a dialog to **"enter a password which you will use to protect the exported
+     items"** — this becomes the `.p12`'s own encryption password. This is the one you
+     need for `MACOS_CERTIFICATE_PWD`/`CSC_KEY_PASSWORD`.
+   - Immediately after, a **separate system dialog** asking for your Mac login/keychain
+     password to authorize the export — unrelated to the `.p12` file itself, don't reuse
+     this one as the export password.
+
+   Getting these two swapped is the most common cause of `security import`/
+   `electron-builder` failing with `MAC verification failed during PKCS12 import (wrong
+   password?)` even though "a" password was set correctly.
+
+   If it's still not showing under **My Certificates**, the private key may have landed
+   in a different keychain than the certificate (e.g. `login` vs a custom keychain) — check
+   under **Keys** for one named after your identity and, if needed, drag it into the same
+   keychain as the certificate. As a fallback, the `security` CLI can export an identity
+   directly (it requires `-t identities`, not `-t certs`, to pull in the private key).
+   Without a name filter this exports *every* identity in the target keychain into one
+   `.p12` — fine if `login.keychain` only has this one, but check first
+   (`security find-identity -v`) since a work Mac's `login` keychain often has VPN/MDM
+   identities too; if so, create the certificate in (or move it to) a scratch keychain and
+   export from that instead:
+   ```bash
+   security find-identity -v -p codesigning   # confirm it's listed as a valid identity
+   security export -k login.keychain -t identities -f pkcs12 -o certificate.p12
+   ```
 5. Base64-encode it for CI:
    ```bash
    base64 -i certificate.p12 | pbcopy
    ```
+6. **Trust the certificate for code signing.** Importing/exporting the `.p12` is not
+   enough by itself — `electron-builder` picks a signing identity via
+   `security find-identity -v` (valid identities only), and macOS doesn't trust a
+   self-signed root by default no matter which keychain it's in. Without this step,
+   builds silently fall back to **unsigned** with a
+   `cannot find valid "Developer ID Application" identity ... 0 valid identities found`
+   warning, even though `CSC_NAME` matched the identity in the full (untrusted) list.
+
+   In Keychain Access: find the certificate, double-click it, expand **Trust**, set
+   **Code Signing** to **Always Trust**, close the panel (enter your Mac password when
+   prompted). Confirm it worked:
+   ```bash
+   security find-identity -v -p codesigning   # should now list it without CSSMERR_TP_NOT_TRUSTED
+   ```
+   CLI equivalent, if you'd rather not use the GUI (needs the cert alone, not the `.p12`):
+   ```bash
+   openssl pkcs12 -in certificate.p12 -passin pass:'your-p12-export-password' -clcerts -nokeys -legacy -out certificate.pem
+   security add-trusted-cert -r trustRoot -p codeSign -k login.keychain-db certificate.pem
+   ```
+   (CI does the same thing, scoped to its own throwaway keychain — see
+   `.github/workflows/release.yml`'s "Import signing certificate" step.)
 
 ## Required GitHub secrets
 
 - **`MACOS_CERTIFICATE`** — base64-encoded `.p12` from step 5 above.
 - **`MACOS_CERTIFICATE_PWD`** — the export password from step 4.
-- **`MACOS_CERTIFICATE_NAME`** — the certificate's exact Common Name (e.g.
-  `Developer ID Application: Timebuddy Local`). A self-signed cert won't be picked up by
-  `electron-builder`'s default identity search unless it's told exactly which identity to
-  use via `CSC_NAME`, which the workflow passes from this secret.
+- **`MACOS_CERTIFICATE_NAME`** — the certificate's Common Name **without** the
+  `Developer ID Application:` prefix (e.g. `Timebuddy Local`, not
+  `Developer ID Application: Timebuddy Local`) — `electron-builder` prepends that prefix
+  itself when matching against `CSC_NAME` and errors out (`Please remove prefix...`) if
+  it's already included. A self-signed cert won't be picked up by `electron-builder`'s
+  default identity search unless it's told exactly which identity to use via `CSC_NAME`,
+  which the workflow passes from this secret.
 
 `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` are deliberately **not**
 configured — `scripts/notarize.js` no-ops (with a warning in the build log) whenever
@@ -55,7 +111,7 @@ those are unset, so the build stays signed-but-not-notarized without any code ch
 ```bash
 export CSC_LINK=$(base64 -i /path/to/certificate.p12)
 export CSC_KEY_PASSWORD="your-p12-export-password"
-export CSC_NAME="Developer ID Application: Timebuddy Local"
+export CSC_NAME="Timebuddy Local"   # no "Developer ID Application:" prefix — see note above
 
 cd electron && npm run build-mac
 ```
