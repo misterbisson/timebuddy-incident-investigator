@@ -5,6 +5,9 @@
   "private": true,
   "main": "src/main.js",
   "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=20 <26"
+  },
   "scripts": {
     "start": "electron .",
     "dev": "npm run build --prefix .. && electron ."
