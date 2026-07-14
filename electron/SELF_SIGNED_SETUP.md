@@ -88,7 +88,12 @@ What the self-signed cert *does* buy in the meantime:
    security add-trusted-cert -r trustRoot -p codeSign -k login.keychain-db certificate.pem
    ```
    (CI does the same thing, scoped to its own throwaway keychain — see
-   `.github/workflows/release.yml`'s "Import signing certificate" step.)
+   `.github/workflows/release.yml`'s "Import signing certificate" step. CI additionally
+   runs `sudo security authorizationdb write com.apple.trust-settings.admin allow`
+   immediately before `add-trusted-cert`, because that command normally shows a GUI
+   trust-confirmation dialog that a headless runner can never dismiss — without the
+   pre-authorization, the step hangs indefinitely instead of failing, which is easy to
+   mistake for "just a slow build.")
 
 ## Required GitHub secrets
 
