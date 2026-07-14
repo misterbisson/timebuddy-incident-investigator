@@ -89,3 +89,31 @@ node test/mcpServerMode.mjs
 No live Grafana instance is required; the seeded connection points at a placeholder URL
 specifically so the test can assert the call got *past* connection resolution, not that it
 succeeded against a real Grafana.
+
+## Building, signing, and releasing
+
+Packaging is `electron-builder`, configured in this package's `build` field in
+`package.json` — adapted from Time Buddy's own setup (`build.js`/`release.yml` in
+[Liquescent-Development/time-buddy](https://github.com/Liquescent-Development/time-buddy),
+see [`../NOTICE.md`](../NOTICE.md)):
+
+```bash
+cd electron
+npm run build-mac    # or build-win / build-linux
+```
+
+Each of those first runs the root package's `tsc` build (`npm run build --prefix ..`) so
+the engine's `dist/` is current, then invokes `electron-builder` for that platform. Output
+lands in `electron/dist/`.
+
+`.github/workflows/release.yml` builds all three platforms on every push/PR to `main`;
+pushes to `main` also publish to GitHub Releases (`electron-builder`'s own `publish:
+github` config, so `electron-updater` — not yet wired into `main.js` — can eventually
+point at those release artifacts).
+
+**macOS signing is currently a self-signed certificate**, not a real Apple Developer ID —
+see [`SELF_SIGNED_SETUP.md`](SELF_SIGNED_SETUP.md) for what that does and doesn't buy you
+(short version: `afterSign` runs `scripts/notarize.js`, which signs but can't notarize
+without real Apple credentials, so downloaded builds still hit a Gatekeeper block that
+needs a right-click-Open override). Windows and Linux builds are unsigned entirely, same
+as upstream Time Buddy.

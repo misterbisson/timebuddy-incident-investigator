@@ -2,18 +2,86 @@
   "name": "timebuddy-connection-manager",
   "version": "0.1.0",
   "description": "Desktop app for timebuddy-incident-investigator: one binary that's a Grafana connection manager (GUI) and the MCP server itself (--mcp-server flag). Connection-manager UI and auth flow adapted from Time Buddy (github.com/Liquescent-Development/time-buddy) — see NOTICE.md.",
+  "author": "Casey Bisson",
   "private": true,
   "main": "src/main.js",
   "license": "AGPL-3.0-only",
   "scripts": {
     "start": "electron .",
-    "dev": "npm run build --prefix .. && electron ."
+    "dev": "npm run build --prefix .. && electron .",
+    "build-mac": "npm run build --prefix .. && electron-builder --mac",
+    "build-win": "npm run build --prefix .. && electron-builder --win",
+    "build-linux": "npm run build --prefix .. && electron-builder --linux",
+    "pack": "npm run build --prefix .. && electron-builder --dir"
   },
   "devDependencies": {
-    "electron": "^28.0.0"
+    "@electron/notarize": "^2.2.1",
+    "electron": "28.3.3",
+    "electron-builder": "^24.9.1"
   },
   "dependencies": {
     "timebuddy-incident-investigator": "file:..",
     "undici": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.timebuddy-incident-investigator.connection-manager",
+    "productName": "Timebuddy Incident Investigator",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "misterbisson",
+        "repo": "timebuddy-incident-investigator",
+        "publishAutoUpdate": true
+      }
+    ],
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/timebuddy-incident-investigator/**/*",
+      "node_modules/timebuddy-incident-investigator/dist/**/*",
+      "node_modules/timebuddy-incident-investigator/package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ]
+    },
+    "afterSign": "./scripts/notarize.js",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ],
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

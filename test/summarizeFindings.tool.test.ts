@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerSummarizeFindings } from '../src/tools/summarizeFindings.js';
 import type { Config } from '../src/config.js';
 import { fakeServer } from './toolTestHelpers.js';
+
+let dataDir: string;
 
 function config(): Config {
   return {
@@ -13,12 +18,20 @@ function config(): Config {
     maxLookbackHours: 720,
     maxDataPoints: 2000,
     redactionPatterns: [],
-    dataDir: '.',
+    dataDir,
     webhookPort: 4318,
   };
 }
 
 const okStats = { mean: 1, stddev: 0.01, min: 0.9, max: 1, count: 100, nonZeroCount: 100 };
+
+beforeEach(async () => {
+  dataDir = await mkdtemp(join(tmpdir(), 'summarize-findings-tool-test-'));
+});
+
+afterEach(async () => {
+  await rm(dataDir, { recursive: true, force: true });
+});
 
 describe('summarize_findings tool', () => {
   it('carries validate_baseline\'s briefExcursions through to the verdict, instead of dropping it', async () => {

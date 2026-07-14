@@ -1,0 +1,110 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  release:
+    # Only create releases on main branch pushes (not PRs)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # macOS code signing: self-signed cert for now (no notarization until a real
+      # Apple Developer ID is set up — see electron/SELF_SIGNED_SETUP.md).
+      - name: Import signing certificate
+        if: matrix.os == 'macos-latest'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PWD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
+
+          rm certificate.p12
+
+      - name: Build and Publish
+        working-directory: electron
+        run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            npm run build-mac -- --publish always
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            npm run build-win -- --publish always
+          else
+            npm run build-linux -- --publish always
+          fi
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          CSC_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are intentionally
+          # unset for now: scripts/notarize.js no-ops without them, so the mac build
+          # is signed but not notarized until a real Apple Developer ID is set up.
+
+  build-pr:
+    if: github.event_name == 'pull_request'
+
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (PR test, unsigned)
+        working-directory: electron
+        run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            npm run build-mac -- --publish=never
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            npm run build-win -- --publish=never
+          else
+            npm run build-linux -- --publish=never
+          fi
+        shell: bash
