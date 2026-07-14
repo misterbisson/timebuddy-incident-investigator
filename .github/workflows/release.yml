@@ -51,9 +51,18 @@ jobs:
           security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
 
+          # A self-signed cert's root isn't trusted by macOS by default, so
+          # `security find-identity -v` (what electron-builder uses to pick a signing
+          # identity) would otherwise report 0 valid identities even though the import
+          # above succeeded. Explicitly trust it for code signing, scoped to this
+          # throwaway keychain only.
+          openssl pkcs12 -in certificate.p12 -passin pass:"$MACOS_CERTIFICATE_PWD" -clcerts -nokeys -legacy -out certificate.pem 2>/dev/null || \
+          openssl pkcs12 -in certificate.p12 -passin pass:"$MACOS_CERTIFICATE_PWD" -clcerts -nokeys -out certificate.pem
+          security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" certificate.pem
+
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
 
-          rm certificate.p12
+          rm certificate.p12 certificate.pem
 
       - name: Build and Publish
         working-directory: electron
