@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Timebuddy Activity</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="activity.css" />
+  </head>
+  <body class="activity-body">
+    <div class="activity-layout">
+      <aside class="activity-sidebar">
+        <header class="activity-sidebar-header">
+          <h1>Activity</h1>
+          <p class="subtitle">Dashboards/panels inspected this session</p>
+        </header>
+        <ul id="activityList" class="activity-list">
+          <li class="empty-row">Nothing inspected yet.</li>
+        </ul>
+      </aside>
+
+      <main class="activity-detail">
+        <div id="activityEmptyState" class="activity-empty-state">
+          Select an entry on the left to view it.
+        </div>
+
+        <div id="activityDetail" class="activity-detail-content hidden">
+          <header class="activity-detail-header">
+            <h2 id="detailTitle"></h2>
+            <p id="detailSubtitle" class="subtitle"></p>
+          </header>
+
+          <div class="activity-detail-actions">
+            <button id="showScreenshotBtn" type="button" class="hidden">Screenshot</button>
+            <button id="showLiveBtn" type="button">View live</button>
+            <button id="openBrowserBtn" type="button">Open in browser</button>
+          </div>
+
+          <div class="activity-detail-view">
+            <img id="detailScreenshot" class="hidden" alt="Panel screenshot" />
+            <webview id="detailWebview" class="hidden" partition="persist:activity-live-view"></webview>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="activity.js"></script>
+  </body>
+</html>

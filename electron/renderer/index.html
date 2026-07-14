@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Grafana Connection Manager</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Grafana Connections</h1>
+      <p class="subtitle">
+        Connections saved here are used by the timebuddy-incident-investigator MCP server. Auth model and UI
+        adapted from <a href="https://github.com/Liquescent-Development/time-buddy" target="_blank" rel="noopener">Time Buddy</a>
+        &mdash; see <a href="../NOTICE.md" target="_blank" rel="noopener">NOTICE.md</a>.
+      </p>
+    </header>
+
+    <section class="toolbar">
+      <button id="addConnectionBtn" type="button" class="primary">Add connection</button>
+    </section>
+
+    <table id="connectionsTable">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>URL</th>
+          <th>Auth</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="connectionsTableBody">
+        <tr class="empty-row"><td colspan="5">No connections yet. Click "Add connection" to create one.</td></tr>
+      </tbody>
+    </table>
+
+    <section class="registration-info">
+      <h2>Register with Claude</h2>
+      <p class="subtitle">
+        Run once per Claude client you use. Both point at this same app, launched in MCP-server mode — add
+        your connections above first.
+      </p>
+
+      <div class="registration-block">
+        <h3>Claude Code</h3>
+        <pre id="claudeCodeCommand">(loading...)</pre>
+        <button id="copyClaudeCodeBtn" type="button">Copy command</button>
+      </div>
+
+      <div class="registration-block">
+        <h3>Claude Desktop</h3>
+        <pre id="claudeDesktopSnippet">(loading...)</pre>
+        <button id="copyClaudeDesktopBtn" type="button">Copy JSON</button>
+      </div>
+    </section>
+
+    <div id="connectionModal" class="modal hidden">
+      <div class="modal-content">
+        <h2 id="connectionFormTitle">Add connection</h2>
+
+        <label for="connectionName">Name</label>
+        <input id="connectionName" type="text" placeholder="e.g. prod-us-east" />
+
+        <label for="connectionUrl">URL</label>
+        <input id="connectionUrl" type="text" placeholder="https://grafana.example.com" />
+
+        <fieldset class="auth-type">
+          <legend>Auth type</legend>
+          <label><input type="radio" name="authType" value="bearer" checked /> Bearer token</label>
+          <label><input type="radio" name="authType" value="basic" /> Basic auth (username/password)</label>
+        </fieldset>
+
+        <div id="bearerFields" class="auth-fields">
+          <label for="connectionToken">Token</label>
+          <input id="connectionToken" type="password" placeholder="Leave blank to keep the current token" />
+        </div>
+
+        <div id="basicFields" class="auth-fields hidden">
+          <label for="connectionUsername">Username</label>
+          <input id="connectionUsername" type="text" />
+          <label for="connectionPassword">Password</label>
+          <input id="connectionPassword" type="password" placeholder="Leave blank to keep the current password" />
+        </div>
+
+        <label for="connectionMatchHosts">Extra match hosts (optional)</label>
+        <input id="connectionMatchHosts" type="text" placeholder="comma-separated, e.g. grafana-lb.internal" />
+
+        <label class="checkbox-row"><input id="connectionTlsVerify" type="checkbox" checked /> Verify TLS certificate</label>
+
+        <div id="testResult" class="test-result"></div>
+
+        <div class="modal-actions">
+          <button id="testConnectionBtn" type="button">Test connection</button>
+          <span class="spacer"></span>
+          <button id="cancelConnectionBtn" type="button">Cancel</button>
+          <button id="saveConnectionBtn" type="button" class="primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="connections.js"></script>
+  </body>
+</html>

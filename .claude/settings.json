@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(date *)",
+      "Bash(echo *)"
+    ]
+  }
+}

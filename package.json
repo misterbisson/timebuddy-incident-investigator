@@ -1,0 +1,43 @@
+{
+  "name": "timebuddy-incident-investigator",
+  "version": "0.1.0",
+  "description": "Grafana Incident Review MCP server: read-only tools for AI-assisted incident investigation of dashboards, metrics, and logs.",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "workspaces": [
+    "electron"
+  ],
+  "main": "dist/server.js",
+  "exports": {
+    ".": "./dist/server.js"
+  },
+  "bin": {
+    "timebuddy-incident-investigator": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "webhook": "tsx src/webhook/listener.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "undici": "^7.2.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

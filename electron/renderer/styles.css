@@ -1,0 +1,221 @@
+/* Dark theme in the spirit of Time Buddy's main.css palette (#1e1e1e/#007acc), rewritten for this app's simpler table+modal layout. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  margin: 0;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+}
+
+.subtitle {
+  color: #9c9c9c;
+  font-size: 12px;
+  margin: 0 0 20px;
+}
+
+.subtitle a {
+  color: #4daafc;
+}
+
+.toolbar {
+  margin-bottom: 12px;
+}
+
+.registration-info {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #2d2d30;
+}
+
+.registration-info h2 {
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.registration-block {
+  margin-bottom: 16px;
+}
+
+.registration-block h3 {
+  font-size: 12px;
+  color: #9c9c9c;
+  margin: 0 0 6px;
+}
+
+.registration-block pre {
+  background-color: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0 0 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: #252526;
+  border: 1px solid #2d2d30;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid #2d2d30;
+}
+
+th {
+  color: #9c9c9c;
+  font-weight: 500;
+  background-color: #2d2d30;
+}
+
+.empty-row td {
+  color: #9c9c9c;
+  text-align: center;
+  padding: 24px;
+}
+
+.status-ok {
+  color: #2ed573;
+}
+
+.status-warn {
+  color: #ff9f00;
+}
+
+button {
+  background-color: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #2d2d30;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #45454a;
+}
+
+button.primary {
+  background-color: #007acc;
+  border-color: #007acc;
+  color: #fff;
+}
+
+button.primary:hover {
+  background-color: #0891e0;
+}
+
+td button + button {
+  margin-left: 6px;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-content {
+  background-color: #252526;
+  border: 1px solid #2d2d30;
+  border-radius: 6px;
+  padding: 20px 24px;
+  width: 420px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.modal-content h2 {
+  font-size: 15px;
+  margin: 0 0 16px;
+}
+
+.modal-content label {
+  display: block;
+  font-size: 12px;
+  color: #9c9c9c;
+  margin: 12px 0 4px;
+}
+
+.modal-content label.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.modal-content input[type='text'],
+.modal-content input[type='password'] {
+  width: 100%;
+  background-color: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: #d4d4d4;
+  font-size: 13px;
+}
+
+.auth-type {
+  border: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+
+.auth-type legend {
+  font-size: 12px;
+  color: #9c9c9c;
+  padding: 0;
+}
+
+.auth-type label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 12px 0 0;
+  color: #d4d4d4;
+}
+
+.auth-fields.hidden {
+  display: none;
+}
+
+.test-result {
+  font-size: 12px;
+  margin-top: 12px;
+  min-height: 16px;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.modal-actions .spacer {
+  flex: 1;
+}
