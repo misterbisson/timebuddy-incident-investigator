@@ -194,4 +194,14 @@ ipcMain.handle('connections:registrationInfo', () => ({
   // bundled in and must NOT be passed this — it would be misread as an
   // arg to the app rather than "which app to load."
   appPath: app.isPackaged ? undefined : path.join(__dirname, '..'),
+  // The plugin/skills bundle: package.json's build.extraResources copies the
+  // repo's .claude-plugin/ and skills/ into Resources/plugin/ (outside
+  // app.asar, since Claude Code reads these files from disk as a separate
+  // process — asar's virtual fs is only transparent to this app's own
+  // Node/Electron runtime). In a dev checkout there's no packaged Resources
+  // dir, so point straight at the repo root two levels up from src/, which
+  // already has the same .claude-plugin/skills layout.
+  pluginPath: app.isPackaged
+    ? path.join(process.resourcesPath, 'plugin')
+    : path.join(__dirname, '..', '..'),
 }));

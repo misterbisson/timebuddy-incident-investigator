@@ -1,0 +1,13 @@
+{
+  "name": "timebuddy-incident-investigator",
+  "owner": {
+    "name": "Casey Bisson"
+  },
+  "plugins": [
+    {
+      "name": "timebuddy",
+      "source": "./",
+      "description": "Exploratory and reactive-investigation skills for Grafana incidents via the timebuddy-incident-investigator MCP server."
+    }
+  ]
+}

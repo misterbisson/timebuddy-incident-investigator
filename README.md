@@ -63,7 +63,11 @@ hand-edit, no plaintext credential file anywhere.
    Bearer token or Basic auth, your choice. "Test connection" before saving.
 3. In the app's "Register with Claude" section, copy the command (Claude Code) or JSON
    snippet (Claude Desktop) shown there — it already has this app's own path filled in —
-   and add it to your Claude client.
+   and add it to your Claude client. A third block, "Claude Code skills (optional)", gives
+   a JSON snippet for `~/.claude/settings.json` that registers the skills below — they're
+   bundled with the app itself (see "Claude Code skills" below), so this needs no GitHub
+   access and no separate download, and it stays pinned to whichever app version you have
+   installed.
 
 Adding, editing, or removing a connection later takes effect immediately for any MCP
 server that's already running — it's picked up on the very next tool call, no restart
@@ -80,7 +84,29 @@ below.
 ## Claude Code skills
 
 This repo also ships as a Claude Code plugin (`.claude-plugin/plugin.json`) with three skills
-that drive the tools above so nobody needs to know the tool names or the right call order:
+that drive the tools above so nobody needs to know the tool names or the right call order.
+
+The Electron app bundles this same plugin (`.claude-plugin/` and `skills/`, copied in as
+`extraResources` at build time — see `electron/package.json`) alongside the compiled
+MCP server/connection-manager code, unpacked on disk outside `app.asar` so Claude Code
+(a separate process) can read it directly. The "Claude Code skills" block in the app's
+"Register with Claude" section (see Setup above) gives a ready-to-paste
+`~/.claude/settings.json` snippet — `extraKnownMarketplaces` pointing at the app's own
+bundled plugin directory plus `enabledPlugins` to turn it on — no GitHub, no separate
+install step. Its one tradeoff: the path it points at is wherever the app is currently
+installed, so re-copy the snippet after moving/reinstalling the app, same as re-running
+"Register with Claude" for the MCP registration itself after any such change.
+
+Prefer installing from GitHub instead (e.g. no desktop app, or want plugin updates
+independent of the app's release cadence)? The same plugin is installable as a normal
+Claude Code marketplace:
+
+```
+/plugin marketplace add misterbisson/timebuddy-incident-investigator
+/plugin install timebuddy@timebuddy-incident-investigator
+```
+
+Either way, skills show up under the `/timebuddy:` namespace:
 
 - `/timebuddy:explore` — a low-stakes health check: confirms the MCP server is connected,
   surveys what connections/dashboards exist, and highlights which dashboards are actually
