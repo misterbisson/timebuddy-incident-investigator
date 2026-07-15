@@ -141,14 +141,17 @@ xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app
 ## Registering with Claude
 
 Once you've added your connections, the app's "Register with Claude" section shows a
-ready-to-run `claude mcp add` command (Claude Code) and a ready-to-paste `mcpServers` JSON
-snippet (Claude Desktop), both pointing at this app's own executable path with
-`--mcp-server`:
+ready-to-run `claude mcp add --scope user` command (Claude Code) and a ready-to-paste
+`mcpServers` JSON snippet (Claude Desktop), both pointing at this app's own executable
+path with `--mcp-server`. `--scope user` (not the "local" default) registers it once for
+the whole machine/user rather than only the one project directory you happen to run the
+command from — since this is one desktop app meant to be usable from any project:
 
 ![Register with Claude section](docs/images/connections-3-register-with-claude-redacted.png)
 
-(The redacted rows at the top are leftover connection entries visible from scrolling —
-this section itself has nothing connection-specific to redact.)
+(The redacted rows at the top are leftover connection entries visible from scrolling; the
+`claude mcp add` command shown predates the `--scope user` addition — this section itself
+has nothing connection-specific to redact.)
 
 A third, optional block (not pictured above — its exact commands changed after this
 screenshot was taken) registers the bundled Claude Code skills. It's two `claude plugin`

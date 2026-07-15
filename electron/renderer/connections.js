@@ -198,7 +198,11 @@ async function loadRegistrationInfo() {
   // its own. See main.js's registrationInfo handler for why.
   const args = isPackaged ? ['--mcp-server'] : [appPath, '--mcp-server'];
 
-  const codeCommand = `claude mcp add timebuddy-incident-investigator -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
+  // --scope user (not the "local" default) registers this once for the whole machine/user
+  // instead of only the one project directory this command happens to be run from —
+  // consistent with the skills' --scope user below, and what you want for a single desktop
+  // app meant to be usable from any project.
+  const codeCommand = `claude mcp add --scope user timebuddy-incident-investigator -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
   $('claudeCodeCommand').textContent = codeCommand;
 
   const desktopSnippet = JSON.stringify(
