@@ -64,7 +64,7 @@
         }
       ]
     },
-    "afterSign": "./scripts/notarize.js",
+    "afterSign": "./scripts/afterSign.js",
     "win": {
       "target": [
         {

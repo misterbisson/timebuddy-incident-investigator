@@ -113,7 +113,7 @@ point at those release artifacts).
 
 **macOS signing is currently a self-signed certificate**, not a real Apple Developer ID —
 see [`SELF_SIGNED_SETUP.md`](SELF_SIGNED_SETUP.md) for what that does and doesn't buy you
-(short version: `afterSign` runs `scripts/notarize.js`, which signs but can't notarize
+(short version: `afterSign` runs `scripts/afterSign.js`, which signs but can't notarize
 without real Apple credentials, so downloaded builds still hit a Gatekeeper block that
 needs a right-click-Open override). Windows and Linux builds are unsigned entirely, same
 as upstream Time Buddy.

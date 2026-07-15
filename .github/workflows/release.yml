@@ -51,25 +51,27 @@ jobs:
           security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
 
-          # A self-signed cert's root isn't trusted by macOS by default, so
-          # `security find-identity -v` (what electron-builder uses to pick a signing
-          # identity) would otherwise report 0 valid identities even though the import
-          # above succeeded. Explicitly trust it for code signing, scoped to this
-          # throwaway keychain only.
-          openssl pkcs12 -in certificate.p12 -passin pass:"$MACOS_CERTIFICATE_PWD" -clcerts -nokeys -legacy -out certificate.pem 2>/dev/null || \
-          openssl pkcs12 -in certificate.p12 -passin pass:"$MACOS_CERTIFICATE_PWD" -clcerts -nokeys -out certificate.pem
-
-          # `add-trusted-cert` normally pops a GUI confirmation dialog
-          # ("Do you want to trust this certificate?") via trustd/SecurityAgent — on a
-          # real Mac you'd click through it, but on a headless CI runner nothing can
-          # dismiss it and the step hangs forever instead of failing. Pre-authorizing
-          # the trust-settings right lets it proceed non-interactively.
-          sudo security authorizationdb write com.apple.trust-settings.admin allow
-          security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" certificate.pem
-
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
 
-          rm certificate.p12 certificate.pem
+          # electron-builder/@electron/osx-sign only pick a signing identity via
+          # `security find-identity -v` (trusted identities only), and a self-signed
+          # cert's root isn't trusted by macOS by default. Trusting it requires
+          # `add-trusted-cert`, which needs the `com.apple.trust-settings.admin`
+          # authorization right — newer macOS runner images (macos-26-arm64) no
+          # longer let CI pre-authorize that right, so the step now fails outright
+          # (`NO (-60005)`) instead of the old hang. `codesign` itself doesn't care
+          # about trust, only Gatekeeper/verification does, so skip electron-builder's
+          # own signing entirely: look the identity up via the untrusted-inclusive
+          # `find-identity` (no `-v`) and pass its hash to the build step, which signs
+          # manually in `afterSign` (see electron/scripts/afterSign.js).
+          IDENTITY_HASH=$(security find-identity -k "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
+          if [[ -z "$IDENTITY_HASH" ]]; then
+            echo "::error::No signing identity found in imported certificate"
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
+
+          rm certificate.p12
 
       - name: Build and Publish
         working-directory: electron
@@ -84,12 +86,16 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-          CSC_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          # electron-builder's own signing is trust-gated (see the "Import signing
+          # certificate" step above) and CODESIGN_IDENTITY_HASH already flows in via
+          # $GITHUB_ENV from that step, so tell electron-builder not to attempt its
+          # own (trust-gated) identity discovery — signing happens manually in
+          # afterSign (electron/scripts/afterSign.js) instead.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
           # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are intentionally
-          # unset for now: scripts/notarize.js no-ops without them, so the mac build
-          # is signed but not notarized until a real Apple Developer ID is set up.
+          # unset for now: scripts/afterSign.js no-ops the notarize step without them,
+          # so the mac build is signed but not notarized until a real Apple Developer
+          # ID is set up.
 
   build-pr:
     if: github.event_name == 'pull_request'
