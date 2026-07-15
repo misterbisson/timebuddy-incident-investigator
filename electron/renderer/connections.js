@@ -189,7 +189,7 @@ $('testConnectionBtn').addEventListener('click', async () => {
 // the current syntax. The Claude Desktop JSON, by contrast, is the same
 // mcpServers shape every local MCP server uses, and won't drift.
 async function loadRegistrationInfo() {
-  const { execPath, isPackaged, appPath } = await window.connectionManager.registrationInfo();
+  const { execPath, isPackaged, appPath, pluginPath } = await window.connectionManager.registrationInfo();
   const quote = (s) => (s.includes(' ') ? `"${s}"` : s);
 
   // The raw dev Electron binary needs the app directory as an explicit
@@ -215,6 +215,27 @@ async function loadRegistrationInfo() {
   );
   $('claudeDesktopSnippet').textContent = desktopSnippet;
 
+  // Registers the plugin/skills bundled alongside this app (see main.js's
+  // registrationInfo handler and package.json's build.extraResources) as a
+  // local-directory marketplace — the plugin id and marketplace id here must
+  // match .claude-plugin/marketplace.json's "name" fields exactly, or
+  // enabledPlugins' "plugin@marketplace" key won't resolve.
+  const pluginSnippet = JSON.stringify(
+    {
+      extraKnownMarketplaces: {
+        'timebuddy-incident-investigator': {
+          source: { source: 'directory', path: pluginPath },
+        },
+      },
+      enabledPlugins: {
+        'timebuddy@timebuddy-incident-investigator': true,
+      },
+    },
+    null,
+    2,
+  );
+  $('claudePluginSnippet').textContent = pluginSnippet;
+
   if (!isPackaged) {
     const note = document.createElement('p');
     note.className = 'subtitle';
@@ -226,6 +247,7 @@ async function loadRegistrationInfo() {
 
   $('copyClaudeCodeBtn').addEventListener('click', () => navigator.clipboard.writeText(codeCommand));
   $('copyClaudeDesktopBtn').addEventListener('click', () => navigator.clipboard.writeText(desktopSnippet));
+  $('copyClaudePluginBtn').addEventListener('click', () => navigator.clipboard.writeText(pluginSnippet));
 }
 
 loadRegistrationInfo();

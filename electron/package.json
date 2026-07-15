@@ -52,6 +52,10 @@
       "node_modules/timebuddy-incident-investigator/dist/**/*",
       "node_modules/timebuddy-incident-investigator/package.json"
     ],
+    "extraResources": [
+      { "from": "../.claude-plugin", "to": "plugin/.claude-plugin" },
+      { "from": "../skills", "to": "plugin/skills" }
+    ],
     "mac": {
       "icon": "build/icon.icns",
       "category": "public.app-category.developer-tools",
