@@ -58,6 +58,13 @@ jobs:
           # throwaway keychain only.
           openssl pkcs12 -in certificate.p12 -passin pass:"$MACOS_CERTIFICATE_PWD" -clcerts -nokeys -legacy -out certificate.pem 2>/dev/null || \
           openssl pkcs12 -in certificate.p12 -passin pass:"$MACOS_CERTIFICATE_PWD" -clcerts -nokeys -out certificate.pem
+
+          # `add-trusted-cert` normally pops a GUI confirmation dialog
+          # ("Do you want to trust this certificate?") via trustd/SecurityAgent — on a
+          # real Mac you'd click through it, but on a headless CI runner nothing can
+          # dismiss it and the step hangs forever instead of failing. Pre-authorizing
+          # the trust-settings right lets it proceed non-interactively.
+          sudo security authorizationdb write com.apple.trust-settings.admin allow
           security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" certificate.pem
 
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
