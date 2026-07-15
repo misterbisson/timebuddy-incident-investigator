@@ -36,6 +36,30 @@ To run in MCP-server mode directly (what Claude Code/Desktop will do):
 electron . --mcp-server
 ```
 
+## Configuring connections
+
+Add a connection for each Grafana endpoint you use (one per region/tier, etc.) — each
+person authenticates as themselves (their own Bearer token or Basic-auth
+username/password) rather than everyone sharing one admin-provisioned service-account
+credential.
+
+1. Click **Add connection** and fill in a name, the Grafana URL, and either a Bearer
+   token or Basic auth username/password:
+
+   ![Add connection form](docs/images/connections-1-add-modal.png)
+
+2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
+   URL, a bad credential, or a Grafana instance that isn't reachable from this machine
+   immediately, instead of partway through an actual investigation later.
+
+3. Click **Save**. Repeat for every Grafana endpoint you use — they all show up in one
+   list, each editable/duplicable/deletable at any time:
+
+   ![Configured connections list](docs/images/connections-2-list-redacted.png)
+
+   (Name/URL columns are blurred above — those are real connection details from a live
+   setup; yours will show your own Grafana endpoints.)
+
 ## How it stores data
 
 Connections live under Electron's per-OS `userData` directory (shown in the app's UI,
@@ -116,7 +140,16 @@ xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app
 Once you've added your connections, the app's "Register with Claude" section shows a
 ready-to-run `claude mcp add` command (Claude Code) and a ready-to-paste `mcpServers` JSON
 snippet (Claude Desktop), both pointing at this app's own executable path with
-`--mcp-server`. See the root [`README.md`](../README.md) for the full setup flow.
+`--mcp-server` — plus a `~/.claude/settings.json` snippet for the bundled Claude Code
+skills (see the root README's ["Claude Code skills"](../README.md#claude-code-skills)
+section):
+
+![Register with Claude section](docs/images/connections-3-register-with-claude-redacted.png)
+
+(The redacted rows at the top are leftover connection entries visible from scrolling —
+this section itself has nothing connection-specific to redact.)
+
+See the root [`README.md`](../README.md) for the full setup flow.
 
 ## Testing
 
