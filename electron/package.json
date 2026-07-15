@@ -67,6 +67,7 @@
         }
       ]
     },
+    "afterPack": "./scripts/afterPack.js",
     "afterSign": "./scripts/afterSign.js",
     "win": {
       "icon": "build/icon.ico",
