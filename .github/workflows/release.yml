@@ -64,7 +64,7 @@ jobs:
           # own signing entirely: look the identity up via the untrusted-inclusive
           # `find-identity` (no `-v`) and pass its hash to the build step, which signs
           # manually in `afterSign` (see electron/scripts/afterSign.js).
-          IDENTITY_HASH=$(security find-identity -k "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
+          IDENTITY_HASH=$(security find-identity "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
           if [[ -z "$IDENTITY_HASH" ]]; then
             echo "::error::No signing identity found in imported certificate"
             exit 1
