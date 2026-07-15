@@ -87,29 +87,28 @@ What the self-signed cert *does* buy in the meantime:
    openssl pkcs12 -in certificate.p12 -passin pass:'your-p12-export-password' -clcerts -nokeys -legacy -out certificate.pem
    security add-trusted-cert -r trustRoot -p codeSign -k login.keychain-db certificate.pem
    ```
-   (CI does the same thing, scoped to its own throwaway keychain — see
-   `.github/workflows/release.yml`'s "Import signing certificate" step. CI additionally
-   runs `sudo security authorizationdb write com.apple.trust-settings.admin allow`
-   immediately before `add-trusted-cert`, because that command normally shows a GUI
-   trust-confirmation dialog that a headless runner can never dismiss — without the
-   pre-authorization, the step hangs indefinitely instead of failing, which is easy to
-   mistake for "just a slow build.")
+   **CI does not do this step.** A headless runner can never dismiss the GUI
+   trust-confirmation dialog `add-trusted-cert` normally pops, and newer macOS runner
+   images (`macos-26-arm64`) also deny the `authorizationdb` pre-authorization that
+   used to let CI skip that dialog non-interactively — `add-trusted-cert` now fails
+   outright (`NO (-60005)`) instead of hanging. `codesign` itself doesn't check trust
+   (only Gatekeeper/verification does), so CI sidesteps the whole problem: it looks up
+   the imported identity's hash via the untrusted-inclusive `security find-identity`
+   (no `-v`) and passes it to a manual `codesign --sign <hash>` call in `afterSign`
+   (`electron/scripts/afterSign.js`) instead of letting `electron-builder` pick a
+   (trusted-only) identity itself — see `.github/workflows/release.yml`'s "Import
+   signing certificate" step and `CSC_IDENTITY_AUTO_DISCOVERY: "false"` on the build
+   step.
 
 ## Required GitHub secrets
 
 - **`MACOS_CERTIFICATE`** — base64-encoded `.p12` from step 5 above.
 - **`MACOS_CERTIFICATE_PWD`** — the export password from step 4.
-- **`MACOS_CERTIFICATE_NAME`** — the certificate's Common Name **without** the
-  `Developer ID Application:` prefix (e.g. `Timebuddy Local`, not
-  `Developer ID Application: Timebuddy Local`) — `electron-builder` prepends that prefix
-  itself when matching against `CSC_NAME` and errors out (`Please remove prefix...`) if
-  it's already included. A self-signed cert won't be picked up by `electron-builder`'s
-  default identity search unless it's told exactly which identity to use via `CSC_NAME`,
-  which the workflow passes from this secret.
 
 `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` are deliberately **not**
-configured — `scripts/notarize.js` no-ops (with a warning in the build log) whenever
-those are unset, so the build stays signed-but-not-notarized without any code changes.
+configured — `scripts/afterSign.js` no-ops the notarize step (with a warning in the
+build log) whenever those are unset, so the build stays signed-but-not-notarized
+without any code changes.
 
 ## Testing locally
 
@@ -126,11 +125,11 @@ cd electron && npm run build-mac
 Once a real Apple Developer Program enrollment + Developer ID Application certificate
 exist, the only changes needed are:
 
-1. Replace `MACOS_CERTIFICATE`/`MACOS_CERTIFICATE_PWD`/`MACOS_CERTIFICATE_NAME` with the
-   real certificate's values (see Time Buddy's `APPLE_SIGNING_SETUP.md` for the
-   equivalent Apple-issued-cert version of these same steps).
+1. Replace `MACOS_CERTIFICATE`/`MACOS_CERTIFICATE_PWD` with the real certificate's
+   values (see Time Buddy's `APPLE_SIGNING_SETUP.md` for the equivalent
+   Apple-issued-cert version of these same steps).
 2. Add the `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` secrets — their
-   presence is what turns notarizing back on in `scripts/notarize.js`.
+   presence is what turns notarizing back on in `scripts/afterSign.js`.
 
 No changes to `package.json`'s `build` config, the entitlements, or the workflow
 structure are needed.
