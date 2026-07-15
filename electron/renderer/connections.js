@@ -198,7 +198,11 @@ async function loadRegistrationInfo() {
   // its own. See main.js's registrationInfo handler for why.
   const args = isPackaged ? ['--mcp-server'] : [appPath, '--mcp-server'];
 
-  const codeCommand = `claude mcp add timebuddy-incident-investigator -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
+  // --scope user (not the "local" default) registers this once for the whole machine/user
+  // instead of only the one project directory this command happens to be run from —
+  // consistent with the skills' --scope user below, and what you want for a single desktop
+  // app meant to be usable from any project.
+  const codeCommand = `claude mcp add --scope user timebuddy-incident-investigator -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
   $('claudeCodeCommand').textContent = codeCommand;
 
   const desktopSnippet = JSON.stringify(
@@ -217,24 +221,19 @@ async function loadRegistrationInfo() {
 
   // Registers the plugin/skills bundled alongside this app (see main.js's
   // registrationInfo handler and package.json's build.extraResources) as a
-  // local-directory marketplace — the plugin id and marketplace id here must
-  // match .claude-plugin/marketplace.json's "name" fields exactly, or
-  // enabledPlugins' "plugin@marketplace" key won't resolve.
-  const pluginSnippet = JSON.stringify(
-    {
-      extraKnownMarketplaces: {
-        'timebuddy-incident-investigator': {
-          source: { source: 'directory', path: pluginPath },
-        },
-      },
-      enabledPlugins: {
-        'timebuddy@timebuddy-incident-investigator': true,
-      },
-    },
-    null,
-    2,
-  );
-  $('claudePluginSnippet').textContent = pluginSnippet;
+  // local-directory marketplace, then installs it. The plugin/marketplace ids
+  // in the second command aren't arbitrary — they're read from that bundle's
+  // own .claude-plugin/marketplace.json / plugin.json "name" fields, so this
+  // is fixed as long as those files don't change. --scope user writes both to
+  // ~/.claude/settings.json (extraKnownMarketplaces + enabledPlugins) for this
+  // machine/user, same as pasting the JSON snippet by hand used to, just via
+  // the CLI instead — confirmed skills show up immediately with no restart
+  // (only the MCP server itself needs a client restart to reconnect).
+  const pluginCommand = [
+    `claude plugin marketplace add ${quote(pluginPath)} --scope user`,
+    'claude plugin install timebuddy@timebuddy-incident-investigator --scope user',
+  ].join('\n');
+  $('claudePluginSnippet').textContent = pluginCommand;
 
   if (!isPackaged) {
     const note = document.createElement('p');
@@ -247,7 +246,7 @@ async function loadRegistrationInfo() {
 
   $('copyClaudeCodeBtn').addEventListener('click', () => navigator.clipboard.writeText(codeCommand));
   $('copyClaudeDesktopBtn').addEventListener('click', () => navigator.clipboard.writeText(desktopSnippet));
-  $('copyClaudePluginBtn').addEventListener('click', () => navigator.clipboard.writeText(pluginSnippet));
+  $('copyClaudePluginBtn').addEventListener('click', () => navigator.clipboard.writeText(pluginCommand));
 }
 
 loadRegistrationInfo();

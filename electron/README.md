@@ -36,6 +36,30 @@ To run in MCP-server mode directly (what Claude Code/Desktop will do):
 electron . --mcp-server
 ```
 
+## Configuring connections
+
+Add a connection for each Grafana endpoint you use (one per region/tier, etc.) — each
+person authenticates as themselves (their own Bearer token or Basic-auth
+username/password) rather than everyone sharing one admin-provisioned service-account
+credential.
+
+1. Click **Add connection** and fill in a name, the Grafana URL, and either a Bearer
+   token or Basic auth username/password:
+
+   ![Add connection form](docs/images/connections-1-add-modal.png)
+
+2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
+   URL, a bad credential, or a Grafana instance that isn't reachable from this machine
+   immediately, instead of partway through an actual investigation later.
+
+3. Click **Save**. Repeat for every Grafana endpoint you use — they all show up in one
+   list, each editable/duplicable/deletable at any time:
+
+   ![Configured connections list](docs/images/connections-2-list-redacted.png)
+
+   (Name/URL columns are blurred above — those are real connection details from a live
+   setup; yours will show your own Grafana endpoints.)
+
 ## How it stores data
 
 Connections live under Electron's per-OS `userData` directory (shown in the app's UI,
@@ -66,12 +90,99 @@ session instead of a destroy-after-one-shot window (see `setupLiveViewSession` i
 The log is in-memory only, for this MCP-server process's lifetime — nothing is written to
 disk, and it resets on restart.
 
+## Installing a downloaded build (macOS)
+
+Grab the latest build for your platform from
+[GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
+
+The macOS build is currently signed with a self-signed certificate, not a real Apple
+Developer ID (see "Building, signing, and releasing" below) — so Gatekeeper blocks it as
+an unverified app on first launch. On current macOS (Sequoia and later), the old
+"right-click the app → Open" bypass no longer clears this particular block; it has to be
+allowed from System Settings instead. This is the same click-through for every release
+until real Developer ID signing/notarization lands:
+
+1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
+
+   ![Drag the app into the Applications folder](docs/images/macos-install-1-drag-to-applications.png)
+
+2. Double-click the app in **Applications**. macOS refuses to open it outright:
+
+   ![“Timebuddy Incident Investigator.app” Not Opened](docs/images/macos-install-2-not-opened.png)
+
+   Click **Done** (not "Move to Trash").
+
+3. Open **System Settings → Privacy & Security**, scroll to the **Security** section at
+   the bottom, and click **Open Anyway** next to the app's entry.
+
+   ![Privacy & Security showing the blocked app with an Open Anyway button](docs/images/macos-install-3-privacy-security-open-anyway.png)
+
+4. Confirm in the dialog that appears:
+
+   ![Open “Timebuddy Incident Investigator.app”? confirmation dialog](docs/images/macos-install-4-confirm-open-anyway.png)
+
+   Click **Open Anyway** again.
+
+5. Authenticate with Touch ID or your admin password — macOS requires this before it'll
+   actually launch an app it blocked:
+
+   ![Touch ID / password prompt to authorize opening the app](docs/images/macos-install-5-authenticate.png)
+
+The app opens normally after this and won't be re-blocked on subsequent launches. This
+whole flow is only needed once per downloaded build; a rebuilt/re-downloaded `.app` (a
+new version, or the same version re-signed) is quarantined again and needs it repeated.
+
+Prefer the command line? Skip steps 2-5 with:
+
+```bash
+xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app"
+```
+
 ## Registering with Claude
 
 Once you've added your connections, the app's "Register with Claude" section shows a
-ready-to-run `claude mcp add` command (Claude Code) and a ready-to-paste `mcpServers` JSON
-snippet (Claude Desktop), both pointing at this app's own executable path with
-`--mcp-server`. See the root [`README.md`](../README.md) for the full setup flow.
+ready-to-run `claude mcp add --scope user` command (Claude Code) and a ready-to-paste
+`mcpServers` JSON snippet (Claude Desktop), both pointing at this app's own executable
+path with `--mcp-server`. `--scope user` (not the "local" default) registers it once for
+the whole machine/user rather than only the one project directory you happen to run the
+command from — since this is one desktop app meant to be usable from any project:
+
+![Register with Claude section](docs/images/connections-3-register-with-claude-redacted.png)
+
+(The redacted rows at the top are leftover connection entries visible from scrolling; the
+`claude mcp add` command shown predates the `--scope user` addition — this section itself
+has nothing connection-specific to redact.)
+
+A third, optional block (not pictured above — its exact commands changed after this
+screenshot was taken) registers the bundled Claude Code skills. It's two `claude plugin`
+CLI commands rather than a settings.json paste:
+
+```bash
+claude plugin marketplace add "/Applications/Timebuddy Incident Investigator.app/Contents/Resources/plugin" --scope user
+claude plugin install timebuddy@timebuddy-incident-investigator --scope user
+```
+
+(the app's own UI fills in the first command's path for you — this is just the shape).
+The marketplace/plugin ids aren't arbitrary: they're read from that bundle's own
+`.claude-plugin/marketplace.json`/`plugin.json` `name` fields, so the second command is
+fixed as long as those files don't change. `--scope user` writes both to
+`~/.claude/settings.json` (`extraKnownMarketplaces` + `enabledPlugins`) for this
+machine/user. Skills show up immediately, no restart needed — only the MCP server itself
+needs a client restart to reconnect.
+
+**macOS only:** the *first* time Claude actually starts this app as an MCP server (which
+can be a while after you registered it above — not until your Claude client's next
+session, or the next time it decides to spawn the server), macOS will prompt for keychain
+access to decrypt your saved connection credentials:
+
+![macOS keychain access prompt](docs/images/macos-keychain-access.png)
+
+This is expected — **Allow** (or **Always Allow**, to skip the prompt on future
+launches) it. If you don't recognize this prompt when it appears, it's this app's own
+`safeStorage`-encrypted connection secrets being decrypted (see "How it stores data"
+above), not anything else asking for your keychain.
+
+See the root [`README.md`](../README.md) for the full setup flow.
 
 ## Testing
 
@@ -114,6 +225,6 @@ point at those release artifacts).
 **macOS signing is currently a self-signed certificate**, not a real Apple Developer ID —
 see [`SELF_SIGNED_SETUP.md`](SELF_SIGNED_SETUP.md) for what that does and doesn't buy you
 (short version: `afterSign` runs `scripts/afterSign.js`, which signs but can't notarize
-without real Apple credentials, so downloaded builds still hit a Gatekeeper block that
-needs a right-click-Open override). Windows and Linux builds are unsigned entirely, same
-as upstream Time Buddy.
+without real Apple credentials, so downloaded builds still hit a Gatekeeper block — see
+"Installing a downloaded build (macOS)" above for the click-through). Windows and Linux
+builds are unsigned entirely, same as upstream Time Buddy.

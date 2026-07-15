@@ -6,7 +6,10 @@ pipeline working end to end now, with a **known limitation**: the signed builds 
 produces will still trigger Gatekeeper's "Apple could not verify this app is free of
 malware" block for anyone who downloads them, because a self-signed certificate doesn't
 chain to Apple's CA — only notarization (which requires a real Developer ID) removes
-that. Recipients need to right-click the app → Open the first time, or run:
+that. On current macOS, this block is no longer clearable with the old right-click →
+Open trick; recipients need to go through System Settings → Privacy & Security → Open
+Anyway — see [`README.md`](README.md#installing-a-downloaded-build-macos) for the full
+click-through with screenshots. Or, on the command line:
 
 ```bash
 xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app"
