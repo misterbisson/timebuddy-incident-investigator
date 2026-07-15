@@ -92,6 +92,9 @@ disk, and it resets on restart.
 
 ## Installing a downloaded build (macOS)
 
+Grab the latest build for your platform from
+[GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
+
 The macOS build is currently signed with a self-signed certificate, not a real Apple
 Developer ID (see "Building, signing, and releasing" below) — so Gatekeeper blocks it as
 an unverified app on first launch. On current macOS (Sequoia and later), the old
@@ -140,14 +143,41 @@ xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app
 Once you've added your connections, the app's "Register with Claude" section shows a
 ready-to-run `claude mcp add` command (Claude Code) and a ready-to-paste `mcpServers` JSON
 snippet (Claude Desktop), both pointing at this app's own executable path with
-`--mcp-server` — plus a `~/.claude/settings.json` snippet for the bundled Claude Code
-skills (see the root README's ["Claude Code skills"](../README.md#claude-code-skills)
-section):
+`--mcp-server`:
 
 ![Register with Claude section](docs/images/connections-3-register-with-claude-redacted.png)
 
 (The redacted rows at the top are leftover connection entries visible from scrolling —
 this section itself has nothing connection-specific to redact.)
+
+A third, optional block (not pictured above — its exact commands changed after this
+screenshot was taken) registers the bundled Claude Code skills. It's two `claude plugin`
+CLI commands rather than a settings.json paste:
+
+```bash
+claude plugin marketplace add "/Applications/Timebuddy Incident Investigator.app/Contents/Resources/plugin" --scope user
+claude plugin install timebuddy@timebuddy-incident-investigator --scope user
+```
+
+(the app's own UI fills in the first command's path for you — this is just the shape).
+The marketplace/plugin ids aren't arbitrary: they're read from that bundle's own
+`.claude-plugin/marketplace.json`/`plugin.json` `name` fields, so the second command is
+fixed as long as those files don't change. `--scope user` writes both to
+`~/.claude/settings.json` (`extraKnownMarketplaces` + `enabledPlugins`) for this
+machine/user. Skills show up immediately, no restart needed — only the MCP server itself
+needs a client restart to reconnect.
+
+**macOS only:** the *first* time Claude actually starts this app as an MCP server (which
+can be a while after you registered it above — not until your Claude client's next
+session, or the next time it decides to spawn the server), macOS will prompt for keychain
+access to decrypt your saved connection credentials:
+
+![macOS keychain access prompt](docs/images/macos-keychain-access.png)
+
+This is expected — **Allow** (or **Always Allow**, to skip the prompt on future
+launches) it. If you don't recognize this prompt when it appears, it's this app's own
+`safeStorage`-encrypted connection secrets being decrypted (see "How it stores data"
+above), not anything else asking for your keychain.
 
 See the root [`README.md`](../README.md) for the full setup flow.
 

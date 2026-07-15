@@ -58,16 +58,27 @@ instead of everyone sharing one admin-provisioned service-account token), then r
 with whichever Claude client you use. No separate MCP server process, no env vars to
 hand-edit, no plaintext credential file anywhere.
 
-1. `cd electron && npm install && npm run dev` — opens the connection manager.
+1. Download the latest build for your platform from
+   [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases)
+   and install it. (On macOS, the first launch hits a Gatekeeper block since this build
+   isn't notarized yet — see
+   [`electron/README.md`](electron/README.md#installing-a-downloaded-build-macos) for the
+   click-through. Building from source instead? `cd electron && npm install && npm run
+   dev`.)
 2. Add a connection for each Grafana endpoint you use (one per region/tier, etc.) —
-   Bearer token or Basic auth, your choice. "Test connection" before saving.
+   Bearer token or Basic auth, your choice. "Test connection" before saving. (See
+   [`electron/README.md`](electron/README.md#configuring-connections) for a walkthrough
+   with screenshots.)
 3. In the app's "Register with Claude" section, copy the command (Claude Code) or JSON
    snippet (Claude Desktop) shown there — it already has this app's own path filled in —
    and add it to your Claude client. A third block, "Claude Code skills (optional)", gives
-   a JSON snippet for `~/.claude/settings.json` that registers the skills below — they're
-   bundled with the app itself (see "Claude Code skills" below), so this needs no GitHub
-   access and no separate download, and it stays pinned to whichever app version you have
-   installed.
+   two `claude plugin` CLI commands that register the skills below — they're bundled with
+   the app itself (see "Claude Code skills" below), so this needs no GitHub access and no
+   separate download, and it stays pinned to whichever app version you have installed. On
+   macOS, the first time Claude actually starts the app as an MCP server, expect a keychain
+   access prompt — see
+   [`electron/README.md`](electron/README.md#registering-with-claude) for what it looks
+   like and why it's expected.
 
 Adding, editing, or removing a connection later takes effect immediately for any MCP
 server that's already running — it's picked up on the very next tool call, no restart
@@ -90,11 +101,14 @@ The Electron app bundles this same plugin (`.claude-plugin/` and `skills/`, copi
 `extraResources` at build time — see `electron/package.json`) alongside the compiled
 MCP server/connection-manager code, unpacked on disk outside `app.asar` so Claude Code
 (a separate process) can read it directly. The "Claude Code skills" block in the app's
-"Register with Claude" section (see Setup above) gives a ready-to-paste
-`~/.claude/settings.json` snippet — `extraKnownMarketplaces` pointing at the app's own
-bundled plugin directory plus `enabledPlugins` to turn it on — no GitHub, no separate
-install step. Its one tradeoff: the path it points at is wherever the app is currently
-installed, so re-copy the snippet after moving/reinstalling the app, same as re-running
+"Register with Claude" section (see Setup above) gives two ready-to-run `claude plugin`
+commands — `marketplace add <app's bundled plugin path> --scope user` followed by
+`install timebuddy@timebuddy-incident-investigator --scope user` — no GitHub, no separate
+install step. `--scope user` writes both to `~/.claude/settings.json`
+(`extraKnownMarketplaces` + `enabledPlugins`) for this machine/user; skills show up
+immediately, no restart needed (only the MCP server itself needs a client restart to
+reconnect). Its one tradeoff: the path in the first command is wherever the app is
+currently installed, so re-run it after moving/reinstalling the app, same as re-running
 "Register with Claude" for the MCP registration itself after any such change.
 
 Prefer installing from GitHub instead (e.g. no desktop app, or want plugin updates
