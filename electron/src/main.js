@@ -30,6 +30,7 @@ function createWindow() {
     width: 760,
     height: 640,
     title: 'Grafana Connection Manager',
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -85,6 +86,7 @@ function getOrCreateActivityWindow() {
     width: 960,
     height: 680,
     title: 'Timebuddy Activity',
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload-activity.js'),
       contextIsolation: true,

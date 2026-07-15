@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#232a4d"/>
+      <stop offset="100%" stop-color="#12162a"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="45%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38e0d6"/>
+      <stop offset="100%" stop-color="#4f8bff"/>
+    </linearGradient>
+    <radialGradient id="lens" cx="42%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#e9fbfa" stop-opacity="0.22"/>
+      <stop offset="70%" stop-color="#9fd9ff" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#9fd9ff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="squircleClip">
+      <rect x="32" y="32" width="960" height="960" rx="216" ry="216"/>
+    </clipPath>
+  </defs>
+
+  <rect x="32" y="32" width="960" height="960" rx="216" ry="216" fill="url(#bg)"/>
+  <rect x="32" y="32" width="960" height="960" rx="216" ry="216" fill="url(#sheen)"/>
+
+  <g clip-path="url(#squircleClip)">
+    <!-- baseline trace, calm before/after the incident -->
+    <path d="M 90 660
+             L 250 660
+             L 340 660
+             L 430 470
+             L 480 760
+             L 540 360
+             L 600 660
+             L 700 660
+             L 950 660"
+          fill="none" stroke="url(#wave)" stroke-width="30"
+          stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- soft glow behind the spike -->
+    <circle cx="510" cy="470" r="150" fill="#ffb454" opacity="0.16"/>
+  </g>
+
+  <!-- magnifier -->
+  <circle cx="512" cy="466" r="188" fill="url(#lens)" stroke="#f5f8ff" stroke-width="40"/>
+  <line x1="648" y1="602" x2="792" y2="746" stroke="#f5f8ff" stroke-width="52" stroke-linecap="round"/>
+
+  <!-- incident marker at the peak, inside the lens -->
+  <circle cx="540" cy="360" r="26" fill="#ffb454" stroke="#12162a" stroke-width="10"/>
+</svg>
