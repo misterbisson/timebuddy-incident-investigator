@@ -66,6 +66,51 @@ session instead of a destroy-after-one-shot window (see `setupLiveViewSession` i
 The log is in-memory only, for this MCP-server process's lifetime — nothing is written to
 disk, and it resets on restart.
 
+## Installing a downloaded build (macOS)
+
+The macOS build is currently signed with a self-signed certificate, not a real Apple
+Developer ID (see "Building, signing, and releasing" below) — so Gatekeeper blocks it as
+an unverified app on first launch. On current macOS (Sequoia and later), the old
+"right-click the app → Open" bypass no longer clears this particular block; it has to be
+allowed from System Settings instead. This is the same click-through for every release
+until real Developer ID signing/notarization lands:
+
+1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
+
+   ![Drag the app into the Applications folder](docs/images/macos-install-1-drag-to-applications.png)
+
+2. Double-click the app in **Applications**. macOS refuses to open it outright:
+
+   ![“Timebuddy Incident Investigator.app” Not Opened](docs/images/macos-install-2-not-opened.png)
+
+   Click **Done** (not "Move to Trash").
+
+3. Open **System Settings → Privacy & Security**, scroll to the **Security** section at
+   the bottom, and click **Open Anyway** next to the app's entry.
+
+   ![Privacy & Security showing the blocked app with an Open Anyway button](docs/images/macos-install-3-privacy-security-open-anyway.png)
+
+4. Confirm in the dialog that appears:
+
+   ![Open “Timebuddy Incident Investigator.app”? confirmation dialog](docs/images/macos-install-4-confirm-open-anyway.png)
+
+   Click **Open Anyway** again.
+
+5. Authenticate with Touch ID or your admin password — macOS requires this before it'll
+   actually launch an app it blocked:
+
+   ![Touch ID / password prompt to authorize opening the app](docs/images/macos-install-5-authenticate.png)
+
+The app opens normally after this and won't be re-blocked on subsequent launches. This
+whole flow is only needed once per downloaded build; a rebuilt/re-downloaded `.app` (a
+new version, or the same version re-signed) is quarantined again and needs it repeated.
+
+Prefer the command line? Skip steps 2-5 with:
+
+```bash
+xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app"
+```
+
 ## Registering with Claude
 
 Once you've added your connections, the app's "Register with Claude" section shows a
@@ -114,6 +159,6 @@ point at those release artifacts).
 **macOS signing is currently a self-signed certificate**, not a real Apple Developer ID —
 see [`SELF_SIGNED_SETUP.md`](SELF_SIGNED_SETUP.md) for what that does and doesn't buy you
 (short version: `afterSign` runs `scripts/afterSign.js`, which signs but can't notarize
-without real Apple credentials, so downloaded builds still hit a Gatekeeper block that
-needs a right-click-Open override). Windows and Linux builds are unsigned entirely, same
-as upstream Time Buddy.
+without real Apple credentials, so downloaded builds still hit a Gatekeeper block — see
+"Installing a downloaded build (macOS)" above for the click-through). Windows and Linux
+builds are unsigned entirely, same as upstream Time Buddy.

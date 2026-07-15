@@ -326,10 +326,13 @@ confirms the `safeStorage` -> engine wiring works end to end (see
   pointing at a datasource UID that no longer exists.
 - `detect_correlated_anomalies` ranks candidates with a heuristic (z-score magnitude ×
   label overlap × onset-timing proximity), not a statistical correlation/causation test.
-- The Electron app isn't code-signed yet. Unsigned builds run fine for local
-  testing, but distributing one to other people will hit Gatekeeper (macOS) or
-  SmartScreen (Windows) warnings until it's signed with a real developer identity —
-  a prerequisite for wider rollout, not something fixable in code.
+- The Electron app isn't notarized yet (macOS signing is currently a self-signed
+  certificate, not a real Apple Developer ID — see `electron/SELF_SIGNED_SETUP.md`).
+  Downloaded builds hit a Gatekeeper block on macOS (see
+  [`electron/README.md`](electron/README.md#installing-a-downloaded-build-macos) for the
+  click-through) or SmartScreen warnings on Windows, until it's signed/notarized with a
+  real developer identity — a prerequisite for wider rollout, not something fixable in
+  code.
 - `export_panel_csv`'s Grafana-side transformation capture (see the tools table above) is
   Electron-only, and depends on the exact visible text/DOM structure of Grafana's Inspect
   drawer rather than a published API — it's expected to be more version-sensitive than the
