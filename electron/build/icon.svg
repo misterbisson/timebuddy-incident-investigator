@@ -12,10 +12,9 @@
       <stop offset="0%" stop-color="#38e0d6"/>
       <stop offset="100%" stop-color="#4f8bff"/>
     </linearGradient>
-    <radialGradient id="lens" cx="42%" cy="38%" r="65%">
-      <stop offset="0%" stop-color="#e9fbfa" stop-opacity="0.22"/>
-      <stop offset="70%" stop-color="#9fd9ff" stop-opacity="0.06"/>
-      <stop offset="100%" stop-color="#9fd9ff" stop-opacity="0"/>
+    <radialGradient id="faceGrad" cx="38%" cy="32%" r="75%">
+      <stop offset="0%" stop-color="#fffaf0"/>
+      <stop offset="100%" stop-color="#f4ead9"/>
     </radialGradient>
     <clipPath id="squircleClip">
       <rect x="32" y="32" width="960" height="960" rx="216" ry="216"/>
@@ -26,27 +25,47 @@
   <rect x="32" y="32" width="960" height="960" rx="216" ry="216" fill="url(#sheen)"/>
 
   <g clip-path="url(#squircleClip)">
-    <!-- baseline trace, calm before/after the incident -->
-    <path d="M 90 660
-             L 250 660
-             L 340 660
-             L 430 470
-             L 480 760
-             L 540 360
-             L 600 660
-             L 700 660
-             L 950 660"
+    <!-- time-series trace with the incident spike -->
+    <path d="M 80 800
+             L 260 800
+             L 340 800
+             L 405 690
+             L 445 860
+             L 500 640
+             L 548 580
+             L 600 800
+             L 700 800
+             L 960 800"
           fill="none" stroke="url(#wave)" stroke-width="30"
           stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- soft glow behind the spike -->
-    <circle cx="510" cy="470" r="150" fill="#ffb454" opacity="0.16"/>
+    <!-- soft glow behind the incident peak -->
+    <circle cx="548" cy="580" r="120" fill="#ffb454" opacity="0.14"/>
   </g>
 
-  <!-- magnifier -->
-  <circle cx="512" cy="466" r="188" fill="url(#lens)" stroke="#f5f8ff" stroke-width="40"/>
-  <line x1="648" y1="602" x2="792" y2="746" stroke="#f5f8ff" stroke-width="52" stroke-linecap="round"/>
+  <!-- magnifying glass handle (behind the lens) -->
+  <line x1="632" y1="468" x2="784" y2="620" stroke="#f5f8ff" stroke-width="52" stroke-linecap="round"/>
 
-  <!-- incident marker at the peak, inside the lens -->
-  <circle cx="540" cy="360" r="26" fill="#ffb454" stroke="#12162a" stroke-width="10"/>
+  <!-- lens, personified as the buddy's face -->
+  <circle cx="500" cy="368" r="168" fill="url(#faceGrad)" stroke="#f5f8ff" stroke-width="38"/>
+
+  <!-- eyebrows: alert, "spotted something" -->
+  <path d="M 405 300 L 452 282" stroke="#1b2038" stroke-width="15" stroke-linecap="round"/>
+  <path d="M 548 282 L 595 300" stroke="#1b2038" stroke-width="15" stroke-linecap="round"/>
+
+  <!-- eyes -->
+  <circle cx="450" cy="345" r="33" fill="#1b2038"/>
+  <circle cx="550" cy="345" r="33" fill="#1b2038"/>
+  <circle cx="440" cy="335" r="9" fill="#ffffff"/>
+  <circle cx="540" cy="335" r="9" fill="#ffffff"/>
+
+  <!-- rosy cheeks -->
+  <circle cx="400" cy="395" r="20" fill="#ff9d76" opacity="0.45"/>
+  <circle cx="600" cy="395" r="20" fill="#ff9d76" opacity="0.45"/>
+
+  <!-- open, surprised "spotted an incident" mouth -->
+  <ellipse cx="500" cy="425" rx="22" ry="28" fill="#1b2038"/>
+
+  <!-- incident marker, right where the buddy's gaze lands -->
+  <circle cx="548" cy="580" r="24" fill="#ffb454" stroke="#12162a" stroke-width="9"/>
 </svg>
