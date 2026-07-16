@@ -3,11 +3,30 @@
 // public/js/connections.js (showAddConnectionForm/editConnection/
 // saveConnection) — see NOTICE.md. Persistence goes through
 // window.connectionManager (exposed by preload.js) instead of localStorage.
+//
+// Two connection kinds share this one form: Grafana (bearer/basic auth,
+// optional matchHosts) and Graylog (API-token/basic auth, optional
+// streamId/streamName). `kind` is fixed at creation — the toggle is disabled
+// while editing or duplicating an existing connection, since none of a
+// connection's kind-specific fields carry over to the other kind.
 
 let editingConnectionId = null;
 
 function $(id) {
   return document.getElementById(id);
+}
+
+function currentKind() {
+  return document.querySelector('input[name="kind"]:checked').value;
+}
+
+function setKind(kind, { lock = false } = {}) {
+  for (const radio of document.querySelectorAll('input[name="kind"]')) {
+    radio.checked = radio.value === kind;
+    radio.disabled = lock;
+  }
+  $('grafanaFields').classList.toggle('hidden', kind !== 'grafana');
+  $('graylogFields').classList.toggle('hidden', kind !== 'graylog');
 }
 
 function currentAuthType() {
@@ -22,59 +41,106 @@ function setAuthType(type) {
   $('basicFields').classList.toggle('hidden', type !== 'basic');
 }
 
+function currentGraylogAuthType() {
+  return document.querySelector('input[name="graylogAuthType"]:checked').value;
+}
+
+function setGraylogAuthType(type) {
+  for (const radio of document.querySelectorAll('input[name="graylogAuthType"]')) {
+    radio.checked = radio.value === type;
+  }
+  $('graylogTokenFields').classList.toggle('hidden', type !== 'token');
+  $('graylogBasicFields').classList.toggle('hidden', type !== 'basic');
+}
+
+for (const radio of document.querySelectorAll('input[name="kind"]')) {
+  radio.addEventListener('change', (e) => setKind(e.target.value));
+}
 for (const radio of document.querySelectorAll('input[name="authType"]')) {
   radio.addEventListener('change', (e) => setAuthType(e.target.value));
+}
+for (const radio of document.querySelectorAll('input[name="graylogAuthType"]')) {
+  radio.addEventListener('change', (e) => setGraylogAuthType(e.target.value));
+}
+
+function resetCommonFields() {
+  $('connectionName').value = '';
+  $('connectionUrl').value = '';
+  $('connectionTags').value = '';
+  $('connectionTlsVerify').checked = true;
+  $('testResult').textContent = '';
+  $('testResult').className = 'test-result';
+}
+
+function resetGrafanaFields() {
+  $('connectionToken').value = '';
+  $('connectionUsername').value = '';
+  $('connectionPassword').value = '';
+  $('connectionMatchHosts').value = '';
+  setAuthType('bearer');
+}
+
+function resetGraylogFields() {
+  $('connectionGraylogToken').value = '';
+  $('connectionGraylogUsername').value = '';
+  $('connectionGraylogPassword').value = '';
+  $('connectionStreamId').value = '';
+  $('connectionStreamName').value = '';
+  setGraylogAuthType('token');
 }
 
 function openModalForAdd() {
   editingConnectionId = null;
   $('connectionFormTitle').textContent = 'Add connection';
-  $('connectionName').value = '';
-  $('connectionUrl').value = '';
-  $('connectionToken').value = '';
-  $('connectionUsername').value = '';
-  $('connectionPassword').value = '';
-  $('connectionMatchHosts').value = '';
-  $('connectionTlsVerify').checked = true;
+  resetCommonFields();
+  resetGrafanaFields();
+  resetGraylogFields();
+  setKind('grafana', { lock: false });
+  $('connectionModal').classList.remove('hidden');
+}
+
+function populateFromConnection(connection) {
+  $('connectionName').value = connection.name;
+  $('connectionUrl').value = connection.url;
+  $('connectionTags').value = (connection.tags ?? []).join(', ');
+  $('connectionTlsVerify').checked = connection.tlsVerify ?? true;
   $('testResult').textContent = '';
   $('testResult').className = 'test-result';
-  setAuthType('bearer');
-  $('connectionModal').classList.remove('hidden');
+
+  const kind = connection.kind ?? 'grafana';
+  if (kind === 'graylog') {
+    // Secrets are never sent back to the renderer — leaving these blank and
+    // saving keeps whatever is already stored (see connectionStore.js).
+    $('connectionGraylogToken').value = '';
+    $('connectionGraylogUsername').value = connection.username ?? '';
+    $('connectionGraylogPassword').value = '';
+    $('connectionStreamId').value = connection.streamId ?? '';
+    $('connectionStreamName').value = connection.streamName ?? '';
+    setGraylogAuthType(connection.authType ?? 'token');
+  } else {
+    $('connectionToken').value = '';
+    $('connectionUsername').value = connection.username ?? '';
+    $('connectionPassword').value = '';
+    $('connectionMatchHosts').value = (connection.matchHosts ?? []).join(', ');
+    setAuthType(connection.authType ?? 'bearer');
+  }
+  setKind(kind, { lock: true });
 }
 
 function openModalForEdit(connection) {
   editingConnectionId = connection.id;
   $('connectionFormTitle').textContent = `Edit connection: ${connection.name}`;
-  $('connectionName').value = connection.name;
-  $('connectionUrl').value = connection.url;
-  // Secrets are never sent back to the renderer — leaving these blank and
-  // saving keeps whatever is already stored (see connectionStore.js).
-  $('connectionToken').value = '';
-  $('connectionUsername').value = connection.username ?? '';
-  $('connectionPassword').value = '';
-  $('connectionMatchHosts').value = (connection.matchHosts ?? []).join(', ');
-  $('connectionTlsVerify').checked = connection.tlsVerify ?? true;
-  $('testResult').textContent = '';
-  $('testResult').className = 'test-result';
-  setAuthType(connection.authType);
+  populateFromConnection(connection);
   $('connectionModal').classList.remove('hidden');
 }
 
 function openModalForDuplicate(connection) {
   editingConnectionId = null;
   $('connectionFormTitle').textContent = `Duplicate connection: ${connection.name}`;
-  $('connectionName').value = `${connection.name} (copy)`;
-  $('connectionUrl').value = connection.url;
   // Secrets never reach the renderer, so a duplicate can't carry the
   // original's token/password along — re-enter it for the new connection.
-  $('connectionToken').value = '';
-  $('connectionUsername').value = connection.username ?? '';
-  $('connectionPassword').value = '';
-  $('connectionMatchHosts').value = (connection.matchHosts ?? []).join(', ');
-  $('connectionTlsVerify').checked = connection.tlsVerify ?? true;
-  $('testResult').textContent = '';
-  $('testResult').className = 'test-result';
-  setAuthType(connection.authType);
+  populateFromConnection(connection);
+  $('connectionName').value = `${connection.name} (copy)`;
   $('connectionModal').classList.remove('hidden');
 }
 
@@ -83,23 +149,58 @@ function closeModal() {
   editingConnectionId = null;
 }
 
+function readTags() {
+  const tags = $('connectionTags').value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return tags.length ? tags : undefined;
+}
+
 function readDraft() {
+  const kind = currentKind();
+  const common = {
+    id: editingConnectionId ?? undefined,
+    kind,
+    name: $('connectionName').value.trim(),
+    url: $('connectionUrl').value.trim(),
+    tags: readTags(),
+    tlsVerify: $('connectionTlsVerify').checked,
+  };
+
+  if (kind === 'graylog') {
+    const authType = currentGraylogAuthType();
+    return {
+      ...common,
+      authType,
+      token: authType === 'token' ? $('connectionGraylogToken').value.trim() : undefined,
+      username: authType === 'basic' ? $('connectionGraylogUsername').value.trim() : undefined,
+      password: authType === 'basic' ? $('connectionGraylogPassword').value.trim() : undefined,
+      streamId: $('connectionStreamId').value.trim() || undefined,
+      streamName: $('connectionStreamName').value.trim() || undefined,
+    };
+  }
+
   const authType = currentAuthType();
   const matchHosts = $('connectionMatchHosts').value
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
   return {
-    id: editingConnectionId ?? undefined,
-    name: $('connectionName').value.trim(),
-    url: $('connectionUrl').value.trim(),
+    ...common,
     authType,
     token: authType === 'bearer' ? $('connectionToken').value.trim() : undefined,
     username: authType === 'basic' ? $('connectionUsername').value.trim() : undefined,
     password: authType === 'basic' ? $('connectionPassword').value.trim() : undefined,
     matchHosts: matchHosts.length ? matchHosts : undefined,
-    tlsVerify: $('connectionTlsVerify').checked,
   };
+}
+
+function authLabel(connection) {
+  if (connection.kind === 'graylog') {
+    return connection.authType === 'basic' ? 'Basic auth' : 'API token';
+  }
+  return connection.authType === 'basic' ? 'Basic auth' : 'Bearer token';
 }
 
 async function renderConnections() {
@@ -108,7 +209,7 @@ async function renderConnections() {
   body.innerHTML = '';
 
   if (connections.length === 0) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="5">No connections yet. Click "Add connection" to create one.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="6">No connections yet. Click "Add connection" to create one.</td></tr>';
     return;
   }
 
@@ -119,12 +220,16 @@ async function renderConnections() {
     nameCell.textContent = connection.name;
     row.appendChild(nameCell);
 
+    const kindCell = document.createElement('td');
+    kindCell.textContent = connection.kind === 'graylog' ? 'Graylog' : 'Grafana';
+    row.appendChild(kindCell);
+
     const urlCell = document.createElement('td');
     urlCell.textContent = connection.url;
     row.appendChild(urlCell);
 
     const authCell = document.createElement('td');
-    authCell.textContent = connection.authType === 'basic' ? 'Basic auth' : 'Bearer token';
+    authCell.textContent = authLabel(connection);
     row.appendChild(authCell);
 
     const statusCell = document.createElement('td');

@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, ipcMain, session, shell } = require('electron'
 const path = require('node:path');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
+const { testGraylogConnection } = require('./graylogTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
 const { originOf, attachAuthHeaders } = require('./authGuard.js');
 
@@ -42,7 +43,7 @@ function openOrFocusConnectionsWindow() {
   connectionsWindow = new BrowserWindow({
     width: 760,
     height: 640,
-    title: 'Grafana Connection Manager',
+    title: 'Timebuddy Connection Manager',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -192,7 +193,9 @@ app.on('window-all-closed', () => {
 ipcMain.handle('connections:list', () => store.listConnectionsForDisplay());
 ipcMain.handle('connections:upsert', (_event, connection) => store.upsertConnection(connection));
 ipcMain.handle('connections:delete', (_event, id) => store.deleteConnection(id));
-ipcMain.handle('connections:test', (_event, draft) => testConnection(draft));
+ipcMain.handle('connections:test', (_event, draft) =>
+  draft.kind === 'graylog' ? testGraylogConnection(draft) : testConnection(draft),
+);
 ipcMain.handle('activity:list', () => (activityLog ? activityLog.list() : []));
 ipcMain.handle('activity:openExternal', (_event, url) => {
   // Every activity entry's url is built by this app's own buildDashboardUrl()

@@ -138,39 +138,47 @@ xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app
 
 ## Configuring connections
 
-Add a connection for each Grafana endpoint you use (one per region/tier, etc.) — each
-person authenticates as themselves (their own Bearer token or Basic-auth
-username/password) rather than everyone sharing one admin-provisioned service-account
-credential.
+Add a connection for each Grafana or Graylog endpoint you use (one per region/tier,
+etc.) — each person authenticates as themselves (their own token or username/password)
+rather than everyone sharing one admin-provisioned service-account credential.
 
-1. Click **Add connection** and fill in a name, the Grafana URL, and either a Bearer
-   token or Basic auth username/password:
+1. Click **Add connection**, pick a **Connection kind** (Grafana or Graylog), and fill
+   in a name, the URL, and credentials:
 
    <img src="docs/images/connections-1-add-modal.png" width="400" alt="Add connection form">
 
+   Grafana connections take a Bearer token or Basic-auth username/password, same as
+   always. Graylog connections take an **API token** or Basic-auth username/password —
+   note that "API token" is sent as HTTP Basic auth with the token as the username, per
+   Graylog's own convention, not a real Bearer header. Either kind can carry optional
+   **tags** (e.g. `prod`, `us-east`) — shared free-form labels a skill uses to pair a
+   Graylog connection with the right Grafana connection instead of guessing. `kind` is
+   fixed once a connection is saved; switch the kind by adding a new connection instead
+   of editing an existing one.
+
 2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
-   URL, a bad credential, or a Grafana instance that isn't reachable from this machine
+   URL, a bad credential, or an instance that isn't reachable from this machine
    immediately, instead of partway through an actual investigation later.
 
-3. Click **Save**. Repeat for every Grafana endpoint you use — they all show up in one
-   list, each editable/duplicable/deletable at any time:
+3. Click **Save**. Repeat for every endpoint you use — they all show up in one list,
+   each editable/duplicable/deletable at any time:
 
    <img src="docs/images/connections-2-list-redacted.png" width="700" alt="Configured connections list">
 
    (Name/URL columns are blurred above — those are real connection details from a live
-   setup; yours will show your own Grafana endpoints.)
+   setup; yours will show your own endpoints.)
 
 ### How connections are stored
 
-Connections live under Electron's per-OS `userData` directory (shown in the app's UI,
-with a "copy path" button), in two files:
+Connections live under Electron's per-OS `userData` directory, in two files:
 
-- `connections.json` — non-secret metadata (name, URL, auth type, etc.), plaintext (it
-  holds nothing sensitive).
+- `connections.json` — non-secret metadata (name, URL, auth type, kind, tags, etc.),
+  plaintext (it holds nothing sensitive).
 - `secrets.enc.json` — every token/password, `safeStorage`-encrypted (backed by the OS
   keychain: macOS Keychain, Windows DPAPI, or libsecret on Linux). Decrypted only
   in-memory, only inside this same process, when `--mcp-server` mode needs to build a
-  Grafana client — the decrypted form is never written back to disk.
+  client for one of these connections — the decrypted form is never written back to
+  disk.
 
 ## Registering with Claude
 
