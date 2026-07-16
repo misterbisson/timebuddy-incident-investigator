@@ -78,14 +78,29 @@ export function extractFromInfluxQL(target: PanelTarget): ExtractedQueryInfo {
   const metricNames = new Set<string>();
   const labels: Record<string, string[]> = {};
 
-  if (target.measurement) {
-    metricNames.add(lastSegment(target.measurement));
-  }
-  for (const tag of target.tags ?? []) {
-    addLabel(labels, tag.key, tag.value);
+  // Grafana's InfluxQL editor stores two independently-edited representations
+  // per target — the structured builder fields (measurement/tags/...) and a
+  // raw Text-mode `query` string — and only one is ever executed, selected by
+  // `rawQuery`. The other can go stale forever (edited once in one mode,
+  // never regenerated in the other), so it must not be read as if it were
+  // live (see #35: a stale, wrong-platform query survived unnoticed in a
+  // builder-mode panel and was briefly mistaken for a real bug). When
+  // `rawQuery` itself is absent (older dashboards saved before Grafana
+  // tracked it), fall back to reading whatever fields are present, since
+  // there's no way to tell which mode produced them.
+  const readBuilderFields = target.rawQuery !== true;
+  const readTextQuery = target.rawQuery !== false;
+
+  if (readBuilderFields) {
+    if (target.measurement) {
+      metricNames.add(lastSegment(target.measurement));
+    }
+    for (const tag of target.tags ?? []) {
+      addLabel(labels, tag.key, tag.value);
+    }
   }
 
-  if (target.query) {
+  if (readTextQuery && target.query) {
     const segment = '(?:"[^"]+"|[a-zA-Z0-9_]+)';
     const fromMatch = target.query.match(new RegExp(`from\\s+(?:\\(\\s*)?(${segment}(?:\\.${segment})*)`, 'i'));
     if (fromMatch) metricNames.add(lastSegment(fromMatch[1]!));
