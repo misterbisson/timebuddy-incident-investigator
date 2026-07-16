@@ -8,10 +8,30 @@ investigation — identify what fired, replay the underlying queries, compare ag
 baseline periods, search for correlated signals elsewhere, and hand back an
 evidence-linked verdict for a human to act on.
 
+Most people never call the tools below by name — three bundled Claude Code skills (see
+["Skills"](#skills) below) chain them automatically. Using Claude Desktop, or another MCP
+client without skill/plugin support? The tools table below is the whole interface — the
+agent calls those directly instead.
+
 This page covers downloading, installing, configuring, and using the app. Developing or
 building it instead? See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## Tools
+## Skills
+
+Three Claude Code skills chain the tools below in the right order automatically, so
+nobody needs to know a tool name or the right call order — paste an alert link, ask what's
+connected, or ask to export a panel, and the right one takes it from there:
+
+| Skill | Use it when | What it does |
+| --- | --- | --- |
+| `/timebuddy:explore` | Checking that the Grafana MCP setup works, doing a health check, or just seeing what's connected — before an incident happens | Confirms the server is connected, surveys available connections/dashboards, and flags which are alert-backed (and therefore trustworthy) |
+| `/timebuddy:investigate` | Something's paged, someone pasted an alert/incident link, or you're asking "what's going on with X" | Ingests the alert, replays its queries over the incident window, checks baselines, looks for correlated signals elsewhere, and writes an evidence-linked verdict with clickable links |
+| `/timebuddy:export` | Someone asks to export, archive, or hand off a panel's data or chart — for a report, a postmortem, or a presentation | Resolves the exact panel from a URL and a panel name, writes its data to a CSV file, and optionally grabs a screenshot alongside it |
+
+See ["Claude Code skills"](#claude-code-skills) below for how to install them — they're
+bundled with the desktop app, so it's usually a couple of clicks, no separate download.
+
+## MCP tools
 
 | Tool | Purpose |
 | --- | --- |
@@ -82,29 +102,29 @@ for every release until real Developer ID signing/notarization lands:
 
 1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
 
-   ![Drag the app into the Applications folder](electron/docs/images/macos-install-1-drag-to-applications.png)
+   <img src="docs/images/macos-install-1-drag-to-applications.png" width="500" alt="Drag the app into the Applications folder">
 
 2. Double-click the app in **Applications**. macOS refuses to open it outright:
 
-   ![“Timebuddy Incident Investigator.app” Not Opened](electron/docs/images/macos-install-2-not-opened.png)
+   <img src="docs/images/macos-install-2-not-opened.png" width="380" alt="“Timebuddy Incident Investigator.app” Not Opened">
 
    Click **Done** (not "Move to Trash").
 
 3. Open **System Settings → Privacy & Security**, scroll to the **Security** section at
    the bottom, and click **Open Anyway** next to the app's entry.
 
-   ![Privacy & Security showing the blocked app with an Open Anyway button](electron/docs/images/macos-install-3-privacy-security-open-anyway.png)
+   <img src="docs/images/macos-install-3-privacy-security-open-anyway.png" width="360" alt="Privacy & Security showing the blocked app with an Open Anyway button">
 
 4. Confirm in the dialog that appears:
 
-   ![Open “Timebuddy Incident Investigator.app”? confirmation dialog](electron/docs/images/macos-install-4-confirm-open-anyway.png)
+   <img src="docs/images/macos-install-4-confirm-open-anyway.png" width="360" alt="Open “Timebuddy Incident Investigator.app”? confirmation dialog">
 
    Click **Open Anyway** again.
 
 5. Authenticate with Touch ID or your admin password — macOS requires this before it'll
    actually launch an app it blocked:
 
-   ![Touch ID / password prompt to authorize opening the app](electron/docs/images/macos-install-5-authenticate.png)
+   <img src="docs/images/macos-install-5-authenticate.png" width="360" alt="Touch ID / password prompt to authorize opening the app">
 
 The app opens normally after this and won't be re-blocked on subsequent launches. This
 whole flow is only needed once per downloaded build; a rebuilt/re-downloaded `.app` (a
@@ -126,7 +146,7 @@ credential.
 1. Click **Add connection** and fill in a name, the Grafana URL, and either a Bearer
    token or Basic auth username/password:
 
-   ![Add connection form](electron/docs/images/connections-1-add-modal.png)
+   <img src="docs/images/connections-1-add-modal.png" width="400" alt="Add connection form">
 
 2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
    URL, a bad credential, or a Grafana instance that isn't reachable from this machine
@@ -135,7 +155,7 @@ credential.
 3. Click **Save**. Repeat for every Grafana endpoint you use — they all show up in one
    list, each editable/duplicable/deletable at any time:
 
-   ![Configured connections list](electron/docs/images/connections-2-list-redacted.png)
+   <img src="docs/images/connections-2-list-redacted.png" width="700" alt="Configured connections list">
 
    (Name/URL columns are blurred above — those are real connection details from a live
    setup; yours will show your own Grafana endpoints.)
@@ -161,7 +181,7 @@ path with `--mcp-server`. `--scope user` (not the "local" default) registers it 
 the whole machine/user rather than only the one project directory you happen to run the
 command from — since this is one desktop app meant to be usable from any project:
 
-![Register with Claude section](electron/docs/images/connections-3-register-with-claude-redacted.png)
+<img src="docs/images/connections-3-register-with-claude-redacted.png" width="700" alt="Register with Claude section">
 
 (The redacted rows at the top are leftover connection entries visible from scrolling; the
 `claude mcp add` command shown predates the `--scope user` addition — this section itself
@@ -189,7 +209,7 @@ can be a while after you registered it above — not until your Claude client's 
 session, or the next time it decides to spawn the server), macOS will prompt for keychain
 access to decrypt your saved connection credentials:
 
-![macOS keychain access prompt](electron/docs/images/macos-keychain-access.png)
+<img src="docs/images/macos-keychain-access.png" width="480" alt="macOS keychain access prompt">
 
 This is expected — **Allow** (or **Always Allow**, to skip the prompt on future
 launches) it. If you don't recognize this prompt when it appears, it's this app's own
@@ -234,21 +254,23 @@ See [`skills/explore/SKILL.md`](skills/explore/SKILL.md),
 
 ## Activity window
 
-While running in `--mcp-server` mode, this app also shows a companion "Timebuddy
-Activity" window — created the moment the first dashboard/panel is actually queried (not
-at process start, so nothing pops up before an investigation begins). It's a live,
-clickable log of what's being inspected: each entry is one panel a tool call actually
-pulled data from or screenshotted (not every dashboard/panel link a tool result happens to
-mention — see `src/tools/shared.ts`'s `recordActivity` for exactly which tool calls log an
-entry and why). Clicking an entry shows either the screenshot `screenshot_panel` saved for
-it, or a live, authenticated view of the real Grafana panel in an embedded `<webview>` —
-authenticated the same way `screenshotter.js`'s one-shot captures are (a connection's own
-bearer/basic header injected via `webRequest`), just against a long-lived, persistent
-session instead of a destroy-after-one-shot window (see `setupLiveViewSession` in
-`electron/src/main.js`).
+Once your Claude client has started this app as your MCP server (it does this on its own
+whenever it needs the server — see ["Registering with Claude"](#registering-with-claude)
+above), a companion "Timebuddy Activity" window appears the moment Claude actually queries
+its first dashboard/panel — not as soon as Claude starts, so nothing pops up before an
+investigation begins. It's a live, clickable log of what's being inspected: each entry is
+one panel Claude actually pulled data from or screenshotted (not every dashboard/panel link
+that happens to be mentioned in a response — see `src/tools/shared.ts`'s `recordActivity`
+for exactly which tool calls log an entry and why). Clicking an entry shows either the
+screenshot `screenshot_panel` saved for it, or a live, authenticated view of the real
+Grafana panel in an embedded `<webview>` — authenticated the same way `screenshotter.js`'s
+one-shot captures are (a connection's own bearer/basic header injected via `webRequest`),
+just against a long-lived, persistent session instead of a destroy-after-one-shot window
+(see `setupLiveViewSession` in `electron/src/main.js`).
 
-The log is in-memory only, for this MCP-server process's lifetime — nothing is written to
-disk, and it resets on restart.
+The log is in-memory only, for as long as that server keeps running — closing or
+restarting your Claude client (which restarts the server) clears it, and nothing is ever
+written to disk.
 
 ## Multiple Grafana connections
 

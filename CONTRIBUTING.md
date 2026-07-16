@@ -40,7 +40,7 @@ electron/         the distributed app: a GUI for managing Grafana connections th
                   README.md for using it, electron/CONTRIBUTING.md for developing it.
 ```
 
-See the root [`README.md`](README.md#tools) for what each of the 14 MCP tools does, and
+See the root [`README.md`](README.md#mcp-tools) for what each of the 14 MCP tools does, and
 [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md) for a few Grafana edge cases (product knowledge
 dashboards, live `$__all` variable resolution, the `-- Dashboard --` pseudo-datasource)
 that are easy to miss from a partial read of the code.
