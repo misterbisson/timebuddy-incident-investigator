@@ -18,7 +18,7 @@ npm run webhook       # start the standalone webhook listener (src/webhook/liste
 path above (`npm run dev`, or `dist/index.js`) — not needed for `npm test`/`npm run
 typecheck` (the Grafana client is mocked), and not used at all by the distributed
 Electron app, which sources connections from its own `safeStorage`-backed store instead
-(see `electron/README.md`).
+(see `README.md`'s "How connections are stored" section).
 
 `electron/` is a separate npm workspace (the distributed app) with its own commands:
 
@@ -106,7 +106,7 @@ Launched normally it's a connection-manager GUI (adds Grafana connections into a
 from that store via the `ConnectionsSource` thunk above instead of env vars. Both modes
 are the same binary/process — that's what lets connection secrets stay OS-keychain-encrypted
 end to end, with no separate server process that would need a plaintext credential on
-disk. See `electron/README.md` for the storage format and
+disk. See `README.md`'s "How connections are stored" section for the storage format and
 `electron/test/mcpServerMode.mjs` for how it's tested (spawns the real binary in
 `--mcp-server` mode via the actual MCP SDK client/transport; no live Grafana needed).
 
@@ -121,3 +121,13 @@ stale, update the skill in the same change.
 PromQL/InfluxQL metric and label extraction (`index-builder/extract.ts`) is a best-effort
 regex scan, not a real parser — see the "Known limitations" section in README.md before
 trying to make it more precise; the tradeoffs there were deliberate given the scope.
+
+Docs are split by audience — keep it that way rather than drifting back into the mixed
+files this was split out of. `README.md` is user-facing only (install, configure, use);
+`CONTRIBUTING.md` and `electron/CONTRIBUTING.md` hold developer/build/release workflow
+for the engine and the Electron app respectively; `docs/BEHAVIOR.md` holds the deep
+Grafana-edge-case specs (product-knowledge dashboards, live `$__all` variable resolution,
+the `-- Dashboard --` pseudo-datasource) that would otherwise clutter README.md. A change
+to what an end user does belongs in README.md; a change to how a contributor
+builds/tests/releases belongs in the relevant CONTRIBUTING.md — don't duplicate the same
+instructions across both just because a change touches code in both places.

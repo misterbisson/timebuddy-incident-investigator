@@ -8,8 +8,8 @@ malware" block for anyone who downloads them, because a self-signed certificate 
 chain to Apple's CA — only notarization (which requires a real Developer ID) removes
 that. On current macOS, this block is no longer clearable with the old right-click →
 Open trick; recipients need to go through System Settings → Privacy & Security → Open
-Anyway — see [`README.md`](README.md#installing-a-downloaded-build-macos) for the full
-click-through with screenshots. Or, on the command line:
+Anyway — see the root [`README.md`](../README.md#installing-a-downloaded-build-macos) for
+the full click-through with screenshots. Or, on the command line:
 
 ```bash
 xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app"
