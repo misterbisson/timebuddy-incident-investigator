@@ -161,11 +161,18 @@ async function runMcpServer() {
     // capture with — this is what gates screenshot_panel's registration.
     createScreenshotter(),
     activityLog,
+    // Same re-read-on-every-call thunk as the Grafana source above, backed
+    // by the same connections.json/secrets.enc.json (see
+    // connectionStore.js's kind split) — a Graylog connection added/edited
+    // in the GUI takes effect on the next tool call with no restart either.
+    () => store.getLogConnectionsForEngine(),
   );
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
+  const startupLogConnections = store.getLogConnectionsForEngine();
   console.error(
-    `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')})`,
+    `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')}` +
+      `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})`,
   );
 }
 

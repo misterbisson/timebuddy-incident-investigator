@@ -7,6 +7,9 @@ import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
 import { buildDashboardUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
+import { buildGraylogSearchUrl } from '../graylog/urlBuilder.js';
+import type { GraylogClient } from '../graylog/client.js';
+import type { LogConnectionRegistry } from '../graylog/registry.js';
 import type { ActivityLog } from '../activity/activityLog.js';
 import type { Config } from '../config.js';
 import { redact } from '../security/redact.js';
@@ -68,6 +71,31 @@ export function dashboardUrlFor(
   const connection = registry.list().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildDashboardUrl(connection.url, dashboardUid, opts);
+}
+
+/**
+ * Log-connection counterpart to resolveToolClient — same explicit-id-or-
+ * single-fallback resolution, just against LogConnectionRegistry. No
+ * hintUrl: a log connection has no comparable inbound alert/dashboard link
+ * to infer from, unlike a Grafana connection.
+ */
+export function resolveLogToolClient(
+  registry: LogConnectionRegistry,
+  input: { connection?: string },
+): { client: GraylogClient; connectionId: string } {
+  const { connection } = resolveConnection({ explicitId: input.connection }, registry.list(), 'Graylog');
+  return { client: registry.get(connection.id), connectionId: connection.id };
+}
+
+/** Log-connection counterpart to dashboardUrlFor — builds a clickable Graylog search URL for a connection a log tool already resolved. */
+export function logSearchUrlFor(
+  registry: LogConnectionRegistry,
+  connectionId: string,
+  params: { query: string; fromMs: number; toMs: number; streamId?: string },
+): string | undefined {
+  const connection = registry.list().find((c) => c.id === connectionId);
+  if (!connection) return undefined;
+  return buildGraylogSearchUrl(connection.url, { ...params, streamId: params.streamId ?? connection.streamId });
 }
 
 /**

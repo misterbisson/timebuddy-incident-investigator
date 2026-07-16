@@ -1,12 +1,21 @@
-import type { GrafanaConnection } from '../config.js';
-
 export interface ResolveConnectionInput {
   explicitId?: string;
   hintUrl?: string;
 }
 
-export interface ResolvedConnection {
-  connection: GrafanaConnection;
+/**
+ * The subset of GrafanaConnection/LogConnection this resolution logic
+ * actually needs — kept generic so both share one implementation instead of
+ * duplicating "explicit id wins, else the sole connection, else error".
+ */
+export interface ResolvableConnection {
+  id: string;
+  url: string;
+  matchHosts?: string[];
+}
+
+export interface ResolvedConnection<T extends ResolvableConnection> {
+  connection: T;
   matchedBy: 'explicit' | 'host' | 'single';
 }
 
@@ -18,35 +27,43 @@ function safeHostname(rawUrl: string): string | undefined {
   }
 }
 
-function hostMatches(host: string, connection: GrafanaConnection): boolean {
+function hostMatches(host: string, connection: ResolvableConnection): boolean {
   const connectionHost = safeHostname(connection.url);
   if (connectionHost === host) return true;
   return (connection.matchHosts ?? []).some((h) => h.toLowerCase() === host);
 }
 
-function describeAvailable(connections: GrafanaConnection[]): string {
+function describeAvailable(connections: ResolvableConnection[]): string {
   return connections.map((c) => `${c.id} (${c.url})`).join(', ');
 }
 
 /**
- * Picks which Grafana connection a tool call should use: an explicit id
- * always wins; otherwise infer from the alert/dashboard link's hostname;
- * otherwise fall back to the only configured connection. Ambiguous or
- * unresolvable is a hard error — guessing which Grafana to hit is the wrong
- * failure mode for a read-only investigation tool.
+ * Picks which connection a tool call should use: an explicit id always wins;
+ * otherwise infer from the alert/dashboard link's hostname (Grafana
+ * connections only in practice — log connections have no comparable
+ * inbound link, so callers simply omit hintUrl for those); otherwise fall
+ * back to the only configured connection. Ambiguous or unresolvable is a
+ * hard error — guessing which connection to hit is the wrong failure mode
+ * for a read-only investigation tool.
  *
  * The single-connection fallback applies only when nothing contradicted it: a
  * hint URL naming a host that matches no connection is unresolvable and errors,
  * even when there's exactly one connection to fall back to.
+ *
+ * Generic over GrafanaConnection/LogConnection so both connection kinds
+ * share this logic; `kind` only changes the wording of error messages
+ * (default "Grafana" so every pre-existing call site's error text is
+ * unchanged) and callers resolving a log connection pass kind="Graylog".
  */
-export function resolveConnection(
+export function resolveConnection<T extends ResolvableConnection>(
   input: ResolveConnectionInput,
-  connections: GrafanaConnection[],
-): ResolvedConnection {
+  connections: T[],
+  kind = 'Grafana',
+): ResolvedConnection<T> {
   if (connections.length === 0) {
     throw new Error(
-      'No Grafana connections configured. Set GRAFANA_URL/GRAFANA_TOKEN, or add connections in the ' +
-        'connection manager app (see README).',
+      `No ${kind} connections configured. Set GRAFANA_URL/GRAFANA_TOKEN (or GRAYLOG_URL/GRAYLOG_TOKEN for log ` +
+        'connections), or add connections in the connection manager app (see README).',
     );
   }
 
@@ -91,7 +108,7 @@ export function resolveConnection(
   }
 
   throw new Error(
-    `Could not determine which Grafana connection to use. Available: ${describeAvailable(connections)}. ` +
+    `Could not determine which ${kind} connection to use. Available: ${describeAvailable(connections)}. ` +
       'Pass "connection" explicitly.',
   );
 }

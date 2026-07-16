@@ -34,6 +34,8 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@liquescent/log-correlator-core": "0.0.7",
+    "@liquescent/log-correlator-query-parser": "0.0.7",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "undici": "^8.7.0",
     "zod": "^3.24.1"

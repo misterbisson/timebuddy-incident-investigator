@@ -111,6 +111,30 @@ build a metric/measurement -> dashboard reverse index, cached to
 `find_related_dashboards({forceRefresh: true})` or `detect_correlated_anomalies` when it
 needs to auto-discover candidates), not tied to the per-alert investigation flow.
 
+`src/graylog/` + `src/logs/` are the log-search counterpart to `src/grafana/`, following
+the same three shaping rules above: `src/graylog/client.ts` is a closed-allowlist client
+(only Graylog's legacy absolute-range search and stream-listing endpoints; 6.x's
+CSV-returning Views API is out of scope), `src/graylog/registry.ts`'s
+`LogConnectionRegistry` mirrors `ConnectionRegistry`'s lazy-per-connection-client-cache
+shape, and `src/connections/resolve.ts`'s `resolveConnection()` is generic over both
+connection kinds. One real difference: `LogConnection.authType` is `'token' | 'basic'`,
+not Grafana's `'bearer' | 'basic'` — a Graylog API token authenticates as HTTP Basic with
+the token as the username and the literal string `"token"` as the password (Graylog's own
+convention), not a real `Authorization: Bearer` header. `src/logs/adapter.ts`'s
+`HistoricalGraylogAdapter` is the one genuinely new piece: it implements the vendored
+`@liquescent/log-correlator-core`'s `DataSourceAdapter` interface, but — unlike that
+library's own Loki/Graylog adapters, which are hardcoded to live-tail from `now` — it
+always re-runs `GraylogClient.searchAbsolute()` against a fixed historical window
+regardless of the engine's own relative-time derivation, which is what makes a
+live-tail-oriented join engine work for a historical incident window at all.
+`src/logs/correlate.ts`'s `correlateLogs()` builds one `CorrelationEngine` + adapter per
+call (stateless across tool calls) and always tears both down in `finally`. Three tools
+(`search_logs`, `list_log_sources`, `correlate_logs`) follow the same
+`withAudit`/`redact` pattern as every Grafana tool; `list_log_sources` and
+`list_datasources` each surface a connection's `tags` so a skill can pair a log
+connection to the right Grafana connection instead of guessing. See `NOTICE.md` for what's
+vendored from log-correlator and why its own adapters aren't used.
+
 The webhook listener (`src/webhook/listener.ts`) is a separate, optional process — it's
 not part of the MCP server itself. It only accepts `POST /` and appends to
 `<DATA_DIR>/alerts.jsonl`; `get_alert_context` reads from that store when called with no

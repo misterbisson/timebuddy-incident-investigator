@@ -64,6 +64,9 @@ try {
     'validate_baseline',
     'summarize_findings',
     'list_datasources',
+    'search_logs',
+    'list_log_sources',
+    'correlate_logs',
   ];
   const actualNames = tools.map((t) => t.name).sort();
   const missing = expectedNames.filter((n) => !actualNames.includes(n));
@@ -83,6 +86,21 @@ try {
     fail(`fetch_dashboard failed at connection resolution, not at the network call: ${text}`);
   }
   console.log(`OK: fetch_dashboard got past connection resolution to a real network attempt: ${text}`);
+
+  const logResult = await client.callTool({
+    name: 'search_logs',
+    arguments: { query: '*', startsAtMs: Date.now() - 60_000, endsAtMs: Date.now() },
+  });
+  const logText = logResult.content?.[0]?.text ?? '';
+  // Same proof-of-wiring as fetch_dashboard above: graylog.example.com isn't
+  // real either, so this must fail with a network error (safeStorage
+  // decrypted the seeded Graylog token, GraylogClient actually attempted the
+  // HTTP call), not a "no log connections configured"/"could not determine
+  // which" resolution error.
+  if (/no graylog connections configured/i.test(logText) || /could not determine which/i.test(logText)) {
+    fail(`search_logs failed at connection resolution, not at the network call: ${logText}`);
+  }
+  console.log(`OK: search_logs got past connection resolution to a real network attempt: ${logText}`);
 
   await client.close();
   rmSync(userDataDir, { recursive: true, force: true });

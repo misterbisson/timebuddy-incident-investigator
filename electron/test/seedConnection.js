@@ -1,5 +1,6 @@
-// Seeds one connection directly through connectionStore.js (bypassing the
-// renderer/IPC layer) so integration tests can run headlessly. Run with:
+// Seeds a Grafana and a Graylog connection directly through
+// connectionStore.js (bypassing the renderer/IPC layer) so integration tests
+// can run headlessly. Run with:
 //   electron test/seedConnection.js --user-data-dir=<dir>
 const { app } = require('electron');
 
@@ -12,9 +13,17 @@ app.whenReady().then(() => {
   const store = require('../src/connectionStore.js');
   store.upsertConnection({
     name: 'test-connection',
+    kind: 'grafana',
     url: 'https://grafana.example.com',
     authType: 'bearer',
     token: 'test-token-12345',
+  });
+  store.upsertConnection({
+    name: 'test-log-connection',
+    kind: 'graylog',
+    url: 'https://graylog.example.com',
+    authType: 'token',
+    token: 'test-graylog-token-12345',
   });
   app.exit(0);
 });

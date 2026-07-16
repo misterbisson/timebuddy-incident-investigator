@@ -47,8 +47,11 @@ bundled with the desktop app, so it's usually a couple of clicks, no separate do
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. When auto-discovering, checks one `scope` tier per call — `product` (default; the primary dashboard plus its Timebuddy knowledge panel's declared ops/SLI dashboards and dependencies, or just the primary dashboard alone with no knowledge published), `connection`, then `all-connections` — so a caller can report each tier's result and only pay for a wider, more expensive search when the narrower one didn't answer it. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
 | `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle — it does not generate prose; the calling agent writes the human-readable note from this bundle. |
-| `list_datasources` | List a connection's configured datasources (uid/name/type/default) — mainly for checking whether a panel's literal-name datasource reference still exists under some other UID. |
+| `list_datasources` | List a connection's configured datasources (uid/name/type/default) and each connection's configured `tags` — cross-reference against `list_log_sources`' tags to pair a Grafana connection with the log connection covering the same environment. Mainly for checking whether a panel's literal-name datasource reference still exists under some other UID. |
 | `discover_influxdb_schema` | Queries an InfluxDB datasource directly for its own measurement/field/tag schema — not dashboarded data. A last-resort fallback for when `find_related_dashboards` finds nothing for a metric you have independent evidence should exist (index-builder only ever knows about metrics some panel already visualizes). Requires a `searchTerm`; there's no "list everything" mode by design. InfluxDB only, for now. |
+| `search_logs` | Searches a Graylog connection for log messages in a fixed time window, using Graylog's own query syntax. Use identifiers pulled from a metric investigation (hostname, IP, product string, request/trace id) to narrow the search. |
+| `list_log_sources` | List configured Graylog connections (id/name/tags/default stream) — the log-side counterpart to `list_datasources`. Pass `connection` to also list that connection's available streams. |
+| `correlate_logs` | Joins two (or more) Graylog searches on a shared field (e.g. a request id) using a PromQL-inspired join query — `and` (inner join), `or` (left join), `unless` (anti-join). Every stream in a query runs against the same fixed historical window, not a live tail. |
 
 ## Setup
 
@@ -351,6 +354,13 @@ dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
   panel has no transformations configured, or the capture attempt itself fails, the tool
   falls back to its own direct export: a table panel backed by more than one query/frame is
   then written to one CSV file per frame, not a merged table.
+- `search_logs`/`list_log_sources`/`correlate_logs` only support Graylog's **legacy**
+  (2.x-5.x) Universal Search API; Graylog 6.x's Views API returns CSV and needs materially
+  different parsing, so it isn't implemented. `correlate_logs`' join query language covers
+  `and`/`or`/`unless` with a single join key and multi-stream (3+) queries; label-mapping
+  joins across differently-named fields on each side and `group_left()`/`group_right()`
+  many-to-one grouping are implemented in the underlying library but aren't exercised by
+  this project's own tests yet.
 
 ## Acknowledgments
 
@@ -359,3 +369,7 @@ The `electron/` connection-manager app's UI and auth model are adapted from
 Liquescent Development (AGPL-3.0-only, the same license this repository uses). See
 [`NOTICE.md`](NOTICE.md) for exactly what was adapted and what was deliberately changed
 (credential storage, most notably).
+
+`correlate_logs` is built on `@liquescent/log-correlator-core`/`-query-parser`, also by
+Richard Kiene / Liquescent Development (AGPL-3.0-only). See [`NOTICE.md`](NOTICE.md) for
+what's used from it and what's deliberately not.
