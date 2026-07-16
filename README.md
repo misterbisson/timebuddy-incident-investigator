@@ -1,4 +1,4 @@
-# timebuddy-incident-investigator
+# Timebuddy Incident Investigator
 
 AI-powered investigation of dashboards, metrics, and logs during incidents.
 

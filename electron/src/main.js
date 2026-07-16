@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, session, shell } = require('electron');
 const path = require('node:path');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
@@ -9,6 +9,7 @@ const { createScreenshotter } = require('./screenshotter.js');
 // investigation activity to show there.
 let activityLog = null;
 let activityWindow = null;
+let connectionsWindow = null;
 
 // safeStorage's encryption key is scoped to the app's identity (name) in the
 // OS keychain. Set it explicitly rather than relying on package.json
@@ -25,8 +26,19 @@ app.setName('timebuddy-connection-manager');
 // of safeStorage — see connectionStore.js's getConnectionsForEngine().
 const isMcpMode = process.argv.includes('--mcp-server');
 
-function createWindow() {
-  const win = new BrowserWindow({
+/**
+ * Singleton: called both from normal GUI startup and from the "Connections…"
+ * menu item, so a click while the window is already open should focus it
+ * rather than spawn a duplicate — most relevant in --mcp-server mode, where
+ * this is otherwise the only way to reach the connections GUI without
+ * relaunching the whole process.
+ */
+function openOrFocusConnectionsWindow() {
+  if (connectionsWindow && !connectionsWindow.isDestroyed()) {
+    connectionsWindow.focus();
+    return connectionsWindow;
+  }
+  connectionsWindow = new BrowserWindow({
     width: 760,
     height: 640,
     title: 'Grafana Connection Manager',
@@ -37,7 +49,39 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  connectionsWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  connectionsWindow.on('closed', () => {
+    connectionsWindow = null;
+  });
+  return connectionsWindow;
+}
+
+/**
+ * Replaces Electron's default menu (generic Electron-branded Help links, a
+ * File menu with nothing relevant to this app, etc.) with one scoped to what
+ * this app actually does. Built fresh in both launch modes — macOS always
+ * shows an app-level menu bar even when --mcp-server mode never opens a
+ * window, and "Connections…" is how that mode's user reaches the GUI at all.
+ */
+function buildMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Connections…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => openOrFocusConnectionsWindow(),
+        },
+        isMac ? { role: 'close' } : { role: 'quit' },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // One persistent, shared session for the Activity window's live-view
@@ -147,6 +191,7 @@ async function runMcpServer() {
 }
 
 app.whenReady().then(async () => {
+  buildMenu();
   if (isMcpMode) {
     try {
       await runMcpServer();
@@ -156,9 +201,9 @@ app.whenReady().then(async () => {
     }
     return;
   }
-  createWindow();
+  openOrFocusConnectionsWindow();
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) openOrFocusConnectionsWindow();
   });
 });
 
