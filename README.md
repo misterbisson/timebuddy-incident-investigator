@@ -8,28 +8,8 @@ investigation — identify what fired, replay the underlying queries, compare ag
 baseline periods, search for correlated signals elsewhere, and hand back an
 evidence-linked verdict for a human to act on.
 
-## How it's organized
-
-```
-src/
-  server.ts       library entrypoint: createServer()/startMcpServer() build the MCP server for any caller
-  index.ts        standalone CLI wrapper around server.ts (env-only connections; dev/CI use, not the distributed app)
-  grafana/        read-only Grafana HTTP client + per-connection client registry
-  connections/    resolves which Grafana connection a tool call should use
-  alerts/         normalizes a webhook payload / pasted alert JSON / Grafana URL into an AlertContext
-  webhook/        a small companion HTTP listener that receives Grafana's webhook contact-point POSTs
-  dashboards/     panel/target extraction + Grafana template-variable substitution
-  query/          incident/pre-window/baseline window math + execution via /api/ds/query
-  index-builder/  crawls dashboards into a metric/measurement -> dashboard reverse index (cached locally, per connection)
-  analysis/       baseline z-score comparison, correlated-anomaly ranking, deterministic verdict assembly
-  security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
-  knowledge/      looks up an adopter-published "Timebuddy knowledge" dashboard/panel for a product, with caching
-  activity/       in-memory log of panels actually queried/screenshotted, surfaced by the Electron app's Activity window
-  tools/          the 14 MCP tools (13 always registered, screenshot_panel only in the Electron app), each a thin wrapper over the modules above
-electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
-                  server (launched with --mcp-server instead of opening a window) — see electron/README.md,
-                  including its "Activity window" section for the live investigation log/viewer
-```
+This page covers downloading, installing, configuring, and using the app. Developing or
+building it instead? See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Tools
 
@@ -62,54 +42,170 @@ hand-edit, no plaintext credential file anywhere.
    [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases)
    and install it. (On macOS, the first launch hits a Gatekeeper block since this build
    isn't notarized yet — see
-   [`electron/README.md`](electron/README.md#installing-a-downloaded-build-macos) for the
-   click-through. Building from source instead? `cd electron && npm install && npm run
-   dev`.)
+   ["Installing a downloaded build (macOS)"](#installing-a-downloaded-build-macos) below
+   for the click-through.)
 2. Add a connection for each Grafana endpoint you use (one per region/tier, etc.) —
    Bearer token or Basic auth, your choice. "Test connection" before saving. (See
-   [`electron/README.md`](electron/README.md#configuring-connections) for a walkthrough
-   with screenshots.)
+   ["Configuring connections"](#configuring-connections) below for a walkthrough with
+   screenshots.)
 3. In the app's "Register with Claude" section, copy the command (Claude Code) or JSON
    snippet (Claude Desktop) shown there — it already has this app's own path filled in —
    and add it to your Claude client. A third block, "Claude Code skills (optional)", gives
    two `claude plugin` CLI commands that register the skills below — they're bundled with
-   the app itself (see "Claude Code skills" below), so this needs no GitHub access and no
-   separate download, and it stays pinned to whichever app version you have installed. On
-   macOS, the first time Claude actually starts the app as an MCP server, expect a keychain
-   access prompt — see
-   [`electron/README.md`](electron/README.md#registering-with-claude) for what it looks
-   like and why it's expected.
+   the app itself (see ["Claude Code skills"](#claude-code-skills) below), so this needs no
+   GitHub access and no separate download, and it stays pinned to whichever app version you
+   have installed. On macOS, the first time Claude actually starts the app as an MCP
+   server, expect a keychain access prompt — see
+   ["Registering with Claude"](#registering-with-claude) below for what it looks like and
+   why it's expected.
 
 Adding, editing, or removing a connection later takes effect immediately for any MCP
 server that's already running — it's picked up on the very next tool call, no restart
 needed. (Restarting the connection-manager GUI window itself does nothing for this — it's
 a separate process from the one your Claude client is already talking to.)
 
-See [`electron/README.md`](electron/README.md) for exactly how connections/credentials are
-stored (short version: `safeStorage`/OS-keychain-encrypted, nothing plaintext, ever).
-
 For local development or CI, where there's no interest in the desktop app, the standalone
-CLI still works on its own with a single connection from env vars — see "Standalone CLI"
-below.
+CLI still works on its own with a single connection from env vars — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md#running-the-standalone-cli).
+
+## Installing a downloaded build (macOS)
+
+Grab the latest build for your platform from
+[GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
+
+The macOS build is currently signed with a self-signed certificate, not a real Apple
+Developer ID (see [`electron/CONTRIBUTING.md`](electron/CONTRIBUTING.md#building-signing-and-releasing))
+— so Gatekeeper blocks it as an unverified app on first launch. On current macOS (Sequoia
+and later), the old "right-click the app → Open" bypass no longer clears this particular
+block; it has to be allowed from System Settings instead. This is the same click-through
+for every release until real Developer ID signing/notarization lands:
+
+1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
+
+   ![Drag the app into the Applications folder](electron/docs/images/macos-install-1-drag-to-applications.png)
+
+2. Double-click the app in **Applications**. macOS refuses to open it outright:
+
+   ![“Timebuddy Incident Investigator.app” Not Opened](electron/docs/images/macos-install-2-not-opened.png)
+
+   Click **Done** (not "Move to Trash").
+
+3. Open **System Settings → Privacy & Security**, scroll to the **Security** section at
+   the bottom, and click **Open Anyway** next to the app's entry.
+
+   ![Privacy & Security showing the blocked app with an Open Anyway button](electron/docs/images/macos-install-3-privacy-security-open-anyway.png)
+
+4. Confirm in the dialog that appears:
+
+   ![Open “Timebuddy Incident Investigator.app”? confirmation dialog](electron/docs/images/macos-install-4-confirm-open-anyway.png)
+
+   Click **Open Anyway** again.
+
+5. Authenticate with Touch ID or your admin password — macOS requires this before it'll
+   actually launch an app it blocked:
+
+   ![Touch ID / password prompt to authorize opening the app](electron/docs/images/macos-install-5-authenticate.png)
+
+The app opens normally after this and won't be re-blocked on subsequent launches. This
+whole flow is only needed once per downloaded build; a rebuilt/re-downloaded `.app` (a
+new version, or the same version re-signed) is quarantined again and needs it repeated.
+
+Prefer the command line? Skip steps 2-5 with:
+
+```bash
+xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app"
+```
+
+## Configuring connections
+
+Add a connection for each Grafana endpoint you use (one per region/tier, etc.) — each
+person authenticates as themselves (their own Bearer token or Basic-auth
+username/password) rather than everyone sharing one admin-provisioned service-account
+credential.
+
+1. Click **Add connection** and fill in a name, the Grafana URL, and either a Bearer
+   token or Basic auth username/password:
+
+   ![Add connection form](electron/docs/images/connections-1-add-modal.png)
+
+2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
+   URL, a bad credential, or a Grafana instance that isn't reachable from this machine
+   immediately, instead of partway through an actual investigation later.
+
+3. Click **Save**. Repeat for every Grafana endpoint you use — they all show up in one
+   list, each editable/duplicable/deletable at any time:
+
+   ![Configured connections list](electron/docs/images/connections-2-list-redacted.png)
+
+   (Name/URL columns are blurred above — those are real connection details from a live
+   setup; yours will show your own Grafana endpoints.)
+
+### How connections are stored
+
+Connections live under Electron's per-OS `userData` directory (shown in the app's UI,
+with a "copy path" button), in two files:
+
+- `connections.json` — non-secret metadata (name, URL, auth type, etc.), plaintext (it
+  holds nothing sensitive).
+- `secrets.enc.json` — every token/password, `safeStorage`-encrypted (backed by the OS
+  keychain: macOS Keychain, Windows DPAPI, or libsecret on Linux). Decrypted only
+  in-memory, only inside this same process, when `--mcp-server` mode needs to build a
+  Grafana client — the decrypted form is never written back to disk.
+
+## Registering with Claude
+
+Once you've added your connections, the app's "Register with Claude" section shows a
+ready-to-run `claude mcp add --scope user` command (Claude Code) and a ready-to-paste
+`mcpServers` JSON snippet (Claude Desktop), both pointing at this app's own executable
+path with `--mcp-server`. `--scope user` (not the "local" default) registers it once for
+the whole machine/user rather than only the one project directory you happen to run the
+command from — since this is one desktop app meant to be usable from any project:
+
+![Register with Claude section](electron/docs/images/connections-3-register-with-claude-redacted.png)
+
+(The redacted rows at the top are leftover connection entries visible from scrolling; the
+`claude mcp add` command shown predates the `--scope user` addition — this section itself
+has nothing connection-specific to redact.)
+
+A third, optional block (not pictured above — its exact commands changed after this
+screenshot was taken) registers the bundled Claude Code skills. It's two `claude plugin`
+CLI commands rather than a settings.json paste:
+
+```bash
+claude plugin marketplace add "/Applications/Timebuddy Incident Investigator.app/Contents/Resources/plugin" --scope user
+claude plugin install timebuddy@timebuddy-incident-investigator --scope user
+```
+
+(the app's own UI fills in the first command's path for you — this is just the shape).
+The marketplace/plugin ids aren't arbitrary: they're read from that bundle's own
+`.claude-plugin/marketplace.json`/`plugin.json` `name` fields, so the second command is
+fixed as long as those files don't change. `--scope user` writes both to
+`~/.claude/settings.json` (`extraKnownMarketplaces` + `enabledPlugins`) for this
+machine/user. Skills show up immediately, no restart needed — only the MCP server itself
+needs a client restart to reconnect.
+
+**macOS only:** the *first* time Claude actually starts this app as an MCP server (which
+can be a while after you registered it above — not until your Claude client's next
+session, or the next time it decides to spawn the server), macOS will prompt for keychain
+access to decrypt your saved connection credentials:
+
+![macOS keychain access prompt](electron/docs/images/macos-keychain-access.png)
+
+This is expected — **Allow** (or **Always Allow**, to skip the prompt on future
+launches) it. If you don't recognize this prompt when it appears, it's this app's own
+`safeStorage`-encrypted connection secrets being decrypted (see
+["How connections are stored"](#how-connections-are-stored) above), not anything else
+asking for your keychain.
 
 ## Claude Code skills
 
 This repo also ships as a Claude Code plugin (`.claude-plugin/plugin.json`) with three skills
 that drive the tools above so nobody needs to know the tool names or the right call order.
 
-The Electron app bundles this same plugin (`.claude-plugin/` and `skills/`, copied in as
-`extraResources` at build time — see `electron/package.json`) alongside the compiled
-MCP server/connection-manager code, unpacked on disk outside `app.asar` so Claude Code
-(a separate process) can read it directly. The "Claude Code skills" block in the app's
-"Register with Claude" section (see Setup above) gives two ready-to-run `claude plugin`
-commands — `marketplace add <app's bundled plugin path> --scope user` followed by
-`install timebuddy@timebuddy-incident-investigator --scope user` — no GitHub, no separate
-install step. `--scope user` writes both to `~/.claude/settings.json`
-(`extraKnownMarketplaces` + `enabledPlugins`) for this machine/user; skills show up
-immediately, no restart needed (only the MCP server itself needs a client restart to
-reconnect). Its one tradeoff: the path in the first command is wherever the app is
-currently installed, so re-run it after moving/reinstalling the app, same as re-running
-"Register with Claude" for the MCP registration itself after any such change.
+The Electron app bundles this same plugin, so the easiest way to install it is the
+"Claude Code skills (optional)" block in the app's own "Register with Claude" section —
+see ["Registering with Claude"](#registering-with-claude) above for the exact commands and
+what they do.
 
 Prefer installing from GitHub instead (e.g. no desktop app, or want plugin updates
 independent of the app's release cadence)? The same plugin is installable as a normal
@@ -136,44 +232,23 @@ See [`skills/explore/SKILL.md`](skills/explore/SKILL.md),
 [`skills/investigate/SKILL.md`](skills/investigate/SKILL.md), and
 [`skills/export/SKILL.md`](skills/export/SKILL.md) for the exact pipeline each one follows.
 
-## Running
+## Activity window
 
-**The distributed app (recommended)** — one Electron binary, launched with `--mcp-server`
-by whichever Claude client you registered it with (see Setup above); it reads connections
-from its own `safeStorage`-backed store, no env vars needed. See
-[`electron/README.md`](electron/README.md).
+While running in `--mcp-server` mode, this app also shows a companion "Timebuddy
+Activity" window — created the moment the first dashboard/panel is actually queried (not
+at process start, so nothing pops up before an investigation begins). It's a live,
+clickable log of what's being inspected: each entry is one panel a tool call actually
+pulled data from or screenshotted (not every dashboard/panel link a tool result happens to
+mention — see `src/tools/shared.ts`'s `recordActivity` for exactly which tool calls log an
+entry and why). Clicking an entry shows either the screenshot `screenshot_panel` saved for
+it, or a live, authenticated view of the real Grafana panel in an embedded `<webview>` —
+authenticated the same way `screenshotter.js`'s one-shot captures are (a connection's own
+bearer/basic header injected via `webRequest`), just against a long-lived, persistent
+session instead of a destroy-after-one-shot window (see `setupLiveViewSession` in
+`electron/src/main.js`).
 
-**Standalone CLI (dev/CI only)** — `src/index.ts` compiled to `dist/index.js`, using
-`GRAFANA_URL`/`GRAFANA_TOKEN` for a single connection. Not what end users install; this is
-for iterating on the engine itself without going through Electron:
-
-```bash
-npm run build
-node dist/index.js
-```
-
-```json
-{
-  "mcpServers": {
-    "timebuddy-incident-investigator-dev": {
-      "command": "node",
-      "args": ["/path/to/timebuddy-incident-investigator/dist/index.js"],
-      "env": { "GRAFANA_URL": "https://grafana.example.com", "GRAFANA_TOKEN": "glsa_..." }
-    }
-  }
-}
-```
-
-**Webhook listener (optional, separate process)** — only needed if you want
-`get_alert_context` to pick up alerts automatically instead of via pasted JSON or a URL.
-Point a Grafana contact point's webhook integration at it:
-
-```bash
-npm run webhook
-```
-
-It writes received alerts to `<DATA_DIR>/alerts.jsonl`; `get_alert_context` reads the
-latest one (or a specific fingerprint) from there when called with no arguments.
+The log is in-memory only, for this MCP-server process's lifetime — nothing is written to
+disk, and it resets on restart.
 
 ## Multiple Grafana connections
 
@@ -194,101 +269,10 @@ omitted:
   auto-discovering candidates) fan out across every configured connection and merge
   results, each tagged with its `connectionId`.
 
-## Product knowledge dashboards
-
-A generic, adopter-defined convention for surfacing institutional knowledge (what a panel
-means, known false positives, runbook links, ownership) that lives in your team's heads,
-not in Grafana's own data. There are no Joyent- or org-specific assumptions here — any
-adopter can publish their own.
-
-**Publishing convention:**
-
-- In a folder alongside your product's dashboards, add one dashboard titled
-  `🧠 Timebuddy knowledge` and tagged `timebuddy-knowledge`.
-- Add one panel per product, each a Grafana **text panel** (markdown mode) titled
-  `timebuddy: <product-key>` (case-insensitive).
-- Start that panel's markdown with a single fenced ` ```json ` block holding whatever
-  structured data you want tools/agents to read (severity, owner, runbook links, known
-  false positives — no fixed schema is enforced); free-form prose below it is for humans
-  and is returned too. A missing or malformed JSON block degrades to the raw panel text
-  rather than breaking the tool call it's attached to.
-
-**Lookup behavior:**
-
-- `get_alert_context` automatically looks for a knowledge dashboard once it resolves an
-  alert to a dashboard, trying (in order) each of that dashboard's own Grafana tags, then
-  each of the alert's label values, as the product key — the first one matching a
-  `timebuddy: <key>` panel wins. If nothing matches, `get_alert_context`'s output is
-  unchanged (no `knowledge` field, no warning, no error) — this is purely additive and
-  never a prerequisite.
-- `get_product_context` looks up the same convention directly by product key. Pass
-  `dashboardUid` to scope the search to that dashboard's folder; omit it to search every
-  knowledge dashboard on the connection (returning every match rather than guessing when
-  more than one exists, e.g. the same product key defined in both a staging and a prod
-  knowledge dashboard).
-- Lookup **walks up the folder tree**: if a dashboard's own folder has no knowledge
-  dashboard, its parent folder is checked, and so on up to 10 levels, stopping at the
-  first match or the top of the tree. A partially-adopted estate (knowledge published in
-  some folders but not others) works fine — a miss anywhere in the chain is silent.
-- Results are cached per connection (which knowledge dashboard serves a given folder, and
-  each knowledge dashboard's parsed panel content, keyed by its own save version) so a
-  live investigation doesn't repeat the folder walk or re-parse panels on every call. An
-  edit to a knowledge dashboard is picked up as soon as its cached folder-resolution entry
-  expires (15 minutes) and its version no longer matches.
-- Both lookups above require already knowing (or guessing) a product key. To discover
-  *that* knowledge dashboards exist at all — without a key in hand — `find_related_dashboards`
-  also returns `knowledgeDashboards`: every `timebuddy-knowledge`-tagged dashboard found per
-  connection, with the product keys each one publishes, as a standing overview independent
-  of any search term (the same idea as that tool's `alertBackedDashboards`).
-
-## Live resolution of "all" dashboard variables
-
-A dashboard's saved JSON only ever caches the *options* Grafana knew about at save time.
-For a **query-type variable** — one whose value list Grafana computes live (e.g. an
-InfluxQL `SHOW TAG VALUES` variable) rather than a fixed list — that means a `$__all`
-selection with no cached options and no configured `allValue` has nothing to expand to.
-The safe default, kept from an earlier real incident, is to fail *open*: substitute the
-regex `.*` rather than an empty string, since an empty match silently reports "no data"
-over what might be a live outage. But failing open can just as easily produce a
-*wrong* answer instead of no answer — `.*` matches every value that datasource has ever
-recorded for that field, not the actual (often much smaller) set the dashboard's variable
-is scoped to, and there is no way to tell the two apart from the result alone.
-
-`render_dashboard`, `resolve_panel_queries`, `execute_query_window`, and
-`detect_correlated_anomalies` (for its primary panel only — see below) now make a
-best-effort attempt to resolve this properly instead: when a query-type variable is stuck
-at an unresolved `$__all`, and its query text is a `SHOW TAG VALUES` InfluxQL statement,
-it's actually executed through the same allowlisted `/api/ds/query` endpoint panel queries
-already use, with any other variable references and `$timeFilter` in it substituted
-first (so the result is scoped to the same window being investigated). The real value
-list replaces the `.*` fallback. `execute_query_window`/`detect_correlated_anomalies`
-resolve this once per call using the incident window — not once per baseline/control
-window — so a historical comparison window can't end up scoped to a different value list
-than the incident it's being compared against.
-
-This only covers the one concrete shape seen in practice; other datasources (e.g. a
-Prometheus `label_values(...)` variable, which resolves through a different Grafana API
-entirely) or a live lookup that itself fails still fall back to `.*`, exactly as before.
-Either way, the variable's name is added to the result's `unresolvedAllVariables` array
-(omitted when empty) — treat any panel whose scope depends on a listed variable as
-unverified rather than trusting its result or narrowing it down with a naming-convention
-guess.
-
-## Grafana's "-- Dashboard --" pseudo-datasource
-
-A stat/gauge panel can be configured to re-display another panel's already-computed value
-client-side instead of querying anything itself — Grafana calls this the "-- Dashboard --"
-datasource. There's no backend behind it, so replaying it through `/api/ds/query` (as every
-query-execution tool here does) always 404s with "data source not found" — a recurring,
-mechanically-detectable pattern seen across real dashboards, not a misconfiguration. Rather
-than surface that 404 (or require fetching the dashboard's raw JSON to explain it, as an
-investigation previously had to), `render_dashboard` and `resolve_panel_queries` detect this
-case up front and report it as `mirrorsPanelIds` (the panel id(s) it mirrors) instead of an
-error — read the referenced panel(s) directly for the real data. `export_panel_csv` does the
-same when the Electron browser-capture path is available; otherwise (and always for
-`execute_query_window`, `validate_baseline`, and `detect_correlated_anomalies`, which resolve
-panels through a different, non-graceful path) a mirror panel surfaces as a thrown error
-instead — its message still names the mirrored panel id(s) to call directly.
+See [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md) for how this project handles a few Grafana edge
+cases: the product-knowledge-dashboard convention for publishing institutional knowledge
+(what a panel means, known false positives, runbook links), live resolution of "all"
+dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
 
 ## Security model
 
@@ -307,29 +291,6 @@ instead — its message still names the mirrored panel id(s) to call directly.
   has no generic escape hatch. A Viewer-scoped service-account token remains the more
   defense-in-depth choice for a shared/CI connection.
 
-## Testing
-
-```bash
-npm test        # vitest, all unit tests run against fixtures — no live Grafana required
-npm run typecheck
-```
-
-There's no live Grafana instance in CI for this repo, so `npm test` covers URL parsing,
-variable substitution, baseline statistics, metric extraction/indexing, and redaction
-against fixture data — not an end-to-end call against a real Grafana API. To verify
-against a real instance, run the standalone CLI under the
-[MCP inspector](https://github.com/modelcontextprotocol/inspector):
-
-```bash
-npm run build
-npx @modelcontextprotocol/inspector node dist/index.js
-```
-
-`electron/test/mcpServerMode.mjs` covers the distributed app specifically: it spawns the
-real Electron binary in `--mcp-server` mode via the actual SDK client/transport and
-confirms the `safeStorage` -> engine wiring works end to end (see
-[`electron/README.md`](electron/README.md#testing)).
-
 ## Known limitations (MVP)
 
 - InfluxQL support covers raw-query-mode targets and does a best-effort reconstruction
@@ -343,10 +304,10 @@ confirms the `safeStorage` -> engine wiring works end to end (see
 - The Electron app isn't notarized yet (macOS signing is currently a self-signed
   certificate, not a real Apple Developer ID — see `electron/SELF_SIGNED_SETUP.md`).
   Downloaded builds hit a Gatekeeper block on macOS (see
-  [`electron/README.md`](electron/README.md#installing-a-downloaded-build-macos) for the
-  click-through) or SmartScreen warnings on Windows, until it's signed/notarized with a
-  real developer identity — a prerequisite for wider rollout, not something fixable in
-  code.
+  ["Installing a downloaded build (macOS)"](#installing-a-downloaded-build-macos) above
+  for the click-through) or SmartScreen warnings on Windows, until it's signed/notarized
+  with a real developer identity — a prerequisite for wider rollout, not something fixable
+  in code.
 - `export_panel_csv`'s Grafana-side transformation capture (see the tools table above) is
   Electron-only, and depends on the exact visible text/DOM structure of Grafana's Inspect
   drawer rather than a published API — it's expected to be more version-sensitive than the

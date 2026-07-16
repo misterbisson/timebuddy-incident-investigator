@@ -46,8 +46,8 @@ person who has never successfully used this tool won't reach for it under real p
    mentioning that published context exists — if `knowledgeDashboardsTotal` is non-zero, name a few
    of the product keys you see so the person knows what's already documented (owner, runbook links,
    known false positives) without having to guess a key first. An empty list just means nothing's
-   been published on that connection yet, not an error — see README for the publishing convention
-   if they ask how to add one.
+   been published on that connection yet, not an error — see docs/BEHAVIOR.md for the publishing
+   convention if they ask how to add one.
 6. Mention `brokenDatasourcesTotal` per connection if it's non-trivial, but don't treat a large
    count as an incident signal on its own — a sizable chunk of it is typically panels whose
    datasource is a Grafana template variable (`${datasource}`, `$some_var`) that this index can't

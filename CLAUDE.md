@@ -18,7 +18,7 @@ npm run webhook       # start the standalone webhook listener (src/webhook/liste
 path above (`npm run dev`, or `dist/index.js`) — not needed for `npm test`/`npm run
 typecheck` (the Grafana client is mocked), and not used at all by the distributed
 Electron app, which sources connections from its own `safeStorage`-backed store instead
-(see `electron/README.md`).
+(see `README.md`'s "How connections are stored" section).
 
 `electron/` is a separate npm workspace (the distributed app) with its own commands:
 
@@ -106,7 +106,7 @@ Launched normally it's a connection-manager GUI (adds Grafana connections into a
 from that store via the `ConnectionsSource` thunk above instead of env vars. Both modes
 are the same binary/process — that's what lets connection secrets stay OS-keychain-encrypted
 end to end, with no separate server process that would need a plaintext credential on
-disk. See `electron/README.md` for the storage format and
+disk. See `README.md`'s "How connections are stored" section for the storage format and
 `electron/test/mcpServerMode.mjs` for how it's tested (spawns the real binary in
 `--mcp-server` mode via the actual MCP SDK client/transport; no live Grafana needed).
 

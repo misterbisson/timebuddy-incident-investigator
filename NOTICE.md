@@ -23,8 +23,9 @@ Specifically adapted from Time Buddy:
 Deliberately **not** carried over: Time Buddy stores its connection list and cached
 auth header in plaintext `localStorage`. This project's Electron app instead encrypts
 every credential with `safeStorage` (OS keychain-backed) and never writes one to disk in
-plaintext — see `electron/README.md`. This was easier to get right here than it might
-sound: the app itself *is* the MCP server (launched with a `--mcp-server` flag instead of
+plaintext — see the root `README.md`'s "How connections are stored" section. This was
+easier to get right here than it might sound: the app itself *is* the MCP server
+(launched with a `--mcp-server` flag instead of
 opening a window), so the same in-process `safeStorage` call that encrypts a credential is
 also the one that decrypts it for use, with no separate process and no hand-off file
 needed in between. None of Time Buddy's query IDE, editor, AI-analytics, or charting code
