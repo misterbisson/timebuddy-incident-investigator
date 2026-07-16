@@ -121,3 +121,13 @@ stale, update the skill in the same change.
 PromQL/InfluxQL metric and label extraction (`index-builder/extract.ts`) is a best-effort
 regex scan, not a real parser — see the "Known limitations" section in README.md before
 trying to make it more precise; the tradeoffs there were deliberate given the scope.
+
+Docs are split by audience — keep it that way rather than drifting back into the mixed
+files this was split out of. `README.md` is user-facing only (install, configure, use);
+`CONTRIBUTING.md` and `electron/CONTRIBUTING.md` hold developer/build/release workflow
+for the engine and the Electron app respectively; `docs/BEHAVIOR.md` holds the deep
+Grafana-edge-case specs (product-knowledge dashboards, live `$__all` variable resolution,
+the `-- Dashboard --` pseudo-datasource) that would otherwise clutter README.md. A change
+to what an end user does belongs in README.md; a change to how a contributor
+builds/tests/releases belongs in the relevant CONTRIBUTING.md — don't duplicate the same
+instructions across both just because a change touches code in both places.
