@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { AmbiguousPanelError, findPanel, flattenPanels, resolvePanelDataLinks, resolvePanelQueries } from '../src/dashboards/panelQueries.js';
+import {
+  AmbiguousPanelError,
+  findPanel,
+  flattenPanels,
+  resolvePanelDataLinks,
+  resolvePanelQueries,
+  stripInactiveQueryFields,
+} from '../src/dashboards/panelQueries.js';
 import type { DashboardJson, Panel } from '../src/grafana/types.js';
 
 describe('flattenPanels', () => {
@@ -123,6 +130,54 @@ describe('resolvePanelQueries with Grafana\'s built-in "-- Dashboard --" datasou
     const resolved = resolvePanelQueries(dashboard);
     const normal = resolved.find((p) => p.panelId === 4);
     expect(normal?.mirrorsPanelIds).toBeUndefined();
+  });
+});
+
+describe('stripInactiveQueryFields', () => {
+  // #35: the structured builder fields and the raw Text-mode `query` string
+  // are edited independently in Grafana's InfluxQL query editor, so the one
+  // `rawQuery` doesn't select can be stale — drop it rather than show it to
+  // an investigator as if it were live.
+  it('drops the stale "query" text when rawQuery is false (builder mode active)', () => {
+    const result = stripInactiveQueryFields({
+      refId: 'A',
+      rawQuery: false,
+      measurement: 'cdsp_status',
+      tags: [{ key: 'platform', operator: '=~', value: 'cds-kr-prd' }],
+      query: `SELECT -1*"monitoring_status_code"+1 FROM "raw"."monit_process" WHERE "platform" = 'cds-eu-dev'`,
+    });
+    expect(result.query).toBeUndefined();
+    expect(result.measurement).toBe('cdsp_status');
+    expect(result.tags).toEqual([{ key: 'platform', operator: '=~', value: 'cds-kr-prd' }]);
+  });
+
+  it('drops the stale builder fields when rawQuery is true (text mode active)', () => {
+    const result = stripInactiveQueryFields({
+      refId: 'A',
+      rawQuery: true,
+      measurement: 'wrong_measurement',
+      policy: 'raw',
+      select: [[{ params: ['value'], type: 'field' }]],
+      groupBy: [[{ params: ['$__interval'], type: 'time' }]],
+      tags: [{ key: 'platform', operator: '=~', value: 'cds-eu-dev' }],
+      query: `SELECT mean("value") FROM "cdsp_status" WHERE "platform" = 'cds-kr-prd'`,
+    });
+    expect(result.measurement).toBeUndefined();
+    expect(result.policy).toBeUndefined();
+    expect(result.select).toBeUndefined();
+    expect(result.groupBy).toBeUndefined();
+    expect(result.tags).toBeUndefined();
+    expect(result.query).toBe(`SELECT mean("value") FROM "cdsp_status" WHERE "platform" = 'cds-kr-prd'`);
+  });
+
+  it('leaves the target untouched when rawQuery is absent', () => {
+    const target = { refId: 'A', measurement: 'cpu', query: 'SELECT * FROM mem' };
+    expect(stripInactiveQueryFields(target)).toEqual(target);
+  });
+
+  it('leaves Prometheus targets (no rawQuery) untouched', () => {
+    const target = { refId: 'A', expr: 'up' };
+    expect(stripInactiveQueryFields(target)).toEqual(target);
   });
 });
 

@@ -58,7 +58,62 @@ function dashboardWithAllVariable(): DashboardGetResponse {
   };
 }
 
+// #35: a builder-mode panel ("Inconsistent State of Cluster") carried a
+// long-dead Text-mode `query` hardcoding the wrong platform tag — never
+// executed (rawQuery: false), but visible in the dashboard JSON and briefly
+// mistaken for a live bug.
+function dashboardWithStaleTextModeQuery(): DashboardGetResponse {
+  return {
+    dashboard: {
+      uid: 'dash1',
+      title: 'Alarms',
+      version: 1,
+      panels: [
+        {
+          id: 1,
+          title: 'Inconsistent State of Cluster',
+          type: 'timeseries',
+          targets: [
+            {
+              refId: 'A',
+              datasource: { uid: 'influx1' },
+              rawQuery: false,
+              measurement: 'cdsp_status',
+              tags: [
+                { key: 'platform::tag', operator: '=~', value: '/^cds-kr-prd$/' },
+                { key: 'status::tag', operator: '=', value: 'inconsistent' },
+              ],
+              query:
+                'SELECT -1*"monitoring_status_code"+1 FROM "raw"."monit_process" WHERE ("platform" = \'cds-eu-dev\' ' +
+                'AND ("monitoring_status" = \'monitored\' OR "monitoring_status" = \'not_monitored\')) AND $timeFilter GROUP BY "node_service"',
+            },
+          ],
+        },
+      ],
+    },
+    meta: {},
+  };
+}
+
 describe('resolve_panel_queries tool', () => {
+  it('omits the stale, unused "query" text for a builder-mode target rather than showing it as live (#35)', async () => {
+    const { client } = fakeGrafanaClient({ dashboard: dashboardWithStaleTextModeQuery(), liveValues: [] });
+    const { server, call } = fakeServer();
+    registerResolvePanelQueries(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('resolve_panel_queries', { dashboardUid: 'dash1', connection: 'test' })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    const target = parsed.panels[0].targets[0].resolvedQuery;
+    expect(target.query).toBeUndefined();
+    expect(target.measurement).toBe('cdsp_status');
+    expect(target.tags).toEqual([
+      { key: 'platform::tag', operator: '=~', value: '/^cds-kr-prd$/' },
+      { key: 'status::tag', operator: '=', value: 'inconsistent' },
+    ]);
+  });
+
+
   it('returns { panels, unresolvedAllVariables } with the key omitted when everything resolved', async () => {
     const { client } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1', 'h2'] });
     const { server, call } = fakeServer();
