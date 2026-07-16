@@ -8,6 +8,16 @@ investigation — identify what fired, replay the underlying queries, compare ag
 baseline periods, search for correlated signals elsewhere, and hand back an
 evidence-linked verdict for a human to act on.
 
+Most people never call the tools below by name — in Claude Code, paste an alert link (or
+just describe what's going on) into `/timebuddy:investigate` and the agent chains the
+right tools itself: normalize the alert, replay its queries over the incident window,
+compare against baseline, check other dashboards for correlated signals, and write up a
+verdict with clickable evidence links. One command instead of manually driving ten tool
+calls in the right order — see ["Claude Code skills"](#claude-code-skills) below to
+install it (and two siblings, for a pre-incident health check and for exporting a panel's
+data). Using Claude Desktop, or another MCP client without skill/plugin support? The
+tools table below is the whole interface — the agent calls them directly.
+
 This page covers downloading, installing, configuring, and using the app. Developing or
 building it instead? See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
@@ -82,29 +92,29 @@ for every release until real Developer ID signing/notarization lands:
 
 1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
 
-   ![Drag the app into the Applications folder](electron/docs/images/macos-install-1-drag-to-applications.png)
+   <img src="docs/images/macos-install-1-drag-to-applications.png" width="500" alt="Drag the app into the Applications folder">
 
 2. Double-click the app in **Applications**. macOS refuses to open it outright:
 
-   ![“Timebuddy Incident Investigator.app” Not Opened](electron/docs/images/macos-install-2-not-opened.png)
+   <img src="docs/images/macos-install-2-not-opened.png" width="380" alt="“Timebuddy Incident Investigator.app” Not Opened">
 
    Click **Done** (not "Move to Trash").
 
 3. Open **System Settings → Privacy & Security**, scroll to the **Security** section at
    the bottom, and click **Open Anyway** next to the app's entry.
 
-   ![Privacy & Security showing the blocked app with an Open Anyway button](electron/docs/images/macos-install-3-privacy-security-open-anyway.png)
+   <img src="docs/images/macos-install-3-privacy-security-open-anyway.png" width="360" alt="Privacy & Security showing the blocked app with an Open Anyway button">
 
 4. Confirm in the dialog that appears:
 
-   ![Open “Timebuddy Incident Investigator.app”? confirmation dialog](electron/docs/images/macos-install-4-confirm-open-anyway.png)
+   <img src="docs/images/macos-install-4-confirm-open-anyway.png" width="360" alt="Open “Timebuddy Incident Investigator.app”? confirmation dialog">
 
    Click **Open Anyway** again.
 
 5. Authenticate with Touch ID or your admin password — macOS requires this before it'll
    actually launch an app it blocked:
 
-   ![Touch ID / password prompt to authorize opening the app](electron/docs/images/macos-install-5-authenticate.png)
+   <img src="docs/images/macos-install-5-authenticate.png" width="360" alt="Touch ID / password prompt to authorize opening the app">
 
 The app opens normally after this and won't be re-blocked on subsequent launches. This
 whole flow is only needed once per downloaded build; a rebuilt/re-downloaded `.app` (a
@@ -126,7 +136,7 @@ credential.
 1. Click **Add connection** and fill in a name, the Grafana URL, and either a Bearer
    token or Basic auth username/password:
 
-   ![Add connection form](electron/docs/images/connections-1-add-modal.png)
+   <img src="docs/images/connections-1-add-modal.png" width="400" alt="Add connection form">
 
 2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
    URL, a bad credential, or a Grafana instance that isn't reachable from this machine
@@ -135,7 +145,7 @@ credential.
 3. Click **Save**. Repeat for every Grafana endpoint you use — they all show up in one
    list, each editable/duplicable/deletable at any time:
 
-   ![Configured connections list](electron/docs/images/connections-2-list-redacted.png)
+   <img src="docs/images/connections-2-list-redacted.png" width="700" alt="Configured connections list">
 
    (Name/URL columns are blurred above — those are real connection details from a live
    setup; yours will show your own Grafana endpoints.)
@@ -161,7 +171,7 @@ path with `--mcp-server`. `--scope user` (not the "local" default) registers it 
 the whole machine/user rather than only the one project directory you happen to run the
 command from — since this is one desktop app meant to be usable from any project:
 
-![Register with Claude section](electron/docs/images/connections-3-register-with-claude-redacted.png)
+<img src="docs/images/connections-3-register-with-claude-redacted.png" width="700" alt="Register with Claude section">
 
 (The redacted rows at the top are leftover connection entries visible from scrolling; the
 `claude mcp add` command shown predates the `--scope user` addition — this section itself
@@ -189,7 +199,7 @@ can be a while after you registered it above — not until your Claude client's 
 session, or the next time it decides to spawn the server), macOS will prompt for keychain
 access to decrypt your saved connection credentials:
 
-![macOS keychain access prompt](electron/docs/images/macos-keychain-access.png)
+<img src="docs/images/macos-keychain-access.png" width="480" alt="macOS keychain access prompt">
 
 This is expected — **Allow** (or **Always Allow**, to skip the prompt on future
 launches) it. If you don't recognize this prompt when it appears, it's this app's own
