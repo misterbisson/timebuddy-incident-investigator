@@ -28,6 +28,24 @@ npm run dev                    # builds the root package, then opens the connect
 node test/mcpServerMode.mjs    # spawns the real electron binary in --mcp-server mode; no live Grafana needed
 ```
 
+## Pull requests
+
+Title every PR as a [Conventional Commit](https://www.conventionalcommits.org/) —
+`feat: ...`, `fix: ...`, `chore: ...`, `docs: ...`, `refactor: ...`, `test: ...`,
+`build: ...`, `ci: ...` — matching this repo's existing commit history convention. This
+isn't just style: this repo only allows squash merges (no merge commits, no rebase
+merges), and GitHub's squash commit message defaults to the PR title. That single commit
+is what `.github/workflows/release.yml`'s `version` job feeds to `semantic-release`
+(`release.config.js`) on every push to `main` — `@semantic-release/commit-analyzer` reads
+it to decide whether a release is warranted and what version bump it gets (`feat:` →
+minor, `fix:` → patch, a `BREAKING CHANGE:` footer or `!` after the type → major; other
+types don't trigger a release), and `@semantic-release/release-notes-generator` uses it
+verbatim for the CHANGELOG.md entry. A PR merged with a non-conventional title (e.g. a
+bare description with no type prefix) is real, shipped code that this pipeline can't see:
+no version bump, no changelog entry, even though `main` moved. See
+`electron/CONTRIBUTING.md`'s "Building, signing, and releasing" section for the full
+release flow.
+
 ## Architecture
 
 This is an MCP server (`@modelcontextprotocol/sdk`, stdio transport) that gives an AI
