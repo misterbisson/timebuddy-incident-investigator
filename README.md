@@ -8,20 +8,30 @@ investigation — identify what fired, replay the underlying queries, compare ag
 baseline periods, search for correlated signals elsewhere, and hand back an
 evidence-linked verdict for a human to act on.
 
-Most people never call the tools below by name — in Claude Code, paste an alert link (or
-just describe what's going on) into `/timebuddy:investigate` and the agent chains the
-right tools itself: normalize the alert, replay its queries over the incident window,
-compare against baseline, check other dashboards for correlated signals, and write up a
-verdict with clickable evidence links. One command instead of manually driving ten tool
-calls in the right order — see ["Claude Code skills"](#claude-code-skills) below to
-install it (and two siblings, for a pre-incident health check and for exporting a panel's
-data). Using Claude Desktop, or another MCP client without skill/plugin support? The
-tools table below is the whole interface — the agent calls them directly.
+Most people never call the tools below by name — three bundled Claude Code skills (see
+["Skills"](#skills) below) chain them automatically. Using Claude Desktop, or another MCP
+client without skill/plugin support? The tools table below is the whole interface — the
+agent calls those directly instead.
 
 This page covers downloading, installing, configuring, and using the app. Developing or
 building it instead? See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## Tools
+## Skills
+
+Three Claude Code skills chain the tools below in the right order automatically, so
+nobody needs to know a tool name or the right call order — paste an alert link, ask what's
+connected, or ask to export a panel, and the right one takes it from there:
+
+| Skill | Use it when | What it does |
+| --- | --- | --- |
+| `/timebuddy:explore` | Checking that the Grafana MCP setup works, doing a health check, or just seeing what's connected — before an incident happens | Confirms the server is connected, surveys available connections/dashboards, and flags which are alert-backed (and therefore trustworthy) |
+| `/timebuddy:investigate` | Something's paged, someone pasted an alert/incident link, or you're asking "what's going on with X" | Ingests the alert, replays its queries over the incident window, checks baselines, looks for correlated signals elsewhere, and writes an evidence-linked verdict with clickable links |
+| `/timebuddy:export` | Someone asks to export, archive, or hand off a panel's data or chart — for a report, a postmortem, or a presentation | Resolves the exact panel from a URL and a panel name, writes its data to a CSV file, and optionally grabs a screenshot alongside it |
+
+See ["Claude Code skills"](#claude-code-skills) below for how to install them — they're
+bundled with the desktop app, so it's usually a couple of clicks, no separate download.
+
+## MCP tools
 
 | Tool | Purpose |
 | --- | --- |
@@ -244,21 +254,23 @@ See [`skills/explore/SKILL.md`](skills/explore/SKILL.md),
 
 ## Activity window
 
-While running in `--mcp-server` mode, this app also shows a companion "Timebuddy
-Activity" window — created the moment the first dashboard/panel is actually queried (not
-at process start, so nothing pops up before an investigation begins). It's a live,
-clickable log of what's being inspected: each entry is one panel a tool call actually
-pulled data from or screenshotted (not every dashboard/panel link a tool result happens to
-mention — see `src/tools/shared.ts`'s `recordActivity` for exactly which tool calls log an
-entry and why). Clicking an entry shows either the screenshot `screenshot_panel` saved for
-it, or a live, authenticated view of the real Grafana panel in an embedded `<webview>` —
-authenticated the same way `screenshotter.js`'s one-shot captures are (a connection's own
-bearer/basic header injected via `webRequest`), just against a long-lived, persistent
-session instead of a destroy-after-one-shot window (see `setupLiveViewSession` in
-`electron/src/main.js`).
+Once your Claude client has started this app as your MCP server (it does this on its own
+whenever it needs the server — see ["Registering with Claude"](#registering-with-claude)
+above), a companion "Timebuddy Activity" window appears the moment Claude actually queries
+its first dashboard/panel — not as soon as Claude starts, so nothing pops up before an
+investigation begins. It's a live, clickable log of what's being inspected: each entry is
+one panel Claude actually pulled data from or screenshotted (not every dashboard/panel link
+that happens to be mentioned in a response — see `src/tools/shared.ts`'s `recordActivity`
+for exactly which tool calls log an entry and why). Clicking an entry shows either the
+screenshot `screenshot_panel` saved for it, or a live, authenticated view of the real
+Grafana panel in an embedded `<webview>` — authenticated the same way `screenshotter.js`'s
+one-shot captures are (a connection's own bearer/basic header injected via `webRequest`),
+just against a long-lived, persistent session instead of a destroy-after-one-shot window
+(see `setupLiveViewSession` in `electron/src/main.js`).
 
-The log is in-memory only, for this MCP-server process's lifetime — nothing is written to
-disk, and it resets on restart.
+The log is in-memory only, for as long as that server keeps running — closing or
+restarting your Claude client (which restarts the server) clears it, and nothing is ever
+written to disk.
 
 ## Multiple Grafana connections
 
