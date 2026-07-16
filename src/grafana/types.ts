@@ -92,6 +92,10 @@ export interface DashboardGetResponse {
     url?: string;
     slug?: string;
     updated?: string;
+    /** Login/display name of whoever last saved the dashboard - used as a "same author" relatedness signal, see findRelatedDashboards.ts. */
+    updatedBy?: string;
+    created?: string;
+    createdBy?: string;
   };
 }
 

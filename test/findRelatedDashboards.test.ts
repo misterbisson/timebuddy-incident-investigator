@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectAlertRuleAccessErrors, searchIndex } from '../src/tools/findRelatedDashboards.js';
+import { collectAlertRuleAccessErrors, compareCandidates, searchIndex, type Candidate } from '../src/tools/findRelatedDashboards.js';
 import type { MetricIndex } from '../src/index-builder/store.js';
 
 function index(): MetricIndex {
@@ -36,6 +36,23 @@ function index(): MetricIndex {
         alertRules: [{ uid: 'rule1', title: 'BlockStorageCephDegraded', labels: {} }],
       },
     ],
+    dashboardMeta: {
+      blockstorage: { title: 'Block Storage', updatedAt: '2024-06-01T00:00:00.000Z', updatedBy: 'alice' },
+      checkout: { title: 'Checkout overview', updatedAt: '2024-01-01T00:00:00.000Z', updatedBy: 'bob' },
+    },
+  };
+}
+
+function candidate(overrides: Partial<Candidate>): Candidate {
+  return {
+    dashboardUid: 'd',
+    dashboardTitle: 'D',
+    panelId: 1,
+    labels: {},
+    labelOverlapCount: 0,
+    connectionId: 'conn1',
+    backingAlertRuleTitles: [],
+    ...overrides,
   };
 }
 
@@ -70,6 +87,11 @@ describe('searchIndex', () => {
     expect(results).toEqual([]);
   });
 
+  it('attaches updatedAt/updatedBy from the index\'s per-dashboard dashboardMeta', () => {
+    const results = searchIndex(index(), 'conn1', { query: 'storage' });
+    expect(results[0]).toMatchObject({ updatedAt: '2024-06-01T00:00:00.000Z', updatedBy: 'alice' });
+  });
+
   it('attaches backingAlertRuleTitles for a panel a real alert rule is wired to, and leaves it empty otherwise', () => {
     const results = searchIndex(index(), 'conn1', { query: 'storage' });
     expect(results).toHaveLength(1);
@@ -77,6 +99,44 @@ describe('searchIndex', () => {
 
     const unbacked = searchIndex(index(), 'conn1', { query: 'checkout' });
     expect(unbacked[0]?.backingAlertRuleTitles).toEqual([]);
+  });
+});
+
+describe('compareCandidates', () => {
+  it('still ranks alert-backed above non-alert-backed regardless of recency or authorship', () => {
+    const stale = candidate({ dashboardUid: 'old', backingAlertRuleTitles: ['A'], updatedAt: '2020-01-01T00:00:00.000Z' });
+    const fresh = candidate({ dashboardUid: 'new', backingAlertRuleTitles: [], updatedAt: '2024-01-01T00:00:00.000Z' });
+    expect([fresh, stale].sort((a, b) => compareCandidates(a, b))).toEqual([stale, fresh]);
+  });
+
+  it('still ranks higher label overlap above recency or authorship', () => {
+    const lowOverlapButFresh = candidate({ dashboardUid: 'a', labelOverlapCount: 1, updatedAt: '2024-01-01T00:00:00.000Z' });
+    const highOverlapButStale = candidate({ dashboardUid: 'b', labelOverlapCount: 2, updatedAt: '2020-01-01T00:00:00.000Z' });
+    expect([lowOverlapButFresh, highOverlapButStale].sort((a, b) => compareCandidates(a, b))).toEqual([
+      highOverlapButStale,
+      lowOverlapButFresh,
+    ]);
+  });
+
+  it('breaks an otherwise-tied comparison by preferring the more recently updated dashboard', () => {
+    const older = candidate({ dashboardUid: 'old', updatedAt: '2020-01-01T00:00:00.000Z' });
+    const newer = candidate({ dashboardUid: 'new', updatedAt: '2024-01-01T00:00:00.000Z' });
+    expect([older, newer].sort((a, b) => compareCandidates(a, b))).toEqual([newer, older]);
+  });
+
+  it('prefers a match last updated by the same author as the reference dashboard, ahead of recency', () => {
+    const staleSameAuthor = candidate({ dashboardUid: 'same-author', updatedBy: 'alice', updatedAt: '2020-01-01T00:00:00.000Z' });
+    const freshOtherAuthor = candidate({ dashboardUid: 'other-author', updatedBy: 'bob', updatedAt: '2024-01-01T00:00:00.000Z' });
+    expect([freshOtherAuthor, staleSameAuthor].sort((a, b) => compareCandidates(a, b, 'alice'))).toEqual([
+      staleSameAuthor,
+      freshOtherAuthor,
+    ]);
+  });
+
+  it('ignores authorship entirely when no referenceAuthor is given', () => {
+    const a = candidate({ dashboardUid: 'a', updatedBy: 'alice', updatedAt: '2020-01-01T00:00:00.000Z' });
+    const b = candidate({ dashboardUid: 'b', updatedBy: 'bob', updatedAt: '2024-01-01T00:00:00.000Z' });
+    expect([a, b].sort((x, y) => compareCandidates(x, y))).toEqual([b, a]);
   });
 });
 

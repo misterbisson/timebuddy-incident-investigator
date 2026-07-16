@@ -27,6 +27,21 @@ export interface AlertRuleRef {
 }
 
 /**
+ * Per-dashboard (not per-panel) recency/authorship, keyed by dashboardUid -
+ * one entry per dashboard regardless of how many panels/metrics it
+ * contributes to entriesByMetric, since Grafana's meta.updated/updatedBy is
+ * itself a dashboard-level fact. Consumed by findRelatedDashboards.ts to
+ * prefer more-recently-updated dashboards and boost same-author matches.
+ */
+export interface DashboardMetaRef {
+  title: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  createdBy?: string;
+}
+
+/**
  * A panel that a real Grafana alert rule points at via its __dashboardUid__/
  * __panelId__ annotations — the strongest available signal that a dashboard
  * is actually relied on, as opposed to a test/scratch/deprecated one that
@@ -50,6 +65,8 @@ export interface MetricIndex {
   entriesByMetric: Record<string, MetricIndexEntry[]>;
   brokenDatasources: BrokenDatasourceRef[];
   alertBackedPanels: AlertBackedPanelRef[];
+  /** See DashboardMetaRef. Older cache files (predating this field) are backfilled to {} in loadIndex, same as alertBackedPanels below. */
+  dashboardMeta: Record<string, DashboardMetaRef>;
   /**
    * Set when the alert-rule crawl (getRuleGroups()) failed — e.g. a
    * permission-scoped token — so alertBackedPanels being empty can be told
@@ -92,7 +109,7 @@ export async function loadIndex(config: Config, connectionId: string): Promise<M
     // Cached indexes may predate fields added to MetricIndex since they were
     // written; backfill so older cache files on disk don't crash consumers
     // that assume every field is present.
-    return { ...parsed, alertBackedPanels: parsed.alertBackedPanels ?? [] };
+    return { ...parsed, alertBackedPanels: parsed.alertBackedPanels ?? [], dashboardMeta: parsed.dashboardMeta ?? {} };
   } catch {
     // Any read/parse failure (missing file, or a corrupted/truncated write
     // from a crash mid-save) should fall back to "no cache" so the caller
