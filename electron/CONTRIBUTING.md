@@ -56,7 +56,10 @@ lands in `electron/dist/`.
 
 Pushes to `main` first run a `version` job: `semantic-release` (`release.config.js`,
 repo root) analyzes commits since the last release using Conventional Commits
-(`feat:` → minor, `fix:` → patch, etc.), and if one of those is warranted, bumps
+(`feat:` → minor, `fix:` → patch, etc. — plus a `dependencyReleaseRules` override so
+`build(deps)`/`build(deps-dev)`/`chore(deps)`/`chore(deps-dev)` commits, e.g. Dependabot's,
+also release as a patch; without it a merged Dependabot PR — including a security fix —
+would silently produce no release at all), and if one of those is warranted, bumps
 `package.json` and `electron/package.json` in lockstep (`scripts/sync-electron-version.js`
 keeps the latter in sync, since `@semantic-release/npm` only touches the root one),
 updates `CHANGELOG.md`, and commits + tags that as `vX.Y.Z` on `main` (pushed with
@@ -64,8 +67,13 @@ updates `CHANGELOG.md`, and commits + tags that as `vX.Y.Z` on `main` (pushed wi
 if a version was actually published, checked out at that new tag, and does the actual
 platform builds + `electron-builder --publish always` (so `electron-updater` — not yet
 wired into `main.js` — can eventually point at those release artifacts). A `main` push
-with no releasable commits (docs-only, chores, etc.) skips the build/publish matrix
-entirely.
+with no releasable commits (docs-only, non-dependency chores, etc.) skips the
+build/publish matrix entirely.
+
+`.github/dependabot.yml` configures scheduled dependency-update PRs (weekly, grouped by
+minor/patch) for the root workspace, the `electron/` workspace, and GitHub Actions
+versions — on top of GitHub's always-on, config-independent Dependabot security-update
+PRs for vulnerability fixes.
 
 **macOS signing is currently a self-signed certificate**, not a real Apple Developer ID —
 see [`SELF_SIGNED_SETUP.md`](SELF_SIGNED_SETUP.md) for what that does and doesn't buy you

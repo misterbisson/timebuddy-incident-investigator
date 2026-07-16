@@ -1,0 +1,34 @@
+version: 2
+
+updates:
+  # Root workspace (the MCP server engine). "electron" is a separate npm
+  # workspace member (see package.json's "workspaces") with its own
+  # manifest/lockfile scope, so it gets its own entry below rather than
+  # relying on Dependabot's workspace auto-detection.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    # No commit-message override: GitHub's zero-config default already
+    # titles these `build(deps): ...` / `build(deps-dev): ...` (single
+    # dependency) or `chore(deps): ...` (grouped) — all matched by
+    # release.config.js's dependencyReleaseRules. Changing this prefix would
+    # need a matching change there too.
+
+  - package-ecosystem: npm
+    directory: "/electron"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
