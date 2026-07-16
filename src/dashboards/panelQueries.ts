@@ -95,6 +95,31 @@ export function flattenPanels(panels: Panel[]): Panel[] {
   return out;
 }
 
+/**
+ * Grafana's InfluxQL query editor stores two independently-edited
+ * representations per target — the structured builder fields (measurement/
+ * policy/select/groupBy/tags) and a raw Text-mode `query` string — and only
+ * one is ever executed, selected by `rawQuery`. The other can go stale
+ * forever (edited once in one editor mode, never regenerated in the other),
+ * so anything meant for a human or LLM to read must drop the inactive one
+ * rather than present both as if live (see #35: a stale, wrong-platform
+ * query survived unnoticed in a builder-mode panel and was briefly mistaken
+ * for a real bug). Only affects what's *displayed*; execution
+ * (query/executor.ts) forwards the full raw target and lets Grafana's own
+ * backend resolve `rawQuery`, same as it always has.
+ */
+export function stripInactiveQueryFields(target: PanelTarget): PanelTarget {
+  if (target.rawQuery === true) {
+    const { measurement: _measurement, policy: _policy, select: _select, groupBy: _groupBy, tags: _tags, ...rest } = target;
+    return rest;
+  }
+  if (target.rawQuery === false) {
+    const { query: _query, ...rest } = target;
+    return rest;
+  }
+  return target;
+}
+
 function datasourceRefToUid(ref: DatasourceRef | string | null | undefined): string | undefined {
   if (!ref) return undefined;
   if (typeof ref === 'string') {

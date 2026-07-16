@@ -39,6 +39,50 @@ describe('extractFromInfluxQL', () => {
     expect(info.metricNames).toEqual(['cpu']);
     expect(info.labels.host).toEqual(['db1']);
   });
+
+  // #35: Grafana's InfluxQL editor stores the structured builder fields and
+  // the raw Text-mode `query` string independently — editing one doesn't
+  // regenerate the other — and `rawQuery` says which one Grafana actually
+  // executes. A dashboard was found where a builder-mode panel's long-dead
+  // `query` field still hardcoded the wrong platform tag; it was briefly
+  // mistaken for a live bug before someone noticed `rawQuery: false`.
+  it('ignores a stale "query" text field when rawQuery is false (builder mode is active)', () => {
+    const info = extractFromInfluxQL({
+      refId: 'A',
+      rawQuery: false,
+      measurement: 'cdsp_status',
+      tags: [{ key: 'platform', operator: '=~', value: 'cds-kr-prd' }],
+      // Stale text-mode leftover: wrong platform, never executed.
+      query: `SELECT -1*"monitoring_status_code"+1 FROM "raw"."monit_process" WHERE "platform" = 'cds-eu-dev'`,
+    });
+    expect(info.metricNames).toEqual(['cdsp_status']);
+    expect(info.labels.platform).toEqual(['cds-kr-prd']);
+  });
+
+  it('ignores stale builder fields when rawQuery is true (text mode is active)', () => {
+    const info = extractFromInfluxQL({
+      refId: 'A',
+      rawQuery: true,
+      // Stale builder-mode leftover: not what's executed.
+      measurement: 'wrong_measurement',
+      tags: [{ key: 'platform', operator: '=~', value: 'cds-eu-dev' }],
+      query: `SELECT mean("value") FROM "cdsp_status" WHERE "platform" = 'cds-kr-prd'`,
+    });
+    expect(info.metricNames).toEqual(['cdsp_status']);
+    expect(info.labels.platform).toEqual(['cds-kr-prd']);
+  });
+
+  it('falls back to reading whatever is present when rawQuery is absent (older dashboards saved before Grafana tracked it)', () => {
+    const info = extractFromInfluxQL({
+      refId: 'A',
+      measurement: 'cpu',
+      tags: [{ key: 'host', operator: '=', value: 'db1' }],
+      query: `SELECT mean("value") FROM "mem" WHERE "region" = 'us-east-1'`,
+    });
+    expect(info.metricNames.sort()).toEqual(['cpu', 'mem']);
+    expect(info.labels.host).toEqual(['db1']);
+    expect(info.labels.region).toEqual(['us-east-1']);
+  });
 });
 
 describe('extractQueryInfo', () => {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { findPanel, resolvePanelQueries as resolveAllPanelQueries } from '../dashboards/panelQueries.js';
+import { findPanel, resolvePanelQueries as resolveAllPanelQueries, stripInactiveQueryFields } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
 import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
@@ -19,7 +19,11 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
         'UID), and substitutes Grafana template variables ($var, ${var:format}, $__interval, $timeFilter, ...) into ' +
         'the query text. Pass variableOverrides captured from the alert/panel URL (var-*) to reproduce exactly what ' +
         'was on screen when the alert fired; any variable not overridden falls back to the dashboard\'s saved ' +
-        'current value. Each panel also returns "dataLinks" — Grafana drill-down link templates (e.g. a table\'s ' +
+        'current value. For an InfluxQL target, "resolvedQuery" includes only the representation Grafana actually ' +
+        'runs — its raw-text "query" string when the target\'s "rawQuery" is true, or its structured builder fields ' +
+        '(measurement/tags/...) when false — never both; the two are edited independently in Grafana\'s query editor ' +
+        'and the unused one can be stale, so don\'t read a "query" text field as live unless "rawQuery" is true. Each ' +
+        'panel also returns "dataLinks" — Grafana drill-down link templates (e.g. a table\'s ' +
         '"click a row to see that account/host\'s dashboard"), as raw URL templates containing macros like ' +
         '${__from}/${__to}/${__data.fields["X"]} that this server doesn\'t resolve. Substitute those yourself using ' +
         'the window bounds and the actual field values from the panel\'s query result (e.g. via execute_query_window) ' +
@@ -84,7 +88,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
                 panel.targets.map(async (t) => ({
                   refId: t.refId,
                   datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
-                  resolvedQuery: substituteTargetFields(t.raw, variables, resolvedOverrides, window),
+                  resolvedQuery: stripInactiveQueryFields(substituteTargetFields(t.raw, variables, resolvedOverrides, window)),
                 })),
               ),
             })),
