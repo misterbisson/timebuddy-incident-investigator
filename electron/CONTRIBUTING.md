@@ -52,10 +52,20 @@ Each of those first runs the root package's `tsc` build (`npm run build --prefix
 the engine's `dist/` is current, then invokes `electron-builder` for that platform. Output
 lands in `electron/dist/`.
 
-`.github/workflows/release.yml` builds all three platforms on every push/PR to `main`;
-pushes to `main` also publish to GitHub Releases (`electron-builder`'s own `publish:
-github` config, so `electron-updater` — not yet wired into `main.js` — can eventually
-point at those release artifacts).
+`.github/workflows/release.yml` builds all three platforms on every push/PR to `main`.
+
+Pushes to `main` first run a `version` job: `semantic-release` (`release.config.js`,
+repo root) analyzes commits since the last release using Conventional Commits
+(`feat:` → minor, `fix:` → patch, etc.), and if one of those is warranted, bumps
+`package.json` and `electron/package.json` in lockstep (`scripts/sync-electron-version.js`
+keeps the latter in sync, since `@semantic-release/npm` only touches the root one),
+updates `CHANGELOG.md`, and commits + tags that as `vX.Y.Z` on `main` (pushed with
+`[skip ci]`, so it doesn't re-trigger the workflow). The `release` job then only runs
+if a version was actually published, checked out at that new tag, and does the actual
+platform builds + `electron-builder --publish always` (so `electron-updater` — not yet
+wired into `main.js` — can eventually point at those release artifacts). A `main` push
+with no releasable commits (docs-only, chores, etc.) skips the build/publish matrix
+entirely.
 
 **macOS signing is currently a self-signed certificate**, not a real Apple Developer ID —
 see [`SELF_SIGNED_SETUP.md`](SELF_SIGNED_SETUP.md) for what that does and doesn't buy you
