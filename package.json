@@ -4,6 +4,10 @@
   "description": "Grafana Incident Review MCP server: read-only tools for AI-assisted incident investigation of dashboards, metrics, and logs.",
   "type": "module",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/misterbisson/timebuddy-incident-investigator.git"
+  },
   "workspaces": [
     "electron"
   ],
@@ -35,7 +39,14 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/npm": "^13.1.5",
+    "@semantic-release/release-notes-generator": "^14.1.1",
     "@types/node": "^22.10.5",
+    "semantic-release": "^25.0.7",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^4.1.10"
