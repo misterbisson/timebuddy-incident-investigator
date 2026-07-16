@@ -33,6 +33,9 @@ export type Candidate = MetricIndexEntry & {
   connectionId: string;
   /** Titles of real alert rules wired to this panel, if any — see AlertBackedPanelRef. */
   backingAlertRuleTitles: string[];
+  /** Dashboard-level (not panel-level) recency/authorship, from MetricIndex.dashboardMeta — see compareCandidates. */
+  updatedAt?: string;
+  updatedBy?: string;
 };
 
 function alertRuleTitlesFor(index: MetricIndex, dashboardUid: string, panelId: number): string[] {
@@ -57,12 +60,15 @@ export function searchIndex(
       const overlap = opts.labels ? labelOverlap(opts.labels, entry.labels) : 0;
       const queryHit = opts.query ? queryMatches(opts.query, metric, entry) : false;
       if (opts.metricName || overlap > 0 || queryHit) {
+        const dashboardMeta = index.dashboardMeta?.[entry.dashboardUid];
         candidates.push({
           ...entry,
           matchedMetric: metric,
           labelOverlapCount: overlap,
           connectionId,
           backingAlertRuleTitles: alertRuleTitlesFor(index, entry.dashboardUid, entry.panelId),
+          updatedAt: dashboardMeta?.updatedAt,
+          updatedBy: dashboardMeta?.updatedBy,
         });
       }
     }
@@ -70,10 +76,30 @@ export function searchIndex(
   return candidates;
 }
 
-/** Alert-backed first (the strongest "this is actually relied on" signal), then by label overlap. */
-function compareCandidates(a: Candidate, b: Candidate): number {
+/**
+ * Alert-backed first (the strongest "this is actually relied on" signal), then
+ * label overlap, then two dashboard-metadata tiebreakers added on top rather
+ * than reordered ahead of either: a match last touched by the same person who
+ * last touched referenceDashboardUid's dashboard (same team/owner is more
+ * likely a genuinely related dashboard, not just an incidental label match),
+ * then more-recently-updated over stale/abandoned dashboards covering the
+ * same metric.
+ */
+export function compareCandidates(a: Candidate, b: Candidate, referenceAuthor?: string): number {
   const backedDiff = (b.backingAlertRuleTitles.length > 0 ? 1 : 0) - (a.backingAlertRuleTitles.length > 0 ? 1 : 0);
-  return backedDiff !== 0 ? backedDiff : b.labelOverlapCount - a.labelOverlapCount;
+  if (backedDiff !== 0) return backedDiff;
+
+  const overlapDiff = b.labelOverlapCount - a.labelOverlapCount;
+  if (overlapDiff !== 0) return overlapDiff;
+
+  if (referenceAuthor) {
+    const authorDiff = (b.updatedBy === referenceAuthor ? 1 : 0) - (a.updatedBy === referenceAuthor ? 1 : 0);
+    if (authorDiff !== 0) return authorDiff;
+  }
+
+  const bUpdated = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+  const aUpdated = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+  return bUpdated - aUpdated;
 }
 
 /** Only includes a connection when its alert-rule crawl actually failed — see MetricIndex.alertRuleAccessError. */
@@ -108,7 +134,10 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         'to search one Grafana connection; omit it to search every configured connection and merge results, tagged ' +
         'by connectionId. Each match includes backingAlertRuleTitles when a real Grafana alert rule is wired to that ' +
         'panel — the strongest signal that it\'s actually relied on rather than a test/scratch/deprecated dashboard ' +
-        'that merely matched; alert-backed matches sort first. alertBackedDashboards is a standing overview of every ' +
+        'that merely matched; alert-backed matches sort first. Within an equally-alert-backed, equally-label-overlapping ' +
+        'group, a match last saved by the same person who last saved excludeDashboardUid\'s dashboard sorts next (same ' +
+        'owner/team is more likely a genuinely related dashboard than an incidental label match), then the more ' +
+        'recently-updated dashboard — each match\'s updatedAt/updatedBy reflect this. alertBackedDashboards is a standing overview of every ' +
         'alert-backed panel found, independent of metricName/labels/query — useful even with no search term, e.g. ' +
         'when just surveying what exists and is known-good. If alertBackedTotal is 0 or unexpectedly low, check ' +
         'alertRuleAccessErrors before concluding there simply are no alerts — it\'s only present for a connection ' +
@@ -171,8 +200,16 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             .filter((r): r is PromiseFulfilledResult<{ connectionId: string; dashboards: Awaited<ReturnType<typeof listKnowledgeDashboards>> }> => r.status === 'fulfilled')
             .flatMap((r) => r.value.dashboards.map((d) => ({ ...d, connectionId: r.value.connectionId })));
 
+          // The alert's own dashboard lives in exactly one of these connections'
+          // indexes (or none, if it's not itself indexed yet) - whichever one
+          // has it wins; find() rather than a flatMap is deliberate: only one
+          // connection can ever actually match a given dashboardUid.
+          const referenceAuthor = excludeDashboardUid
+            ? fulfilled.map((r) => r.value.index.dashboardMeta?.[excludeDashboardUid]?.updatedBy).find(Boolean)
+            : undefined;
+
           const allCandidates = fulfilled.flatMap((r) => r.value.candidates);
-          allCandidates.sort(compareCandidates);
+          allCandidates.sort((a, b) => compareCandidates(a, b, referenceAuthor));
 
           const allBroken = fulfilled.flatMap((r) =>
             r.value.index.brokenDatasources.map((b) => ({ ...b, connectionId: r.value.connectionId })),

@@ -44,6 +44,7 @@ describe('loadIndex', () => {
       alertBackedPanels: [
         { dashboardUid: 'd1', dashboardTitle: 'D1', panelId: 1, alertRules: [{ uid: 'r1', title: 'R1', labels: {} }] },
       ],
+      dashboardMeta: { d1: { title: 'D1', updatedAt: '2024-01-01T00:00:00.000Z', updatedBy: 'alice' } },
     };
     await saveIndex(index, config(), 'conn1');
     expect(await loadIndex(config(), 'conn1')).toEqual(index);
@@ -67,6 +68,23 @@ describe('loadIndex', () => {
     // The exact pattern that crashed: flatMap-ing over alertBackedPanels
     // unconditionally, with no defensive default at the call site.
     expect(() => (loaded?.alertBackedPanels ?? []).map((p) => p.dashboardUid)).not.toThrow();
+  });
+
+  it('backfills dashboardMeta when reading a cache file written before that field existed', async () => {
+    const legacyShape = {
+      builtAt: new Date(0).toISOString(),
+      dashboardsScanned: 1,
+      entriesByMetric: {},
+      brokenDatasources: [],
+      alertBackedPanels: [],
+      // dashboardMeta deliberately omitted, matching cache files written before this field was added.
+    };
+    const dir = join(dataDir, 'metric-index');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'conn1.json'), JSON.stringify(legacyShape), 'utf8');
+
+    const loaded = await loadIndex(config(), 'conn1');
+    expect(loaded?.dashboardMeta).toEqual({});
   });
 });
 

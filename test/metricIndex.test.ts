@@ -65,6 +65,23 @@ describe('buildMetricIndex', () => {
     expect(entries?.find((e) => e.dashboardUid === 'd1')?.labels.service).toEqual(['checkout']);
   });
 
+  it('captures per-dashboard recency/authorship from meta.updated/updatedBy/created/createdBy', async () => {
+    const dashboards: DashboardGetResponse[] = [
+      {
+        dashboard: { uid: 'd1', title: 'Checkout overview', panels: [] },
+        meta: { updated: '2024-06-01T00:00:00.000Z', updatedBy: 'alice', created: '2024-01-01T00:00:00.000Z', createdBy: 'bob' },
+      },
+    ];
+    const index = await buildMetricIndex(fakeClient(dashboards));
+    expect(index.dashboardMeta.d1).toEqual({
+      title: 'Checkout overview',
+      updatedAt: '2024-06-01T00:00:00.000Z',
+      updatedBy: 'alice',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      createdBy: 'bob',
+    });
+  });
+
   it('flags panels pointing at a datasource uid that no longer exists', async () => {
     const dashboards: DashboardGetResponse[] = [
       {

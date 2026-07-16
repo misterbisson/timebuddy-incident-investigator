@@ -100,6 +100,7 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
     entriesByMetric: {},
     brokenDatasources: [],
     alertBackedPanels: [],
+    dashboardMeta: {},
     alertRuleAccessError,
   };
 
@@ -112,7 +113,16 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
   for (const result of dashboardResults) {
     if (result.status !== 'fulfilled') continue;
     const dashboard = result.value.dashboard;
+    const meta = result.value.meta;
     index.dashboardsScanned++;
+
+    index.dashboardMeta[dashboard.uid] = {
+      title: dashboard.title,
+      updatedAt: meta.updated,
+      updatedBy: meta.updatedBy,
+      createdAt: meta.created,
+      createdBy: meta.createdBy,
+    };
 
     for (const panel of resolvePanelQueries(dashboard)) {
       const alertRules = alertRulesByPanel.get(`${dashboard.uid}|${panel.panelId}`);
