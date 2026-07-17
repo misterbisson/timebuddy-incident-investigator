@@ -22,8 +22,8 @@ updates:
     # dependencyReleaseRules regardless of that heuristic. Changing this
     # prefix would need a matching change there too.
     commit-message:
-      prefix: "build"
-      prefix-development: "build"
+      prefix: "chore"
+      prefix-development: "chore"
       include: "scope"
 
   - package-ecosystem: npm
@@ -35,8 +35,8 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
     commit-message:
-      prefix: "build"
-      prefix-development: "build"
+      prefix: "chore"
+      prefix-development: "chore"
       include: "scope"
 
   - package-ecosystem: github-actions
@@ -44,5 +44,5 @@ updates:
     schedule:
       interval: weekly
     commit-message:
-      prefix: "build"
+      prefix: "chore"
       include: "scope"
