@@ -13,11 +13,18 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
-    # No commit-message override: GitHub's zero-config default already
-    # titles these `build(deps): ...` / `build(deps-dev): ...` (single
-    # dependency) or `chore(deps): ...` (grouped) — all matched by
-    # release.config.js's dependencyReleaseRules. Changing this prefix would
-    # need a matching change there too.
+    # Explicit override, not GitHub's zero-config default: Dependabot's
+    # auto-titling is inconsistent across ecosystems/directories in this repo
+    # (observed: the /electron entry below produced `build(deps-dev): ...`
+    # titles unprompted, but this root entry and the github-actions entry
+    # produced plain `bump X from Y to Z` with no prefix at all). Pin the
+    # prefix explicitly so every PR title matches release.config.js's
+    # dependencyReleaseRules regardless of that heuristic. Changing this
+    # prefix would need a matching change there too.
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
 
   - package-ecosystem: npm
     directory: "/electron"
@@ -27,8 +34,15 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "chore"
+      include: "scope"
