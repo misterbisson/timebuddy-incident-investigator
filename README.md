@@ -250,11 +250,12 @@ Claude Code marketplace:
 Either way, skills show up under the `/timebuddy:` namespace:
 
 - `/timebuddy:explore` — a low-stakes health check: confirms the MCP server is connected,
-  surveys what connections/dashboards exist, and highlights which dashboards are actually
-  alert-backed (and therefore trustworthy) before an incident happens.
+  surveys what Grafana/Graylog connections and dashboards exist, and highlights which
+  dashboards are actually alert-backed (and therefore trustworthy) before an incident happens.
 - `/timebuddy:investigate` — the reactive path: ingests an alert (a pasted URL, alert JSON,
-  or webhook payload), replays it, checks baselines, looks for correlated signals, and
-  writes an evidence-linked incident note.
+  or webhook payload), replays it, checks baselines, looks for correlated signals, pulls
+  corroborating Graylog log evidence when a log connection is configured, and writes an
+  evidence-linked incident note.
 - `/timebuddy:export` — given a dashboard/panel URL and a panel name (or a direct panel link),
   resolves the exact panel, writes its data to a CSV file, and optionally grabs a screenshot
   alongside it — for archiving, reporting, or a presentation.
