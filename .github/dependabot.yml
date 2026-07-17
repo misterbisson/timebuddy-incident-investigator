@@ -18,12 +18,13 @@ updates:
     # (observed: the /electron entry below produced `build(deps-dev): ...`
     # titles unprompted, but this root entry and the github-actions entry
     # produced plain `bump X from Y to Z` with no prefix at all). Pin the
-    # prefix explicitly so every PR title matches release.config.js's
-    # dependencyReleaseRules regardless of that heuristic. Changing this
-    # prefix would need a matching change there too.
+    # prefix explicitly so every PR title is picked up by release-please's
+    # default versioning, which only bumps on fix/feat/breaking commits (no
+    # config-driven equivalent of semantic-release's dependencyReleaseRules) —
+    # hence "fix" here rather than the more conventional "chore" for deps.
     commit-message:
-      prefix: "chore"
-      prefix-development: "chore"
+      prefix: "fix"
+      prefix-development: "fix"
       include: "scope"
 
   - package-ecosystem: npm
@@ -35,8 +36,8 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
     commit-message:
-      prefix: "chore"
-      prefix-development: "chore"
+      prefix: "fix"
+      prefix-development: "fix"
       include: "scope"
 
   - package-ecosystem: github-actions
@@ -44,5 +45,5 @@ updates:
     schedule:
       interval: weekly
     commit-message:
-      prefix: "chore"
+      prefix: "fix"
       include: "scope"

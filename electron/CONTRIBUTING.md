@@ -54,21 +54,34 @@ lands in `electron/dist/`.
 
 `.github/workflows/release.yml` builds all three platforms on every push/PR to `main`.
 
-Pushes to `main` first run a `version` job: `semantic-release` (`release.config.js`,
-repo root) analyzes commits since the last release using Conventional Commits
-(`feat:` → minor, `fix:` → patch, etc. — plus a `dependencyReleaseRules` override so
-`build(deps)`/`build(deps-dev)`/`chore(deps)`/`chore(deps-dev)` commits, e.g. Dependabot's,
-also release as a patch; without it a merged Dependabot PR — including a security fix —
-would silently produce no release at all), and if one of those is warranted, bumps
-`package.json` and `electron/package.json` in lockstep (`scripts/sync-electron-version.js`
-keeps the latter in sync, since `@semantic-release/npm` only touches the root one),
-updates `CHANGELOG.md`, and commits + tags that as `vX.Y.Z` on `main` (pushed with
-`[skip ci]`, so it doesn't re-trigger the workflow). The `release` job then only runs
-if a version was actually published, checked out at that new tag, and does the actual
-platform builds + `electron-builder --publish always` (so `electron-updater` — not yet
-wired into `main.js` — can eventually point at those release artifacts). A `main` push
-with no releasable commits (docs-only, non-dependency chores, etc.) skips the
-build/publish matrix entirely.
+Pushes to `main` first run a `version` job: [`release-please`](https://github.com/googleapis/release-please)
+(`release-please-config.json`/`.release-please-manifest.json`, repo root) analyzes commits
+since the last release using Conventional Commits (`feat:` → minor, `fix:` → patch, a
+`BREAKING CHANGE:`/`!` → major) and, if any are releasable, opens or updates a single
+`chore(release): X.Y.Z` pull request accumulating all of them — nothing is published at
+this point. Because `main`'s branch protection requires every change to go through a PR
+with passing status checks (with no bypass for direct pushes), this PR is also what makes
+that possible at all: a prior direct-push design (`semantic-release`) could never actually
+land a release once branch protection was added. Dependabot's bumps use `fix(deps)`/
+`fix(deps-dev)` commit types specifically so release-please's default versioning (which,
+unlike the old setup, has no config option for custom commit-type-to-bump-level rules)
+picks them up — without that, a merged Dependabot PR, including a security fix, would
+silently produce no release at all.
+
+Merging the accumulated release PR (through the same required status checks as any other
+PR) is what actually cuts the release: release-please bumps `package.json` and
+`electron/package.json` in lockstep (an `extra-files` entry in
+`release-please-config.json` keeps the latter in sync), updates `CHANGELOG.md`, and tags
+the merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
+published, checked out at that new tag, and does the actual platform builds +
+`electron-builder --publish always` (so `electron-updater` — not yet wired into `main.js`
+— can eventually point at those release artifacts; release-please itself is configured
+with `skip-github-release: true` so it only tags, leaving the actual GitHub Release object
+and asset uploads to electron-builder, avoiding a double-release conflict). A `main` push
+with no releasable commits merged (docs-only, non-dependency chores, etc.) skips the
+build/publish matrix entirely, same as before. Until you merge the accumulated PR, any
+number of unreleased commits can land on `main` without forcing a release — merge it
+whenever you're ready to cut one.
 
 `.github/dependabot.yml` configures scheduled dependency-update PRs (weekly, grouped by
 minor/patch) for the root workspace, the `electron/` workspace, and GitHub Actions

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "timebuddy-incident-investigator",
+      "include-component-in-tag": false,
+      "pull-request-title-pattern": "chore(release): ${version}",
+      "extra-files": [
+        { "type": "json", "path": "electron/package.json", "jsonpath": "$.version" }
+      ]
+    }
+  }
+}
