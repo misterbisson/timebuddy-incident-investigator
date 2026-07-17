@@ -83,7 +83,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
 
           const executed = await Promise.all(
             allWindows.map(async (window) => {
-              const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
+              const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, config.maxDataPoints, panelTitle);
               return { window, panel, result: await executeQueryWindow(client, targets, window, config) };
             }),
           );

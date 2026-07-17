@@ -1,4 +1,5 @@
 import type { PanelTarget, TemplateVariable } from '../grafana/types.js';
+import { DEFAULT_MAX_DATA_POINTS } from '../config.js';
 
 export interface QueryWindow {
   fromMs: number;
@@ -84,8 +85,17 @@ function humanDuration(ms: number): string {
   return `${seconds}s`;
 }
 
-/** Picks a "nice" step interval, mirroring Grafana's $__interval heuristic. */
-function computeInterval(window: QueryWindow, maxDataPoints = 1000): string {
+/**
+ * Picks a "nice" step interval, mirroring Grafana's $__interval heuristic.
+ * Real Grafana derives this from the rendered panel's pixel width; this tool
+ * has no panel to measure, so it approximates the same "big display" width
+ * real users see by using the same point budget (maxDataPoints) actually
+ * sent to /api/ds/query for this query — passed in by every caller so the
+ * two stay in sync (see #53; they previously used different hardcoded
+ * numbers, so the interval baked into query text was coarser than what the
+ * request itself asked for).
+ */
+function computeInterval(window: QueryWindow, maxDataPoints = DEFAULT_MAX_DATA_POINTS): string {
   if (window.intervalMs) return humanDuration(window.intervalMs);
   const spanMs = window.toMs - window.fromMs;
   const rawStepMs = spanMs / maxDataPoints;
@@ -104,12 +114,13 @@ export function substituteVariables(
   variables: TemplateVariable[],
   overrides: Record<string, string[]>,
   window: QueryWindow,
+  maxDataPoints?: number,
 ): string {
   let result = query;
 
   result = result
-    .replaceAll('$__interval', computeInterval(window))
-    .replaceAll('${__interval}', computeInterval(window))
+    .replaceAll('$__interval', computeInterval(window, maxDataPoints))
+    .replaceAll('${__interval}', computeInterval(window, maxDataPoints))
     .replaceAll('$__range', humanDuration(window.toMs - window.fromMs))
     .replaceAll('${__range}', humanDuration(window.toMs - window.fromMs))
     .replaceAll('$__from', String(window.fromMs))
@@ -146,24 +157,25 @@ export function substituteTargetFields(
   variables: TemplateVariable[],
   overrides: Record<string, string[]>,
   window: QueryWindow,
+  maxDataPoints?: number,
 ): PanelTarget {
   const substituted: PanelTarget = { ...raw };
   if (typeof raw.expr === 'string') {
-    substituted.expr = substituteVariables(raw.expr, variables, overrides, window);
+    substituted.expr = substituteVariables(raw.expr, variables, overrides, window, maxDataPoints);
   }
   if (typeof raw.query === 'string') {
-    substituted.query = substituteVariables(raw.query, variables, overrides, window);
+    substituted.query = substituteVariables(raw.query, variables, overrides, window, maxDataPoints);
   }
   if (typeof raw.measurement === 'string') {
-    substituted.measurement = substituteVariables(raw.measurement, variables, overrides, window);
+    substituted.measurement = substituteVariables(raw.measurement, variables, overrides, window, maxDataPoints);
   }
   if (typeof raw.policy === 'string') {
-    substituted.policy = substituteVariables(raw.policy, variables, overrides, window);
+    substituted.policy = substituteVariables(raw.policy, variables, overrides, window, maxDataPoints);
   }
   if (Array.isArray(raw.tags)) {
     substituted.tags = raw.tags.map((tag) => ({
       ...tag,
-      value: substituteVariables(tag.value, variables, overrides, window),
+      value: substituteVariables(tag.value, variables, overrides, window, maxDataPoints),
     }));
   }
   return substituted;

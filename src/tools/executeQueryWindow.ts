@@ -133,7 +133,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           let resolvedPanelTitle: string | undefined;
           const resultsPerWindow = await Promise.all(
             allWindows.map(async (window) => {
-              const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, panelTitle);
+              const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, config.maxDataPoints, panelTitle);
               resolvedPanelTitle ??= panel.title;
               const [result] = await executeQueryWindows(client, targets, [window], config);
               return annotateSeries(result!, threshold, thresholdDirection, includePoints);

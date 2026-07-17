@@ -196,7 +196,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
                 panel.targets.map(async (t) => ({
                   refId: t.refId,
                   datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
-                  raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window),
+                  raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints),
                 })),
               );
               const result = await executeQueryWindow(client, targets, { label: 'render', fromMs, toMs }, config);

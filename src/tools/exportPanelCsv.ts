@@ -244,7 +244,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
               panel.targets.map(async (t) => ({
                 ...t,
                 datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
-                raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window),
+                raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints),
               })),
             );
 

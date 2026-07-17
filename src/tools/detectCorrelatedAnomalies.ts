@@ -127,6 +127,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryPanelId,
               resolvedOverrides,
               windowSet.incident,
+              config.maxDataPoints,
               primaryPanelTitle,
             );
             const primaryIncident = await executeQueryWindow(primaryClient, primaryResolved.targets, windowSet.incident, config);
@@ -136,6 +137,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryPanelId,
               resolvedOverrides,
               windowSet.preWindow,
+              config.maxDataPoints,
               primaryPanelTitle,
             );
             const primaryPreWindow = await executeQueryWindow(primaryClient, primaryPreWindowResolved.targets, windowSet.preWindow, config);
@@ -277,9 +279,9 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             const settled = await Promise.allSettled(
               candidateRefs.map(async (ref) => {
                 const client = registry.get(ref.connectionId);
-                const incidentResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.incident);
+                const incidentResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.incident, config.maxDataPoints);
                 const incidentResult = await executeQueryWindow(client, incidentResolved.targets, windowSet.incident, config);
-                const preResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.preWindow);
+                const preResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.preWindow, config.maxDataPoints);
                 const preResult = await executeQueryWindow(client, preResolved.targets, windowSet.preWindow, config);
                 return { ref, dashboard: incidentResolved.dashboard, panel: incidentResolved.panel, incidentResult, preResult };
               }),
