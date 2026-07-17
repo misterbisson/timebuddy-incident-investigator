@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { substituteVariables, substituteTargetFields, resolveDatasourceVariable } from '../src/dashboards/variables.js';
+import { DEFAULT_MAX_DATA_POINTS } from '../src/config.js';
 import type { TemplateVariable } from '../src/grafana/types.js';
 
 const window = { fromMs: 1_700_000_000_000, toMs: 1_700_003_600_000 };
+const dayWindow = { fromMs: 0, toMs: 86_400_000 };
 
 describe('substituteVariables', () => {
   it('substitutes a single-value variable raw', () => {
@@ -85,6 +87,21 @@ describe('substituteVariables', () => {
     expect(result).toContain(`${window.fromMs}`);
     expect(result).toContain(`${window.toMs}`);
     expect(result).toMatch(/step=\d+[a-z]/);
+  });
+
+  it('computes $__interval from an explicit maxDataPoints (the same value sent to /api/ds/query), not a hardcoded assumption', () => {
+    // 24h window: 100 points (a "small window" assumption) buckets much coarser than 2000 (a "big display").
+    const narrow = substituteVariables('step=$__interval', [], {}, dayWindow, 100);
+    const wide = substituteVariables('step=$__interval', [], {}, dayWindow, 2000);
+    expect(narrow).toBe('step=30m');
+    expect(wide).toBe('step=1m');
+  });
+
+  it('defaults $__interval to the same big-display point budget as MAX_DATA_POINTS when no maxDataPoints is passed (#53)', () => {
+    const omitted = substituteVariables('step=$__interval', [], {}, dayWindow);
+    const explicit = substituteVariables('step=$__interval', [], {}, dayWindow, DEFAULT_MAX_DATA_POINTS);
+    expect(omitted).toBe(explicit);
+    expect(omitted).toBe('step=1m');
   });
 
   it('replaces $timeFilter with an InfluxQL-style clause', () => {

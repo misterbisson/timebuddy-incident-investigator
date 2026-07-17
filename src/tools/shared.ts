@@ -177,6 +177,7 @@ export async function resolvePanelForWindow(
   panelId: number,
   overrides: Record<string, string[]>,
   window: QueryWindow,
+  maxDataPoints: number,
   panelTitle?: string,
 ): Promise<ResolvedPanelForWindow> {
   const { dashboard } = await client.getDashboard(dashboardUid);
@@ -196,7 +197,7 @@ export async function resolvePanelForWindow(
     panel.targets.map(async (t) => ({
       ...t,
       datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides),
-      raw: substituteTargetFields(t.raw, variables, overrides, window),
+      raw: substituteTargetFields(t.raw, variables, overrides, window, maxDataPoints),
     })),
   );
   return { dashboard, panel, targets };

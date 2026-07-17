@@ -1,3 +1,11 @@
+/**
+ * Also used as dashboards/variables.ts's computeInterval() fallback so the
+ * two point-budget assumptions ("$__interval" baked into query text vs. the
+ * maxDataPoints actually sent to /api/ds/query) can't silently drift apart
+ * the way they did pre-#53, when computeInterval hardcoded its own default.
+ */
+export const DEFAULT_MAX_DATA_POINTS = 2000;
+
 export interface GrafanaConnection {
   id: string;
   name: string;
@@ -82,7 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     screenshotTimeoutMs: parseInt_(env.GRAFANA_SCREENSHOT_TIMEOUT_MS, 45000),
     maxConcurrency: parseInt_(env.GRAFANA_MAX_CONCURRENCY, 4),
     maxLookbackHours: parseInt_(env.MAX_LOOKBACK_HOURS, 720),
-    maxDataPoints: parseInt_(env.MAX_DATA_POINTS, 2000),
+    maxDataPoints: parseInt_(env.MAX_DATA_POINTS, DEFAULT_MAX_DATA_POINTS),
     redactionPatterns: parseRedactionPatterns(env.REDACTION_PATTERNS),
     dataDir,
     webhookPort: parseInt_(env.WEBHOOK_PORT, 4318),

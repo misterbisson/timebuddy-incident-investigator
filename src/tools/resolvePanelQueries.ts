@@ -88,7 +88,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
                 panel.targets.map(async (t) => ({
                   refId: t.refId,
                   datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
-                  resolvedQuery: stripInactiveQueryFields(substituteTargetFields(t.raw, variables, resolvedOverrides, window)),
+                  resolvedQuery: stripInactiveQueryFields(substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints)),
                 })),
               ),
             })),
