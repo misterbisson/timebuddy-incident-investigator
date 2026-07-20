@@ -117,6 +117,40 @@ describe('substituteVariables', () => {
     const result = substituteVariables('$service_name and $service', variables, {}, window);
     expect(result).toBe('B and A');
   });
+
+  it('substitutes the [[name]] bracket form', () => {
+    const variables: TemplateVariable[] = [{ name: 'host', type: 'custom', current: { value: 'web1' } }];
+    expect(substituteVariables('SELECT WHERE h=[[host]]', variables, {}, window)).toBe('SELECT WHERE h=web1');
+  });
+
+  it('substitutes a multi-value [[name]] as a regex alternation', () => {
+    const variables: TemplateVariable[] = [{ name: 'host', type: 'custom', current: { value: ['a', 'b'] } }];
+    expect(substituteVariables('h=~"[[host]]"', variables, {}, window)).toBe('h=~"(a|b)"');
+  });
+
+  // `$'`, `` $` ``, `$&` and `$1` are JS replacement patterns — inserting a
+  // value containing one via a string replacement rewrites the surrounding
+  // query instead of substituting literally. Each form is exercised because
+  // they expand differently ($' = text after the match, $` = text before).
+  it.each([
+    ["a$'b", 'trailing-context'],
+    ['a$`b', 'leading-context'],
+    ['a$&b', 'whole-match'],
+    ['a$1b', 'capture-group'],
+  ])('inserts a value containing %s literally in the [[name]] form', (value) => {
+    const variables: TemplateVariable[] = [{ name: 'host', type: 'custom', current: { value } }];
+    expect(substituteVariables('SELECT WHERE h=[[host]] AND x=1', variables, {}, window)).toBe(
+      `SELECT WHERE h=${value} AND x=1`,
+    );
+  });
+
+  it('treats $-bearing values identically across the $name, ${name} and [[name]] forms', () => {
+    const variables: TemplateVariable[] = [{ name: 'host', type: 'custom', current: { value: "a$'b" } }];
+    const expected = "h=a$'b";
+    expect(substituteVariables('h=$host', variables, {}, window)).toBe(expected);
+    expect(substituteVariables('h=${host}', variables, {}, window)).toBe(expected);
+    expect(substituteVariables('h=[[host]]', variables, {}, window)).toBe(expected);
+  });
 });
 
 describe('substituteTargetFields', () => {
