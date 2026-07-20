@@ -39,6 +39,22 @@ export interface Config {
   redactionPatterns: RegExp[];
   dataDir: string;
   webhookPort: number;
+  /**
+   * Interface the webhook listener binds to. Defaults to loopback: the
+   * documented deployment is a Grafana contact point on the same host, and
+   * `POST /` writes attacker-chosen JSON straight into the store that
+   * `get_alert_context` feeds to the investigating agent. Binding wider has
+   * to be a deliberate act, which is why this is an env var and not a
+   * fallback. Set WEBHOOK_BIND_ADDRESS=0.0.0.0 to restore the pre-#68
+   * all-interfaces behavior — and set WEBHOOK_TOKEN when you do.
+   */
+  webhookBindAddress: string;
+  /**
+   * Optional shared secret. When set, `POST /` requires
+   * `Authorization: Bearer <token>`. Unset means no check — which is only
+   * safe because the bind address above is loopback by default.
+   */
+  webhookToken?: string;
 }
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {
@@ -94,6 +110,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     redactionPatterns: parseRedactionPatterns(env.REDACTION_PATTERNS),
     dataDir,
     webhookPort: parseInt_(env.WEBHOOK_PORT, 4318),
+    webhookBindAddress: env.WEBHOOK_BIND_ADDRESS?.trim() || '127.0.0.1',
+    webhookToken: env.WEBHOOK_TOKEN?.trim() || undefined,
   };
   return cached;
 }

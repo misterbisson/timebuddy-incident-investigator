@@ -321,12 +321,44 @@ dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
 - `security/redact.ts` masks secret-shaped fields and any configured
   customer-identifier patterns before data is returned to the model.
 - `security/audit.ts` appends every tool invocation to a local JSONL audit log.
+- The optional webhook listener (`npm run webhook`) binds `127.0.0.1` and accepts only
+  `POST /`. See "Receiving alerts by webhook" below before exposing it more widely.
 - A per-user Bearer token or Basic-auth login (via the connection manager) no longer
   carries the "Viewer-role service account" defense-in-depth layer that a shared token
   gave you — whatever role that person actually has in Grafana applies. The read-only
   guarantee then rests entirely on the client allowlist above, which is why that allowlist
   has no generic escape hatch. A Viewer-scoped service-account token remains the more
   defense-in-depth choice for a shared/CI connection.
+
+## Receiving alerts by webhook
+
+Optional. Point a Grafana webhook contact point at this listener and `get_alert_context`
+with no arguments will pick up the most recent alert it received:
+
+```bash
+npm run webhook     # listens on 127.0.0.1:4318, appends to $DATA_DIR/alerts.jsonl
+```
+
+It accepts only `POST /` with a Grafana Alertmanager body, never contacts Grafana, and
+has no other routes.
+
+**It binds loopback by default, which assumes Grafana runs on the same host.** If yours
+doesn't, you need a wider bind — and you should set a shared secret at the same time:
+
+```bash
+WEBHOOK_BIND_ADDRESS=0.0.0.0
+WEBHOOK_TOKEN=<a long random string>
+```
+
+With `WEBHOOK_TOKEN` set, every request must carry `Authorization: Bearer <token>`;
+configure the same value as the Authorization header on the Grafana contact point.
+Binding wide *without* a token logs a startup warning, because anything posted to this
+port becomes the incident that `get_alert_context` hands to the investigating agent — an
+unauthenticated open port here is a way to feed that agent attacker-chosen content, not
+just a way to fill a disk.
+
+`alerts.jsonl` currently grows without bound; rotation is
+[tracked separately](https://github.com/misterbisson/timebuddy-incident-investigator/issues/71).
 
 ## Known limitations (MVP)
 
