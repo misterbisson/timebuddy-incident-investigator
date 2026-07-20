@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { epochMsSchema, logSearchUrlFor, resolveLogToolClient, windowSizeWarning } from './shared.js';
-import { clampLogLimit } from '../security/limits.js';
+import { epochMsSchema, logSearchUrlFor, resolveLogToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
+import { clampLogLimit, enforceWindowLimit } from '../security/limits.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -34,6 +34,10 @@ export function registerSearchLogs(server: McpServer, { logRegistry, config }: T
         return await withAudit('search_logs', { query, startsAtMs, endsAtMs, streamId }, config, async () => {
           const { client, connectionId } = resolveLogToolClient(logRegistry, { connection });
           const resolvedEndsAtMs = endsAtMs ?? Date.now();
+          // Same hard caps the metric-query tools enforce: reject a window wider
+          // than MAX_LOOKBACK_HOURS or one that's reversed/zero-length before it
+          // ever reaches Graylog. windowSizeWarning below is only advisory.
+          enforceWindowLimit({ label: 'log search', fromMs: startsAtMs, toMs: resolvedEndsAtMs }, config);
           const warning = windowSizeWarning(startsAtMs, endsAtMs, resolvedEndsAtMs);
           const clampedLimit = clampLogLimit(limit, config);
 
@@ -62,7 +66,7 @@ export function registerSearchLogs(server: McpServer, { logRegistry, config }: T
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        return toolErrorResult(err, config);
       }
     },
   );

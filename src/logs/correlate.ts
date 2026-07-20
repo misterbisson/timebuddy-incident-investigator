@@ -1,6 +1,12 @@
 import { CorrelationEngine, type CorrelatedEvent } from '@liquescent/log-correlator-core';
 import type { GraylogClient } from '../graylog/client.js';
-import { HistoricalGraylogAdapter } from './adapter.js';
+import { HistoricalGraylogAdapter, type StreamFetchStat } from './adapter.js';
+
+export interface CorrelateLogsResult {
+  events: CorrelatedEvent[];
+  /** Per-selector fetch stats, so the caller can tell which sides were truncated at the `limit` cap. */
+  streams: StreamFetchStat[];
+}
 
 export interface CorrelateLogsParams {
   client: GraylogClient;
@@ -20,7 +26,7 @@ export interface CorrelateLogsParams {
  * always destroy()s the engine and adapter in `finally` to clear internal
  * timers that would otherwise keep the process alive.
  */
-export async function correlateLogs(params: CorrelateLogsParams): Promise<CorrelatedEvent[]> {
+export async function correlateLogs(params: CorrelateLogsParams): Promise<CorrelateLogsResult> {
   const engine = new CorrelationEngine({ defaultTimeWindow: '5m' });
   const adapter = new HistoricalGraylogAdapter(
     params.client,
@@ -30,11 +36,13 @@ export async function correlateLogs(params: CorrelateLogsParams): Promise<Correl
   );
   engine.addAdapter('graylog', adapter);
   try {
-    const results: CorrelatedEvent[] = [];
+    const events: CorrelatedEvent[] = [];
     for await (const event of engine.correlate(params.query)) {
-      results.push(event);
+      events.push(event);
     }
-    return results;
+    // By the time correlate() finishes, the engine has drained every stream,
+    // so adapter.fetchStats is fully populated.
+    return { events, streams: adapter.fetchStats };
   } finally {
     await engine.destroy();
     await adapter.destroy();

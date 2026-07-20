@@ -12,10 +12,16 @@ import type { GraylogMessageWrapper } from '../src/graylog/types.js';
  */
 function fakeClient(messagesBySelector: Record<string, GraylogMessageWrapper[]>): GraylogClient {
   return {
-    searchAbsolute: vi.fn(async ({ query }: { query: string }) => ({
-      messages: messagesBySelector[query] ?? [],
-      total_results: (messagesBySelector[query] ?? []).length,
-    })),
+    // Honors `limit` the way real Graylog does (head N of the matched set) and
+    // still reports the full match count as total_results — so a fixture with
+    // more messages than the limit is genuinely truncated, the case finding #2
+    // was about. The old stub ignored limit and set total_results = fetched,
+    // which is exactly why a truncated-stream join looked correct here.
+    searchAbsolute: vi.fn(async ({ query, limit }: { query: string; limit?: number }) => {
+      const all = messagesBySelector[query] ?? [];
+      const messages = typeof limit === 'number' ? all.slice(0, limit) : all;
+      return { messages, total_results: all.length };
+    }),
     listStreams: vi.fn(async () => []),
   } as unknown as GraylogClient;
 }
@@ -31,7 +37,7 @@ describe('correlateLogs', () => {
       'service:backend': [msg('backend-host', '2026-01-01T00:00:02Z', 'r1')],
     });
 
-    const results = await correlateLogs({
+    const { events: results } = await correlateLogs({
       client,
       query: 'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
@@ -52,7 +58,7 @@ describe('correlateLogs', () => {
       'service:backend': [msg('backend-host', '2026-01-01T00:00:00Z', 'r-unrelated')],
     });
 
-    const results = await correlateLogs({
+    const { events: results } = await correlateLogs({
       client,
       query: 'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
@@ -69,7 +75,7 @@ describe('correlateLogs', () => {
       'service:backend': [msg('backend-host', '2026-01-01T00:00:02Z', 'r1')],
     });
 
-    const results = await correlateLogs({
+    const { events: results } = await correlateLogs({
       client,
       query: 'graylog(service:frontend)[5m] unless on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
@@ -89,7 +95,7 @@ describe('correlateLogs', () => {
       'service:backend': [msg('backend-host', '2026-01-01T00:00:02Z', 'r1')],
     });
 
-    const results = await correlateLogs({
+    const { events: results } = await correlateLogs({
       client,
       query: 'graylog(service:frontend)[5m] or on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
@@ -109,7 +115,7 @@ describe('correlateLogs', () => {
       'service:db': [msg('db-host', '2026-01-01T00:00:04Z', 'r1')],
     });
 
-    const results = await correlateLogs({
+    const { events: results } = await correlateLogs({
       client,
       query:
         'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m] and on(request_id) graylog(service:db)[5m]',
@@ -129,6 +135,37 @@ describe('correlateLogs', () => {
     expect(results[0]?.metadata.totalStreams).toBe(3);
     expect(results[0]?.metadata.completeness).toBe('complete');
     expect(results[0]?.events.map((e) => e.source).sort()).toEqual(['backend-host', 'db-host', 'frontend-host']);
+  });
+
+  // Finding #2: the `limit` cap silently drops the tail of a stream. correlateLogs
+  // must report, per selector, that total_results exceeded what it fetched — so a
+  // caller can tell the join ran on a partial view rather than trusting the count.
+  it('reports per-stream truncation (fetched vs total) when a stream exceeds the limit', async () => {
+    const client = fakeClient({
+      'service:frontend': [msg('frontend-host', '2026-01-01T00:00:00Z', 'r1')],
+      // r1's backend match is the 3rd message; a limit of 2 fetches only r-a and r-b.
+      'service:backend': [
+        msg('backend-host', '2026-01-01T00:00:00Z', 'r-a'),
+        msg('backend-host', '2026-01-01T00:00:01Z', 'r-b'),
+        msg('backend-host', '2026-01-01T00:00:02Z', 'r1'),
+      ],
+    });
+
+    const { events, streams } = await correlateLogs({
+      client,
+      query: 'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m]',
+      fromMs: 0,
+      toMs: 1,
+      limit: 2,
+    });
+
+    const backend = streams.find((s) => s.selector === 'service:backend');
+    expect(backend).toMatchObject({ fetched: 2, total: 3, truncated: true });
+    const frontend = streams.find((s) => s.selector === 'service:frontend');
+    expect(frontend?.truncated).toBe(false);
+    // Documents the under-count the truncation flag warns about: r1's match was
+    // past the cap, so the inner join finds nothing despite a real correlation.
+    expect(events).toEqual([]);
   });
 
   it('destroys the engine and adapter even when the query throws (malformed query)', async () => {

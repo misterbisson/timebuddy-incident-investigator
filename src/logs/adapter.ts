@@ -23,6 +23,21 @@ export function toLabels(message: GraylogMessageWrapper['message']): Record<stri
   return labels;
 }
 
+/**
+ * Per-selector record of how much of a Graylog search actually came back vs.
+ * how much matched. `truncated` is the one that matters downstream: the
+ * `limit` cap (default maxLogLines) silently drops everything past N, and a
+ * join computed over a truncated stream can under-count (inner join) or, worse,
+ * invert (anti-join) — see correlate_logs' handling of a truncated `unless`
+ * right side. Surfaced so nothing derives a confident answer from partial data.
+ */
+export interface StreamFetchStat {
+  selector: string;
+  fetched: number;
+  total: number;
+  truncated: boolean;
+}
+
 export function toLogEvent(wrapper: GraylogMessageWrapper): LogEvent {
   const { message } = wrapper;
   return {
@@ -46,6 +61,13 @@ export function toLogEvent(wrapper: GraylogMessageWrapper): LogEvent {
  * assumptions baked in, only their bundled adapters do.
  */
 export class HistoricalGraylogAdapter implements DataSourceAdapter {
+  /**
+   * Per-selector fetch stats, appended once per createStream() call. Read by
+   * correlateLogs() after the engine has drained every stream, so it can tell
+   * the caller which sides were truncated at the `limit` cap.
+   */
+  readonly fetchStats: StreamFetchStat[] = [];
+
   constructor(
     private readonly client: GraylogClient,
     private readonly window: { fromMs: number; toMs: number },
@@ -67,13 +89,20 @@ export class HistoricalGraylogAdapter implements DataSourceAdapter {
   }
 
   async *createStream(selector: string, _options?: StreamOptions): AsyncIterable<LogEvent> {
+    const trimmed = selector.trim();
     const response = await this.client.searchAbsolute({
-      query: selector.trim().length > 0 ? selector : '*',
+      query: trimmed.length > 0 ? trimmed : '*',
       fromMs: this.window.fromMs,
       toMs: this.window.toMs,
       streamId: this.streamId,
       limit: this.limit,
     });
+    // total_results is Graylog's count of everything that matched the window,
+    // independent of the `limit` we capped the fetch at — so total > fetched
+    // means the join below is running on a truncated view of this stream.
+    const fetched = response.messages.length;
+    const total = response.total_results ?? fetched;
+    this.fetchStats.push({ selector: trimmed, fetched, total, truncated: total > fetched });
     for (const wrapper of response.messages) {
       yield toLogEvent(wrapper);
     }

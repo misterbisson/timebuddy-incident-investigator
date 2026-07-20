@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerListLogSources } from '../src/tools/listLogSources.js';
 import type { Config, LogConnection } from '../src/config.js';
+import { GraylogApiError } from '../src/graylog/client.js';
+import type { GraylogClient } from '../src/graylog/client.js';
 import { fakeGraylogClient, fakeLogRegistry, fakeServer } from './toolTestHelpers.js';
 
 const connections: LogConnection[] = [
@@ -74,5 +76,30 @@ describe('list_log_sources tool', () => {
     };
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/Unknown connection id "bogus"/);
+  });
+
+  // Regression for #62/#88: even list_log_sources' stream listing goes through a
+  // GraylogApiError whose message/path can carry a configured identifier (e.g. a
+  // stream id). The catch must redact rather than hand the raw error to the model.
+  it('redacts configured identifiers from a GraylogApiError before returning it to the model', async () => {
+    const path = '/api/streams/acct-778899';
+    const listStreams = vi.fn(async () => {
+      throw new GraylogApiError(`Graylog GET ${path} failed: 403 {"message":"forbidden for acct-778899"}`, 403, path);
+    });
+    const client = { searchAbsolute: vi.fn(), listStreams } as unknown as GraylogClient;
+    const { server, call } = fakeServer();
+    registerListLogSources(server, {
+      logRegistry: fakeLogRegistry(connections, client),
+      config: config({ redactionPatterns: [/acct-\d+/i] }),
+    } as never);
+
+    const result = (await call('list_log_sources', { connection: 'log1' })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).not.toContain('acct-778899');
+    expect(result.content[0]!.text).toContain('[REDACTED]');
   });
 });

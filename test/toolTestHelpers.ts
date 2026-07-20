@@ -102,9 +102,14 @@ export function fakeGraylogClient(opts: {
   messagesBySelector?: Record<string, GraylogMessageWrapper[]>;
   streams?: GraylogStream[];
 }): { client: GraylogClient; searchAbsolute: ReturnType<typeof vi.fn>; listStreams: ReturnType<typeof vi.fn> } {
-  const searchAbsolute = vi.fn(async (params: { query: string }) => {
-    const messages = opts.messagesBySelector ? (opts.messagesBySelector[params.query] ?? []) : (opts.messages ?? []);
-    return { messages, total_results: messages.length };
+  // Honors `limit` the way real Graylog does (sort=timestamp:asc, head N) and
+  // reports total_results as the full match count — so a fixture with more
+  // messages than the limit surfaces as truncated (total > fetched), which is
+  // what correlate_logs' truncation handling needs to be exercised.
+  const searchAbsolute = vi.fn(async (params: { query: string; limit?: number }) => {
+    const all = opts.messagesBySelector ? (opts.messagesBySelector[params.query] ?? []) : (opts.messages ?? []);
+    const messages = typeof params.limit === 'number' ? all.slice(0, params.limit) : all;
+    return { messages, total_results: all.length };
   });
   const listStreams = vi.fn(async () => opts.streams ?? []);
   const client = { searchAbsolute, listStreams } as unknown as GraylogClient;

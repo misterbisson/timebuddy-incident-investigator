@@ -241,6 +241,11 @@ skill exists to handle for them.
      separate `search_logs` calls — one query, one already-joined result set. Its `and`/`or`/
      `unless` operators are documented in the tool description; `unless` is the one worth
      remembering for "which requests on one side never showed up on the other."
+     - A `truncated: true` in the result (or any `streams[]` entry with `truncated: true`) means a
+       stream hit the per-stream line cap, so the join ran on a partial view — treat the result as
+       a floor, not a complete count, and narrow the window/query if the count matters. A truncated
+       `unless` right side errors out rather than returning a possibly-inverted answer; narrow and
+       retry rather than working around it.
    - Whatever `search_logs`/`correlate_logs` returns is one more piece of evidence for step 7's
      verdict, not a separate report — its `url` belongs in `evidence[]` the same way every other
      tool's URL does, and a specific log line or correlated pair worth citing belongs in the

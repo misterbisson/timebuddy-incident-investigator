@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerSearchLogs } from '../src/tools/searchLogs.js';
 import type { Config, LogConnection } from '../src/config.js';
+import { GraylogApiError } from '../src/graylog/client.js';
+import type { GraylogClient } from '../src/graylog/client.js';
 import { fakeGraylogClient, fakeLogRegistry, fakeServer } from './toolTestHelpers.js';
 
 const connections: LogConnection[] = [
@@ -88,6 +90,67 @@ describe('search_logs tool', () => {
 
     const body = JSON.parse(result.content[0]!.text);
     expect(body.warning).toMatch(/defaulted to now/);
+  });
+
+  // Regression for #62/#88: a GraylogApiError echoes the offending query — with
+  // customer identifiers already substituted in — back in both the URL-encoded
+  // path and the response body. The tool's catch must route through
+  // toolErrorResult so redactionPatterns mask them, exactly like the success path.
+  it('redacts configured identifiers from a GraylogApiError before returning it to the model', async () => {
+    const path = '/api/search/universal/absolute?query=customer%3Aacct-778899&from=x&to=y';
+    const searchAbsolute = vi.fn(async () => {
+      throw new GraylogApiError(
+        `Graylog GET ${path} failed: 400 {"message":"cannot parse query customer:acct-778899"}`,
+        400,
+        path,
+      );
+    });
+    const client = { searchAbsolute, listStreams: vi.fn() } as unknown as GraylogClient;
+    const { server, call } = fakeServer();
+    registerSearchLogs(server, {
+      logRegistry: fakeLogRegistry(connections, client),
+      config: config({ redactionPatterns: [/acct-\d+/i] }),
+    } as never);
+
+    const result = (await call('search_logs', { query: 'customer:acct-778899', startsAtMs: 0, endsAtMs: 1 })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).not.toContain('acct-778899');
+    expect(result.content[0]!.text).toContain('[REDACTED]');
+  });
+
+  it('rejects a window wider than MAX_LOOKBACK_HOURS before hitting Graylog', async () => {
+    const { client, searchAbsolute } = fakeGraylogClient({ messages: [] });
+    const { server, call } = fakeServer();
+    registerSearchLogs(server, { logRegistry: fakeLogRegistry(connections, client), config: config({ maxLookbackHours: 24 }) } as never);
+
+    const result = (await call('search_logs', {
+      query: '*',
+      startsAtMs: 0,
+      endsAtMs: 48 * 3_600_000, // 48h > 24h cap
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/MAX_LOOKBACK_HOURS/);
+    expect(searchAbsolute).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reversed window (endsAtMs <= startsAtMs) before hitting Graylog', async () => {
+    const { client, searchAbsolute } = fakeGraylogClient({ messages: [] });
+    const { server, call } = fakeServer();
+    registerSearchLogs(server, { logRegistry: fakeLogRegistry(connections, client), config: config() } as never);
+
+    const result = (await call('search_logs', { query: '*', startsAtMs: 2000, endsAtMs: 1000 })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/non-positive duration/);
+    expect(searchAbsolute).not.toHaveBeenCalled();
   });
 
   it('returns an error result (not a thrown exception) when no log connection is configured', async () => {
