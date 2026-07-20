@@ -135,7 +135,11 @@ export function substituteVariables(
     const values = effectiveValues(variable, overrides);
     const braceFormatPattern = new RegExp(`\\$\\{${variable.name}(?::([a-zA-Z]+))?\\}`, 'g');
     result = result.replace(braceFormatPattern, (_m, format?: string) => formatValues(values, format));
-    result = result.replaceAll(`[[${variable.name}]]`, formatValues(values, undefined));
+    // Replacement *function*, matching the two forms around it: a plain string
+    // replacement interprets `$'`, `` $` ``, `$&` and `$1` as patterns, so a
+    // variable value containing one would rewrite the surrounding query rather
+    // than being inserted literally.
+    result = result.replaceAll(`[[${variable.name}]]`, () => formatValues(values, undefined));
     const simplePattern = new RegExp(`\\$${variable.name}\\b`, 'g');
     result = result.replace(simplePattern, () => formatValues(values, undefined));
   }
