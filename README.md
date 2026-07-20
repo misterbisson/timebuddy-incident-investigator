@@ -172,6 +172,15 @@ with a "copy path" button), in two files:
   in-memory, only inside this same process, when `--mcp-server` mode needs to build a
   Grafana client — the decrypted form is never written back to disk.
 
+Both files are written atomically (temp file plus rename), so an interrupted write or a
+crash can't leave either one truncated.
+
+If a connection's row shows **"Can't decrypt secret"**, its stored credential is still
+there but this machine's keychain can no longer open it — most often after an OS
+reinstall, a keychain reset, or migrating to a new machine. Edit that connection and
+re-enter its token/password to fix it. Only that one connection is affected; the others
+keep working normally, and tool calls that don't use it are unaffected.
+
 ## Registering with Claude
 
 Once you've added your connections, the app's "Register with Claude" section shows a
