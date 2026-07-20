@@ -143,12 +143,20 @@ export class GrafanaClient {
     tag?: string[];
     folderUid?: string;
     limit?: number;
+    /**
+     * 1-indexed page. Grafana's /api/search caps a single response at 5000
+     * rows regardless of `limit`, so a full-estate crawl has to page through
+     * (see buildMetricIndex); without this it silently sees only the first
+     * page and reports a partial index as if it were complete.
+     */
+    page?: number;
   } = {}): Promise<SearchResultItem[]> {
     const qs = new URLSearchParams();
     qs.set('type', 'dash-db');
     if (params.query) qs.set('query', params.query);
     if (params.folderUid) qs.set('folderUIDs', params.folderUid);
     if (params.limit) qs.set('limit', String(params.limit));
+    if (params.page) qs.set('page', String(params.page));
     for (const t of params.tag ?? []) qs.append('tag', t);
     return this.request<SearchResultItem[]>('GET', `/api/search?${qs.toString()}`);
   }

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildMetricIndex, getCachedIndexIfFresh, getOrBuildIndex } from '../src/index-builder/metricIndex.js';
+import { buildMetricIndex, getCachedIndexIfFresh, getOrBuildIndex, SEARCH_PAGE_SIZE } from '../src/index-builder/metricIndex.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { Config } from '../src/config.js';
 import type { DashboardGetResponse, RulerRuleGroup } from '../src/grafana/types.js';
@@ -238,7 +238,122 @@ describe('buildMetricIndex', () => {
     } as unknown as GrafanaClient;
 
     const index = await buildMetricIndex(client);
+    // The fetch failure is visible as the discovered/scanned gap, not swallowed.
     expect(index.dashboardsScanned).toBe(1);
+    expect(index.dashboardsDiscovered).toBe(2);
+  });
+});
+
+describe('buildMetricIndex — enumerating the estate', () => {
+  it('pages through /api/search so an estate larger than one page is fully scanned', async () => {
+    // One full page plus a short second page, at the real SEARCH_PAGE_SIZE, so
+    // the "keep going after a full page, stop after a short one" logic runs.
+    const total = SEARCH_PAGE_SIZE + 2;
+    const uids = Array.from({ length: total }, (_, i) => `d${i}`);
+    const searchDashboards = vi.fn(async ({ page = 1, limit = SEARCH_PAGE_SIZE }: { page?: number; limit?: number } = {}) => {
+      const start = (page - 1) * limit;
+      return uids.slice(start, start + limit).map((uid) => ({ uid, title: uid, type: 'dash-db', tags: [], url: '' }));
+    });
+    const client = {
+      searchDashboards,
+      getDashboard: vi.fn(async (uid: string) => ({ dashboard: { uid, title: uid, panels: [] }, meta: {} })),
+      listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
+    } as unknown as GrafanaClient;
+
+    const index = await buildMetricIndex(client);
+    expect(index.dashboardsScanned).toBe(total);
+    expect(index.dashboardsDiscovered).toBe(total);
+    // page 1 (full) → page 2 (short, stop). Exactly two search calls.
+    expect(searchDashboards).toHaveBeenCalledTimes(2);
+  });
+
+  it('makes a single search call for an estate that fits in one page', async () => {
+    const searchDashboards = vi.fn(async () => [{ uid: 'd0', title: 'd0', type: 'dash-db', tags: [], url: '' }]);
+    const client = {
+      searchDashboards,
+      getDashboard: vi.fn(async (uid: string) => ({ dashboard: { uid, title: uid, panels: [] }, meta: {} })),
+      listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
+    } as unknown as GrafanaClient;
+
+    await buildMetricIndex(client);
+    expect(searchDashboards).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops paging when a full page repeats uids it has already seen (server ignores `page`)', async () => {
+    // A server that returns the SAME *full* page regardless of `page` never
+    // trips the short-page stop, so it would loop forever on a naive "keep
+    // going until a short page" — the dedup guard (no fresh uids) is what stops it.
+    const fullPage = Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => ({
+      uid: `d${i}`,
+      title: `d${i}`,
+      type: 'dash-db',
+      tags: [],
+      url: '',
+    }));
+    const searchDashboards = vi.fn(async () => fullPage);
+    const client = {
+      searchDashboards,
+      getDashboard: vi.fn(async (uid: string) => ({ dashboard: { uid, title: uid, panels: [] }, meta: {} })),
+      listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
+    } as unknown as GrafanaClient;
+
+    const index = await buildMetricIndex(client);
+    expect(index.dashboardsScanned).toBe(SEARCH_PAGE_SIZE); // deduped, not growing per page
+    // page 1 (all fresh) → page 2 (all seen → stop). Two calls, not unbounded.
+    expect(searchDashboards).toHaveBeenCalledTimes(2);
+  });
+
+  it('dedups a uid that appears on more than one page', async () => {
+    const searchDashboards = vi.fn(async ({ page = 1 }: { page?: number } = {}) => {
+      // page 1 and page 2 both include 'shared'; page 2 is short so paging stops.
+      if (page === 1) return [{ uid: 'shared', title: 's', type: 'dash-db', tags: [], url: '' }];
+      return [];
+    });
+    const client = {
+      searchDashboards,
+      getDashboard: vi.fn(async (uid: string) => ({ dashboard: { uid, title: uid, panels: [] }, meta: {} })),
+      listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
+    } as unknown as GrafanaClient;
+
+    const index = await buildMetricIndex(client);
+    expect(index.dashboardsScanned).toBe(1);
+  });
+
+  it('never holds more than `maxConcurrency` dashboard responses in memory at once', async () => {
+    // The retention bug this guards against: the previous code created one
+    // getDashboard promise per dashboard up front and kept every resolved
+    // response alive until the last settled. The pool bounds concurrent
+    // executions to maxConcurrency, so no more than that many responses are
+    // ever live at once. A small real delay lets executions overlap so the
+    // measured peak reflects the cap, not sequential timing.
+    const uids = Array.from({ length: 20 }, (_, i) => `d${i}`);
+    const searchDashboards = async () => uids.map((uid) => ({ uid, title: uid, type: 'dash-db', tags: [], url: '' }));
+
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const getDashboard = vi.fn(async (uid: string) => {
+      inFlight++;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      return { dashboard: { uid, title: uid, panels: [] }, meta: {} };
+    });
+    const client = {
+      searchDashboards,
+      getDashboard,
+      listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
+    } as unknown as GrafanaClient;
+
+    const index = await buildMetricIndex(client, { maxConcurrency: 3 } as unknown as Config);
+
+    expect(index.dashboardsScanned).toBe(20);
+    expect(getDashboard).toHaveBeenCalledTimes(20);
+    expect(peakInFlight).toBe(3); // exactly the cap, proving overlap actually occurred
   });
 });
 
@@ -288,6 +403,57 @@ describe('getOrBuildIndex / getCachedIndexIfFresh', () => {
     const second = await getOrBuildIndex(client, config(), 'conn1', {});
     expect(second).toEqual(first);
     expect(getDashboard).toHaveBeenCalledTimes(1); // not called again - served from disk cache
+  });
+
+  it('coalesces concurrent cache-miss builds into one crawl per connection', async () => {
+    // The race in #72: two tools called back-to-back against a cold cache each
+    // start a full multi-minute crawl and then both write the same file.
+    let searchCalls = 0;
+    let releaseSearch: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseSearch = resolve;
+    });
+    const getDashboard = vi.fn(async (uid: string) => ({ dashboard: { uid, title: uid, panels: [] }, meta: {} }));
+    const client = {
+      // Block the first crawl inside searchDashboards so the second call
+      // arrives while the first is still in flight.
+      searchDashboards: vi.fn(async () => {
+        searchCalls++;
+        await gate;
+        return [{ uid: 'd1', title: 'D1', type: 'dash-db', tags: [], url: '' }];
+      }),
+      listDatasources: async () => [],
+      getRuleGroups: async () => ({}),
+      getDashboard,
+    } as unknown as GrafanaClient;
+
+    const a = getOrBuildIndex(client, config(), 'conn1', {});
+    const b = getOrBuildIndex(client, config(), 'conn1', {});
+    releaseSearch();
+    const [ra, rb] = await Promise.all([a, b]);
+
+    expect(searchCalls).toBe(1); // one crawl, not two
+    expect(getDashboard).toHaveBeenCalledTimes(1);
+    expect(ra).toEqual(rb);
+  });
+
+  it('starts a fresh crawl on the next miss after the in-flight one settles', async () => {
+    // The coalescing map must clear when a build finishes, or a later miss
+    // would return a stale resolved promise instead of rebuilding.
+    const { client, getDashboard } = fakeClient();
+    await getOrBuildIndex(client, config(), 'conn1', { force: true });
+    await getOrBuildIndex(client, config(), 'conn1', { force: true });
+    expect(getDashboard).toHaveBeenCalledTimes(2);
+  });
+
+  it('builds different connections in parallel rather than serializing them', async () => {
+    const { client } = fakeClient();
+    const [r1, r2] = await Promise.all([
+      getOrBuildIndex(client, config(), 'connA', {}),
+      getOrBuildIndex(client, config(), 'connB', {}),
+    ]);
+    expect(r1.dashboardsScanned).toBe(1);
+    expect(r2.dashboardsScanned).toBe(1);
   });
 
   it('getCachedIndexIfFresh never triggers a build - undefined on a miss, the cached copy once one exists', async () => {
