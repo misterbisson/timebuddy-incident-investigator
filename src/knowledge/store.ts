@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Config } from '../config.js';
 import type { CachedPanelContent } from './types.js';
+import { writeJsonFileAtomic } from '../util/atomicWrite.js';
 
 export interface FolderWalkCacheEntry {
   /** null means "walked the tree, found nothing" — cached explicitly so the common no-adopter case doesn't re-walk on every call. */
@@ -67,8 +68,9 @@ export async function loadKnowledgeCache(config: Config, connectionId: string): 
 }
 
 export async function saveKnowledgeCache(cache: KnowledgeCache, config: Config, connectionId: string): Promise<void> {
-  await mkdir(cacheDir(config), { recursive: true });
-  await writeFile(cacheFilePath(config, connectionId), JSON.stringify(cache, null, 2), 'utf8');
+  // Atomic for the same reason as saveIndex: loadKnowledgeCache treats a torn
+  // read as a cache miss, so a half-written file silently discards the cache.
+  await writeJsonFileAtomic(cacheFilePath(config, connectionId), cache);
 }
 
 /** Shared staleness check for any cache entry carrying a resolvedAt timestamp (folder-walk results, the all-dashboards list). */

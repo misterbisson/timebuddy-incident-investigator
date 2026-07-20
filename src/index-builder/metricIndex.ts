@@ -1,11 +1,23 @@
 import type { Config } from '../config.js';
 import type { GrafanaClient } from '../grafana/client.js';
-import type { RulerRuleGroup } from '../grafana/types.js';
+import type { DashboardGetResponse, RulerRuleGroup, SearchResultItem } from '../grafana/types.js';
 import { resolvePanelQueries } from '../dashboards/panelQueries.js';
 import { extractQueryInfo } from './extract.js';
 import { CURRENT_SCHEMA_VERSION, isStale, loadIndex, saveIndex, type AlertRuleRef, type MetricIndex } from './store.js';
 
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Grafana's /api/search caps a single response at 5000 rows regardless of the
+ * `limit` sent, so the crawl pages through at this size. The previous code
+ * asked for limit:5000 once and silently treated the first page as the whole
+ * estate — an estate with more dashboards than this was indexed only in part,
+ * with nothing to signal it.
+ */
+export const SEARCH_PAGE_SIZE = 5000;
+
+/** Fallback fetch concurrency when no Config is supplied (tests). Real callers pass config.maxConcurrency. */
+const DEFAULT_CRAWL_CONCURRENCY = 4;
 
 /**
  * Grafana's own special pseudo-datasource references — never real
@@ -64,16 +76,82 @@ function indexAlertRulesByPanel(ruleGroupsByFolder: Record<string, RulerRuleGrou
 }
 
 /**
+ * Pages through /api/search to enumerate every dashboard, rather than taking
+ * a single capped page. Dedups by uid and stops when a page returns no new
+ * uid — that second condition is the guard against a Grafana that ignores the
+ * `page` param and would otherwise return the same first page forever.
+ */
+async function discoverDashboards(client: GrafanaClient): Promise<SearchResultItem[]> {
+  const all: SearchResultItem[] = [];
+  const seen = new Set<string>();
+  let page = 1;
+  for (;;) {
+    const batch = await client.searchDashboards({ limit: SEARCH_PAGE_SIZE, page });
+    let fresh = 0;
+    for (const s of batch) {
+      if (s.type !== 'dash-db' || seen.has(s.uid)) continue;
+      seen.add(s.uid);
+      all.push(s);
+      fresh++;
+    }
+    // A short page is the last page (real Grafana); no fresh uids means the
+    // server is repeating pages and we've already seen everything it has.
+    if (batch.length < SEARCH_PAGE_SIZE || fresh === 0) break;
+    page++;
+  }
+  return all;
+}
+
+/**
+ * Fetches each dashboard and hands it to `fold` as soon as it resolves, with
+ * at most `concurrency` fetches in flight and — crucially — at most that many
+ * DashboardGetResponse objects retained at once. The previous code built one
+ * getDashboard promise per dashboard up front and held every resolved
+ * response alive until the last settled, so on a multi-thousand-dashboard
+ * estate it kept every full dashboard document in memory simultaneously.
+ *
+ * A single dashboard failing to fetch is skipped, not fatal — the same
+ * tolerance the previous Promise.allSettled had. `fold` runs synchronously
+ * between fetches, so it never races another fold on the shared index.
+ */
+async function crawlDashboards(
+  client: GrafanaClient,
+  uids: string[],
+  concurrency: number,
+  fold: (response: DashboardGetResponse) => void,
+): Promise<void> {
+  let cursor = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= uids.length) return;
+      let response: DashboardGetResponse;
+      try {
+        response = await client.getDashboard(uids[i]!);
+      } catch {
+        continue;
+      }
+      fold(response);
+    }
+  };
+  const workerCount = Math.max(1, Math.min(concurrency, uids.length));
+  await Promise.all(Array.from({ length: workerCount }, worker));
+}
+
+/**
  * Crawls every dashboard's panels and builds a metric/measurement -> dashboard
  * reverse index, a list of panels pointing at a datasource uid that no
  * longer exists, and a list of panels a real alert rule is wired to — the
  * strongest available signal for which dashboards are actually relied on
  * versus a test/scratch/deprecated one that merely matches a search term.
  * This is what find_related_dashboards searches against.
+ *
+ * `config` only supplies the fetch concurrency; it's optional so tests can
+ * build an index from a fake client without assembling a whole Config.
  */
-export async function buildMetricIndex(client: GrafanaClient): Promise<MetricIndex> {
+export async function buildMetricIndex(client: GrafanaClient, config?: Config): Promise<MetricIndex> {
   const [summaries, datasources] = await Promise.all([
-    client.searchDashboards({ limit: 5000 }),
+    discoverDashboards(client),
     client.listDatasources(),
   ]);
   const knownDsUids = new Set(datasources.map((d) => d.uid));
@@ -96,6 +174,7 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
   const index: MetricIndex = {
     builtAt: new Date().toISOString(),
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    dashboardsDiscovered: summaries.length,
     dashboardsScanned: 0,
     entriesByMetric: {},
     brokenDatasources: [],
@@ -104,16 +183,7 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
     alertRuleAccessError,
   };
 
-  const dashboardResults = await Promise.allSettled(
-    summaries
-      .filter((s) => s.type === 'dash-db')
-      .map((s) => client.getDashboard(s.uid)),
-  );
-
-  for (const result of dashboardResults) {
-    if (result.status !== 'fulfilled') continue;
-    const dashboard = result.value.dashboard;
-    const meta = result.value.meta;
+  const foldDashboard = ({ dashboard, meta }: DashboardGetResponse): void => {
     index.dashboardsScanned++;
 
     index.dashboardMeta[dashboard.uid] = {
@@ -169,10 +239,28 @@ export async function buildMetricIndex(client: GrafanaClient): Promise<MetricInd
         }
       }
     }
-  }
+  };
+
+  await crawlDashboards(
+    client,
+    summaries.map((s) => s.uid),
+    config?.maxConcurrency ?? DEFAULT_CRAWL_CONCURRENCY,
+    foldDashboard,
+  );
 
   return index;
 }
+
+/**
+ * In-flight crawls keyed by connection id. A crawl takes minutes, and
+ * find_related_dashboards / detect_correlated_anomalies are routinely called
+ * back-to-back against a cold cache — without this, both would start their
+ * own full crawl and then both write the same file. Keyed by connection id
+ * (not globally) so two different connections still build in parallel. Keyed
+ * on this module's singleton map, which is correct because a connection's
+ * GrafanaClient is itself cached one-per-id by the ConnectionRegistry.
+ */
+const inFlightBuilds = new Map<string, Promise<MetricIndex>>();
 
 /**
  * Returns the cached index if it's fresh enough, otherwise rebuilds and
@@ -189,15 +277,31 @@ export async function getOrBuildIndex(
     const cached = await loadIndex(config, connectionId);
     if (cached && !isStale(cached, opts.ttlMs ?? DEFAULT_TTL_MS)) return cached;
   }
-  // A full crawl (searchDashboards + getDashboard per dashboard) confirmed to take on the order
-  // of minutes per connection on a real estate (~600-860 dashboards) - without this, a caller has
-  // no way to tell "building the index" apart from "hung," since nothing else logs during it.
-  console.error(`[metric-index] Building index for connection "${connectionId}" (crawling all dashboards - this can take several minutes)...`);
-  const startedAt = Date.now();
-  const fresh = await buildMetricIndex(client);
-  console.error(`[metric-index] Finished "${connectionId}": ${fresh.dashboardsScanned} dashboards scanned in ${Date.now() - startedAt}ms.`);
-  await saveIndex(fresh, config, connectionId);
-  return fresh;
+
+  // Coalesce onto an already-running crawl for this connection rather than
+  // starting a second one. A forced rebuild still joins one in progress —
+  // the caller wants a fresh index, and the in-flight build already is one.
+  const existing = inFlightBuilds.get(connectionId);
+  if (existing) return existing;
+
+  const build = (async () => {
+    // A full crawl (searchDashboards + getDashboard per dashboard) confirmed to take on the order
+    // of minutes per connection on a real estate (~600-860 dashboards) - without this, a caller has
+    // no way to tell "building the index" apart from "hung," since nothing else logs during it.
+    console.error(`[metric-index] Building index for connection "${connectionId}" (crawling all dashboards - this can take several minutes)...`);
+    const startedAt = Date.now();
+    const fresh = await buildMetricIndex(client, config);
+    console.error(`[metric-index] Finished "${connectionId}": ${fresh.dashboardsScanned}/${fresh.dashboardsDiscovered ?? fresh.dashboardsScanned} dashboards scanned in ${Date.now() - startedAt}ms.`);
+    await saveIndex(fresh, config, connectionId);
+    return fresh;
+  })();
+
+  inFlightBuilds.set(connectionId, build);
+  try {
+    return await build;
+  } finally {
+    inFlightBuilds.delete(connectionId);
+  }
 }
 
 /** Reads the on-disk cache without ever triggering a rebuild - returns undefined on a cache miss or stale entry rather than paying for a fresh crawl. For best-effort cross-connection hints where forcing a build isn't warranted. */
