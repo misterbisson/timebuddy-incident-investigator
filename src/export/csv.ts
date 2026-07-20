@@ -4,9 +4,15 @@ import type { QuerySeries } from '../query/executor.js';
 /**
  * A cell that a spreadsheet would evaluate rather than display. Excel,
  * LibreOffice, and Google Sheets all treat a leading =, +, -, or @ as the
- * start of a formula; a leading tab or CR is included because those are
- * stripped before that check, so they smuggle the character after them into
- * the same position.
+ * start of a formula. The whitespace characters are here for a second reason:
+ * they're stripped *before* that check, so they smuggle the character after
+ * them into the leading position. The whole ASCII whitespace class is included
+ * rather than just tab and CR — LF is equally reachable (frameToCsv passes
+ * arbitrary string fields through verbatim) and costs nothing to cover.
+ *
+ * A leading *space* is deliberately not in this set, and that's not an
+ * oversight: spreadsheets don't strip it before formula detection, so the
+ * space is itself the neutralizer. Same for NBSP.
  *
  * This matters here specifically because export_panel_csv writes to DATA_DIR
  * for a person to open in a spreadsheet — that's the tool's whole purpose, so
@@ -15,7 +21,7 @@ import type { QuerySeries } from '../query/executor.js';
  * Grafana-supplied refId/label values, and frameToCsv passes through arbitrary
  * string fields from query results.
  */
-const FORMULA_LEAD = /^[=+\-@\t\r]/;
+const FORMULA_LEAD = /^[=+\-@\t\r\n\v\f]/;
 
 /**
  * Numbers must survive this untouched. `-1.5` is both a legitimate value and a
@@ -25,6 +31,12 @@ const FORMULA_LEAD = /^[=+\-@\t\r]/;
  * deliberately strict: "-Infinity"/"-NaN" don't match, so they get neutralized
  * rather than passed through, which is harmless since neither is analyzable as
  * a number anyway.
+ *
+ * The anchors are load-bearing, not stylistic. Allowing surrounding whitespace
+ * (`^\s*...\s*$`) would widen this exemption to cover exactly the
+ * tab/CR/LF-prefixed smuggling that FORMULA_LEAD exists to catch — `"\t-1+1"`
+ * would match as "numeric" and ship unneutralized. Pinned by tests for that
+ * reason.
  */
 const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
@@ -35,7 +47,7 @@ const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
  * quoted field's contents just the same, so RFC 4180 escaping is not a defense
  * against this and never was.
  */
-function neutralizeFormula(value: string): string {
+export function neutralizeFormula(value: string): string {
   if (!FORMULA_LEAD.test(value) || NUMERIC.test(value)) return value;
   return `'${value}`;
 }

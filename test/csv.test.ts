@@ -179,3 +179,42 @@ describe('spreadsheet formula neutralization', () => {
     expect(csv.split('\r\n')[1]).toBe('1970-01-01T00:00:00.000Z,-1.5');
   });
 });
+
+describe('formula neutralization edge cases the first pass missed', () => {
+  const cells = (values: string[]): GrafanaFrame =>
+    ({ schema: { fields: [{ name: 'label', type: 'string' }] }, data: { values: [values] } }) as GrafanaFrame;
+  const rows = (f: GrafanaFrame) => frameToCsv(f).trimEnd().split('\r\n');
+
+  // LF was reachable by the docstring's own logic (spreadsheets strip it
+  // before the formula check, exactly like tab and CR) but wasn't in the
+  // trigger set, so "\n=1+1" shipped quoted-but-live.
+  it('neutralizes every leading whitespace character that a spreadsheet strips', () => {
+    for (const ws of ['\t', '\r', '\n', '\v', '\f']) {
+      const csv = frameToCsv(cells([`${ws}=1+1`]));
+      expect(csv, `leading ${JSON.stringify(ws)}`).toContain(`'${ws}=1+1`);
+    }
+  });
+
+  // Not a bypass, and worth pinning so nobody "fixes" it: spreadsheets do NOT
+  // strip a leading space before formula detection, so the space is itself the
+  // neutralizer. Adding it would mangle legitimately space-padded labels.
+  it('leaves a leading space alone, which is already safe', () => {
+    expect(rows(cells([' =1+1']))[1]).toBe(' =1+1');
+  });
+
+  // The NUMERIC anchors are load-bearing. Relaxing them to /^\s*...\s*$/ —
+  // which looks like harmless leniency — passed all 24 original tests while
+  // re-opening exactly the whitespace-smuggling class above.
+  // Asserted against the raw CSV, not the rows() helper: that helper trimEnd()s
+  // and splits on \r\n, which eats a trailing space and mangles a quoted field
+  // containing a newline — both of which are exactly what's under test here.
+  it('does not treat a whitespace-padded number as numeric, which would defeat the trigger set', () => {
+    expect(frameToCsv(cells(['\t-1.5']))).toContain("'\t-1.5");
+    expect(frameToCsv(cells(['\t-1+1']))).toContain("'\t-1+1");
+    expect(frameToCsv(cells(['\n-1.5']))).toContain("\"'\n-1.5\"");
+  });
+
+  it('neutralizes a trailing-whitespace number, which is not a value we need to preserve', () => {
+    expect(frameToCsv(cells(['-1.5 ']))).toContain("'-1.5 ");
+  });
+});

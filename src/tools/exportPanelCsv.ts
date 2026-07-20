@@ -12,7 +12,7 @@ import { findPanel } from '../dashboards/panelQueries.js';
 import { mergeVariableOverrides, substituteTargetFields } from '../dashboards/variables.js';
 import { buildDsQueryTarget, executeQueryWindow } from '../query/executor.js';
 import { enforceWindowLimit, clampMaxDataPoints } from '../security/limits.js';
-import { buildSeriesColumnNames, frameToCsv, parseCsvLine, seriesToCsv } from '../export/csv.js';
+import { buildSeriesColumnNames, frameToCsv, neutralizeFormula, parseCsvLine, seriesToCsv } from '../export/csv.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildInspectDataUrl } from '../grafana/urlBuilder.js';
 import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
@@ -106,10 +106,14 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         'its labels or refId, outer-joined on timestamp so series sampled at different rates don\'t drop each ' +
         'other\'s points). Check "transformCaptureNote" when present - it means the browser attempt was made but ' +
         'failed, so a real transformation may exist that this fallback data doesn\'t reflect. ' +
-        'Check "formulaNeutralized": this server\'s own exports prefix any cell beginning with =, +, -, or @ with an ' +
-        'apostrophe, so a spreadsheet displays it instead of executing it. A file captured from Grafana byte-for-byte ' +
-        'cannot be (that would mean rewriting its bytes), so it comes back "formulaNeutralized: false" with a note - ' +
-        'pass that caveat along if you point someone at the file to open in a spreadsheet. Pass a dashboard/panel ' +
+        'Check "formulaNeutralized": this server\'s own exports prefix any cell beginning with =, +, -, or @ (or a ' +
+        'whitespace character hiding one) with an apostrophe, so a spreadsheet displays it instead of executing it. ' +
+        'Numbers are exempt, so negative values are untouched - but a non-numeric cell like "-" or "-Infinity" does ' +
+        'gain that apostrophe, so a few cells can differ from the same values in a query result; that is the export ' +
+        'being neutralized, not wrong. Reported "columns" are neutralized too, so they match the file\'s header row. ' +
+        'A file captured from Grafana byte-for-byte cannot be neutralized (that would mean rewriting its bytes), so ' +
+        'it comes back "formulaNeutralized: false" with a note - pass that caveat along if you point someone at the ' +
+        'file to open in a spreadsheet. Pass a dashboard/panel ' +
         'URL (its own "from"/"to" and var-* overrides are used automatically) or an alert-rule URL (resolved to its ' +
         'linked dashboard+panel, the same way get_alert_context does), or dashboardUid + panelId + connection ' +
         'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). Returns ' +
@@ -295,7 +299,10 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
                   path,
                   refId,
                   rows: Math.max(0, ...frame.data.values.map((c) => c.length)),
-                  columns: frame.schema.fields.map((f) => f.name),
+                  // Neutralized, to match the header row actually written to
+                  // the file. Reporting the raw name would silently break an
+                  // agent matching a reported column against the file's header.
+                  columns: frame.schema.fields.map((f) => neutralizeFormula(f.name)),
                 });
               }
             } else {
@@ -305,7 +312,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
               files.push({
                 path,
                 rows: new Set(result.series.flatMap((s) => s.points.map((p) => p.t))).size,
-                columns: ['timestamp', ...buildSeriesColumnNames(result.series)],
+                columns: ['timestamp', ...buildSeriesColumnNames(result.series)].map(neutralizeFormula),
               });
             }
           }

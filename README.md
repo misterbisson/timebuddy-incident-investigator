@@ -343,6 +343,13 @@ dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
   panel has no transformations configured, or the capture attempt itself fails, the tool
   falls back to its own direct export: a table panel backed by more than one query/frame is
   then written to one CSV file per frame, not a merged table.
+- **CSV files captured from Grafana byte-for-byte are not neutralized against spreadsheet
+  formula injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula
+  when the file is opened in Excel, LibreOffice, or Google Sheets. This server's *own*
+  exports prefix such cells with an apostrophe so they display instead of executing; a file
+  captured from Grafana is that tool's own bytes and can't be rewritten without ceasing to
+  be a faithful copy. The result says which you got — `formulaNeutralized` — so check it
+  before opening a captured file in a spreadsheet, or handing one to someone else.
 
 ## Acknowledgments
 
