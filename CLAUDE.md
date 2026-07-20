@@ -35,16 +35,23 @@ Title every PR as a [Conventional Commit](https://www.conventionalcommits.org/) 
 `build: ...`, `ci: ...` — matching this repo's existing commit history convention. This
 isn't just style: this repo only allows squash merges (no merge commits, no rebase
 merges), and GitHub's squash commit message defaults to the PR title. That single commit
-is what `.github/workflows/release.yml`'s `version` job feeds to `semantic-release`
-(`release.config.js`) on every push to `main` — `@semantic-release/commit-analyzer` reads
-it to decide whether a release is warranted and what version bump it gets (`feat:` →
-minor, `fix:` → patch, a `BREAKING CHANGE:` footer or `!` after the type → major; other
-types don't trigger a release), and `@semantic-release/release-notes-generator` uses it
-verbatim for the CHANGELOG.md entry. A PR merged with a non-conventional title (e.g. a
-bare description with no type prefix) is real, shipped code that this pipeline can't see:
-no version bump, no changelog entry, even though `main` moved. See
-`electron/CONTRIBUTING.md`'s "Building, signing, and releasing" section for the full
-release flow.
+is what `.github/workflows/release.yml`'s `version` job feeds to
+[`release-please`](https://github.com/googleapis/release-please)
+(`release-please-config.json` / `.release-please-manifest.json`, repo root) on every push
+to `main`. It reads that title to decide whether a release is warranted and what version
+bump it gets (`feat:` → minor, `fix:` → patch, a `BREAKING CHANGE:` footer or `!` after
+the type → major; other types don't trigger a release), and uses it verbatim for the
+CHANGELOG.md entry.
+
+Note the two-step shape, which differs from a push-to-release flow: release-please doesn't
+tag on merge. It opens (or updates) a single accumulating "chore(release): x.y.z" PR, and
+the release is only cut when *that* PR is merged — so any number of unreleased commits can
+sit on `main` in the meantime.
+
+A PR merged with a non-conventional title (e.g. a bare description with no type prefix) is
+real, shipped code that this pipeline can't see: no version bump, no changelog entry, even
+though `main` moved. See `electron/CONTRIBUTING.md`'s "Building, signing, and releasing"
+section for the full release flow.
 
 ## Architecture
 
@@ -63,14 +70,17 @@ Three things shape almost every module here and are easy to miss from a partial 
    hatch anywhere in the tool layer — that boundary is what makes the read-only guarantee
    real rather than just a description. Don't add a generic proxy method to this client.
 
-2. **Every tool output is redacted before it reaches the model.** `security/redact.ts`
+2. **Every tool's structured output is redacted before it reaches the model.** `security/redact.ts`
    masks secret-shaped keys and configured customer-identifier patterns; tools call it on
    their result just before returning `content`. `security/limits.ts` enforces the
    max-lookback/max-data-points/concurrency caps on every query window, and
    `security/audit.ts` logs every tool invocation to a local JSONL file. New tools should
    follow the same `withAudit(...) { ...; return { content: [...] } }` /
    `redact(result, config.redactionPatterns)` pattern used in `src/tools/*.ts` rather than
-   returning raw data.
+   returning raw data. The one exception is image bytes: `screenshot_panel` redacts its JSON
+   payload like everything else, but the PNG content block goes to the model as rendered,
+   since redaction only understands text. Don't generalize that into a second exception —
+   any new *text* output belongs behind `redact()`.
 
 3. **A tool call doesn't target one fixed Grafana — it resolves a connection first.**
    `src/grafana/registry.ts`'s `ConnectionRegistry` lazily builds and caches one
