@@ -350,3 +350,45 @@ describe('export_panel_csv tool with a screenshotter', () => {
     expect(parsed.files[0].columns).toEqual(['timestamp', 'host=web1']);
   });
 });
+
+describe('export_panel_csv formula-injection disclosure', () => {
+  it('reports formulaNeutralized: true for this server\'s own export, and writes a neutralized cell', async () => {
+    const queryDs = vi.fn(timeseriesQueryDsResponse);
+    const client = fakeClient(timeseriesDashboard(), queryDs);
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.formulaNeutralized).toBe(true);
+    expect(parsed.formulaNeutralizationNote).toBeUndefined();
+  });
+
+  // The gap this PR discloses rather than closes (issue #91): the
+  // browser-captured file is Grafana's own bytes, so escapeCsvField never
+  // sees it. Pinned as a test so the disclosure can't quietly disappear, and
+  // so it fails loudly if someone later makes this path neutralize for real.
+  it('reports formulaNeutralized: false for a Grafana-captured file, which really is left unneutralized', async () => {
+    const client = fakeClient(timeseriesDashboard(), vi.fn(timeseriesQueryDsResponse));
+    const exportPanelCsv = vi.fn(async () => ({ csv: Buffer.from('Field,Mean\r\n=cmd|\' /C calc\'!A0,1\r\n') }));
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.transformationsApplied).toBe(true);
+    expect(parsed.formulaNeutralized).toBe(false);
+    expect(parsed.formulaNeutralizationNote).toContain('NOT been neutralized');
+
+    const csv = await readFile(parsed.files[0].path, 'utf8');
+    expect(csv).toContain('=cmd|\' /C calc\'!A0');
+  });
+});
