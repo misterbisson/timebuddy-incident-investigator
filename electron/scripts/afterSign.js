@@ -1,7 +1,6 @@
 const { execFileSync } = require("node:child_process");
 const path = require("node:path");
 const { notarize } = require("@electron/notarize");
-const { build } = require("../package.json");
 
 // electron-builder/@electron/osx-sign only pick a signing identity via
 // `security find-identity -v` (trusted identities only), and a self-signed cert's
@@ -36,14 +35,17 @@ const notarizeMacos = async (appPath) => {
     return;
   }
 
+  // @electron/notarize v3 takes appPath plus one credential strategy and
+  // nothing else — `tool`, `appBundleId` and `verbose` were all dropped when v3
+  // removed the legacy altool path (notarytool is now the only one). It spreads
+  // unknown keys straight through rather than rejecting them, so leaving them
+  // here wouldn't fail, it would just silently do nothing. Set DEBUG=electron-
+  // notarize for what `verbose` used to give you.
   await notarize({
-    tool: "notarytool",
-    appBundleId: build.appId,
     appPath,
     teamId: process.env.APPLE_TEAM_ID,
     appleId: process.env.APPLE_ID,
     appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD,
-    verbose: true,
   });
   console.log("--- notarization completed ---");
 };

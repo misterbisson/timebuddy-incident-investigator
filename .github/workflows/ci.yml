@@ -1,0 +1,47 @@
+name: CI
+
+# Separate from release.yml deliberately: that workflow's jobs are all
+# electron-builder packaging (three OSes, several minutes each, and on `main`
+# they only run when release-please actually tagged a release). The engine's
+# own test suite is fixture-based and runs in about a second, so gating PRs on
+# it here gives a fast, precise signal long before the packaging matrix
+# finishes — rather than the current state, where packaging is the only thing
+# a required status check can point at.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          # Matches the version release.yml builds with, so a type error that
+          # only appears on the release runner's Node can't slip past here.
+          node-version: '24'
+          cache: 'npm'
+
+      # `--workspaces=false --include-workspace-root` installs the engine's own
+      # dependencies only. A plain `npm ci` would also install the electron
+      # workspace, whose postinstall downloads the ~100MB Electron binary —
+      # pure cost for this job, since nothing below launches the app. The
+      # Electron-specific test (electron/test/mcpServerMode.mjs) needs that
+      # binary and a display server, so it belongs with the packaging jobs in
+      # release.yml rather than here.
+      - name: Install dependencies
+        run: npm ci --workspaces=false --include-workspace-root
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

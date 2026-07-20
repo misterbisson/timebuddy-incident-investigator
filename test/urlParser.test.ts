@@ -22,6 +22,29 @@ describe('parseGrafanaUrl', () => {
     expect(parsed).toMatchObject({ type: 'dashboard', uid: 'abc123', panelId: 3 });
   });
 
+  it("parses Grafana 11's scenes panel form (viewPanel=panel-3)", () => {
+    const parsed = parseGrafanaUrl('https://grafana.example.com/d/abc123/my-dashboard?viewPanel=panel-3&orgId=1');
+    expect(parsed).toMatchObject({ type: 'dashboard', uid: 'abc123', panelId: 3 });
+  });
+
+  // Each of these otherwise yields a plausible-looking id rather than an error:
+  // "panel-" strips to "" and Number('') is 0 — an id no dashboard has, so it
+  // lands right back on the "panel not found" symptom this parse exists to
+  // remove — while the numeric-literal forms resolve to a real id and would
+  // silently investigate some other panel.
+  it.each([
+    ['row-2', 'non-numeric'],
+    ['panel-', 'empty after the prefix strip'],
+    ['panel--2', 'negative'],
+    ['0x10', 'hex literal'],
+    ['1e3', 'exponent notation'],
+    ['3.5', 'non-integer'],
+  ])('throws on a malformed panel id (%s) rather than yielding a plausible-looking one', (raw) => {
+    expect(() =>
+      parseGrafanaUrl(`https://grafana.example.com/d/abc123/slug?viewPanel=${encodeURIComponent(raw)}`),
+    ).toThrow(/Could not parse a panel id/);
+  });
+
   it('parses an alert rule view URL', () => {
     const parsed = parseGrafanaUrl('https://grafana.example.com/alerting/grafana/rule-uid-1/view?orgId=1');
     expect(parsed).toEqual({ type: 'alert-rule', ruleUid: 'rule-uid-1' });
