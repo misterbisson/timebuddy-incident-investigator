@@ -1,8 +1,50 @@
 import type { GrafanaFrame } from '../grafana/types.js';
 import type { QuerySeries } from '../query/executor.js';
 
+/**
+ * A cell that a spreadsheet would evaluate rather than display. Excel,
+ * LibreOffice, and Google Sheets all treat a leading =, +, -, or @ as the
+ * start of a formula; a leading tab or CR is included because those are
+ * stripped before that check, so they smuggle the character after them into
+ * the same position.
+ *
+ * This matters here specifically because export_panel_csv writes to DATA_DIR
+ * for a person to open in a spreadsheet — that's the tool's whole purpose, so
+ * "the file is only ever read by a program" isn't available as a mitigation.
+ * The contents aren't trusted input either: column names derive from
+ * Grafana-supplied refId/label values, and frameToCsv passes through arbitrary
+ * string fields from query results.
+ */
+const FORMULA_LEAD = /^[=+\-@\t\r]/;
+
+/**
+ * Numbers must survive this untouched. `-1.5` is both a legitimate value and a
+ * formula lead, and it arrives here as a string via formatCell's String(...) —
+ * neutralizing it would turn every negative number in the file into text and
+ * break the numeric analysis the export exists to enable. Anchored and
+ * deliberately strict: "-Infinity"/"-NaN" don't match, so they get neutralized
+ * rather than passed through, which is harmless since neither is analyzable as
+ * a number anyway.
+ */
+const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+/**
+ * Prefixes a formula-leading cell with an apostrophe, the standard
+ * neutralization: spreadsheets consume it as "treat the rest as literal text"
+ * and don't display it. Quoting alone is not sufficient — Excel evaluates a
+ * quoted field's contents just the same, so RFC 4180 escaping is not a defense
+ * against this and never was.
+ */
+function neutralizeFormula(value: string): string {
+  if (!FORMULA_LEAD.test(value) || NUMERIC.test(value)) return value;
+  return `'${value}`;
+}
+
 function escapeCsvField(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  // Neutralize first, then quote: the apostrophe has to land inside the quotes
+  // to be the cell's first character, which is the position that matters.
+  const safe = neutralizeFormula(value);
+  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 function toCsvRow(fields: string[]): string {
