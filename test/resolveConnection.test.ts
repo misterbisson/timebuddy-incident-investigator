@@ -57,4 +57,39 @@ describe('resolveConnection', () => {
       /matches multiple connections/,
     );
   });
+
+  // The single-connection setup is the common one, and it was the one that
+  // guessed: an alert from another region resolved to the only connection and
+  // the investigation silently ran against the wrong Grafana.
+  it('throws rather than falling back to the sole connection when a hintUrl matches nothing', () => {
+    expect(() => resolveConnection({ hintUrl: 'https://grafana.eu.example.com/d/abc' }, [prod])).toThrow(
+      /does not match any configured connection/,
+    );
+  });
+
+  it('names the unmatched host, the available connections, and matchHosts as the fix', () => {
+    try {
+      resolveConnection({ hintUrl: 'https://grafana.eu.example.com/d/abc' }, [prod]);
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain('grafana.eu.example.com');
+      expect(message).toContain('prod (https://grafana.prod.example.com)');
+      expect(message).toContain('matchHosts');
+    }
+  });
+
+  it('still errors on an unmatched hint when several connections are configured', () => {
+    expect(() => resolveConnection({ hintUrl: 'https://grafana.apac.example.com/d/abc' }, [prod, eu])).toThrow(
+      /does not match any configured connection/,
+    );
+  });
+
+  // A hint with no parseable hostname carries nothing that could contradict the
+  // fallback, so it stays a fallback rather than becoming an error.
+  it('falls back to the single connection when the hintUrl has no parseable host', () => {
+    const { connection, matchedBy } = resolveConnection({ hintUrl: 'not a url' }, [prod]);
+    expect(connection.id).toBe('prod');
+    expect(matchedBy).toBe('single');
+  });
 });
