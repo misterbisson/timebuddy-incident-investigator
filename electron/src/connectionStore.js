@@ -2,7 +2,14 @@ const { app, safeStorage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { readJsonFile, writeJsonFileAtomic, buildEngineConnections } = require('./connectionStoreCore.js');
+const {
+  readJsonFile,
+  writeJsonFileAtomic,
+  buildEngineConnections,
+  describeSecretFailure,
+  SecretDecryptError,
+  SecretFormatError,
+} = require('./connectionStoreCore.js');
 
 function storageDir() {
   return app.getPath('userData');
@@ -56,8 +63,25 @@ function encryptSecret(payload) {
   return safeStorage.encryptString(JSON.stringify(payload)).toString('base64');
 }
 
+/**
+ * Split into two try blocks on purpose. A single try around both operations
+ * lets a JSON.parse failure — whose message quotes a prefix of its input —
+ * carry decrypted credential material into logs and the GUI. See
+ * describeSecretFailure in connectionStoreCore.js. Neither branch re-throws
+ * the original error, only a typed one with no payload attached.
+ */
 function decryptSecret(encoded) {
-  return JSON.parse(safeStorage.decryptString(Buffer.from(encoded, 'base64')));
+  let plaintext;
+  try {
+    plaintext = safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+  } catch {
+    throw new SecretDecryptError('keychain could not decrypt the stored credential');
+  }
+  try {
+    return JSON.parse(plaintext);
+  } catch {
+    throw new SecretFormatError('stored credential is not in the expected format');
+  }
 }
 
 /**
@@ -91,6 +115,13 @@ function getConnectionsForEngine() {
  * machine can no longer decrypt it" from "no secret was ever saved": the two
  * look identical to the engine, but only the first is fixed by re-entering
  * the credential, so the UI has to be able to say which one it is.
+ *
+ * Answering that does require attempting the decrypt — there's no cheaper
+ * probe; whether the keychain still accepts this ciphertext is only knowable
+ * by asking it. The plaintext is deliberately never bound to a variable here,
+ * and `secretError` carries only describeSecretFailure's fixed text, so no
+ * credential material can reach the renderer even though this function
+ * decrypts. That distinction is what keeps the doc comment above true.
  */
 function listConnectionsForDisplay() {
   const { connections } = readConnectionsFile();
@@ -102,7 +133,7 @@ function listConnectionsForDisplay() {
       try {
         decryptSecret(encoded);
       } catch (err) {
-        secretError = err instanceof Error ? err.message : String(err);
+        secretError = describeSecretFailure(err);
       }
     }
     return { ...c, hasSecret: Boolean(encoded), ...(secretError ? { secretError } : {}) };

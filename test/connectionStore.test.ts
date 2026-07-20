@@ -138,7 +138,7 @@ describe('one undecryptable secret does not break the other connections', () => 
     const never = rows.find((r) => r.name === 'none')!;
 
     expect(broken.hasSecret).toBe(true);
-    expect(broken.secretError).toContain('decrypting');
+    expect(broken.secretError).toContain('keychain could not decrypt');
     expect(never.hasSecret).toBe(false);
     expect(never.secretError).toBeUndefined();
   });
@@ -235,5 +235,61 @@ describe('timestamps', () => {
     const [meta] = readStore('connections.json').connections;
     expect(meta.createdAt).toBe(created);
     expect(Date.parse(meta.updatedAt)).toBeGreaterThan(Date.parse(created));
+  });
+});
+
+describe('a decrypted credential never escapes into logs or the GUI', () => {
+  /** Makes the fake keychain decrypt successfully, but to a non-JSON payload. */
+  const seedNonJsonPayload = (id: string) => {
+    const file = JSON.parse(readFileSync(join(dir, 'secrets.enc.json'), 'utf8'));
+    file.secrets[id] = Buffer.from('glsa_SUPERSECRETTOKEN_abcdef', 'utf8').toString('base64');
+    writeFileSync(join(dir, 'secrets.enc.json'), JSON.stringify(file));
+  };
+
+  // The full reported path: decryptSecret is a decrypt followed by JSON.parse,
+  // and V8 quotes a prefix of the parse input. A *successful* decrypt with an
+  // unexpected payload therefore published live credential material to
+  // console.error (captured to the MCP client's on-disk logs) and to the
+  // connection row's tooltip.
+  it('keeps the plaintext out of the stderr warning', () => {
+    const saved = store.upsertConnection(bearer('prod'));
+    seedNonJsonPayload(saved.id as string);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    store.getConnectionsForEngine();
+    const message = String(spy.mock.calls[0]![0]);
+    expect(message).not.toContain('glsa');
+    expect(message).not.toContain('SUPERSECRET');
+    expect(message).toContain('not in the expected format');
+  });
+
+  it('keeps the plaintext out of the GUI secretError', () => {
+    const saved = store.upsertConnection(bearer('prod'));
+    seedNonJsonPayload(saved.id as string);
+
+    const [row] = store.listConnectionsForDisplay();
+    expect(row.secretError).not.toContain('glsa');
+    expect(row.secretError).not.toContain('SUPERSECRET');
+  });
+
+  // Not just redaction: the two failures need different advice. Only the
+  // keychain case is fixed by re-entering the credential, which is what the
+  // GUI status and README both tell the user to do.
+  it('does not misreport a malformed payload as a broken keychain', () => {
+    const saved = store.upsertConnection(bearer('prod'));
+    seedNonJsonPayload(saved.id as string);
+
+    const [row] = store.listConnectionsForDisplay();
+    expect(row.secretError).not.toContain('keychain');
+  });
+});
+
+describe('store files are written owner-only', () => {
+  it.skipIf(process.platform === 'win32')('leaves both files at 0600 after an upsert', () => {
+    store.upsertConnection(bearer('prod'));
+    const { statSync } = require('node:fs');
+    for (const file of ['connections.json', 'secrets.enc.json']) {
+      expect((statSync(join(dir, file)).mode & 0o777).toString(8)).toBe('600');
+    }
   });
 });

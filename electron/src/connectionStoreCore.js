@@ -13,6 +13,38 @@ const path = require('node:path');
 
 class CorruptStoreError extends Error {}
 
+/** The keychain refused the ciphertext — re-entering the credential fixes it. */
+class SecretDecryptError extends Error {}
+/** Decryption succeeded, but the plaintext wasn't the JSON payload we store. */
+class SecretFormatError extends Error {}
+
+/**
+ * Turns a secret failure into a message safe to log and to show in the GUI.
+ *
+ * Never returns the underlying error's own message, and that restriction is
+ * the entire point rather than tidiness. `decryptSecret` is a decrypt followed
+ * by a JSON.parse, and V8 embeds a prefix of the input in a parse failure:
+ *
+ *   Unexpected token 'g', "glsa_SUPER"... is not valid JSON
+ *
+ * That string reaches console.error (captured to the MCP client's log files on
+ * disk) and the connection row's tooltip. So a *successful* decrypt whose
+ * payload isn't our JSON would publish the first ~10 characters of a live
+ * credential. Reachable via Linux's `basic_text` safeStorage fallback, or a
+ * partly-corrupted base64 blob — Buffer.from(x, 'base64') silently drops
+ * invalid characters rather than throwing.
+ *
+ * Distinguishing the two cases also stops a misdiagnosis: only the keychain
+ * case is fixed by re-entering the credential, which is what the GUI and
+ * README tell the user to do.
+ */
+function describeSecretFailure(err) {
+  if (err instanceof SecretFormatError) {
+    return 'stored credential decrypted but is not in the expected format; re-save this connection to rewrite it';
+  }
+  return 'the OS keychain could not decrypt the stored credential (most often after an OS reinstall, keychain reset, or machine migration)';
+}
+
 /**
  * Reads a JSON store file. A missing file is normal (first run) and yields the
  * fallback; unparseable content is not, and throws.
@@ -51,38 +83,81 @@ function readJsonFile(filePath, fallback) {
   }
 }
 
+/** Owner-only. These files hold (encrypted) credentials; nothing else needs to read them. */
+const STORE_FILE_MODE = 0o600;
+
 /**
- * Writes via a temp file plus rename, which is atomic on macOS, Linux, and
- * Windows — a reader either sees the whole old file or the whole new one,
- * never a truncated prefix. The fsync before the rename matters separately:
- * rename ordering alone guarantees atomicity against a crash, not that the
- * new bytes reached the disk before the rename did.
+ * Writes via a temp file plus rename — a reader sees either the whole old file
+ * or the whole new one, never a truncated prefix. The fsync before the rename
+ * is a separate guarantee: rename ordering protects against a torn file, not
+ * against the new bytes never having reached the disk.
  *
  * The temp file is created in the same directory on purpose, since rename is
  * only atomic within a filesystem and the OS temp dir often isn't on the same
  * one.
+ *
+ * One platform caveat worth stating rather than implying: on Windows this goes
+ * through MoveFileExW with MOVEFILE_REPLACE_EXISTING, which is atomic but can
+ * fail EPERM/EBUSY when another process holds the target open. That's
+ * reachable here — a GUI instance and one or more --mcp-server instances run
+ * concurrently — so the write surfaces an error rather than corrupting
+ * anything, which is the acceptable end of that trade but not "it always
+ * succeeds".
+ *
+ * Mode is set explicitly, and this is easy to get wrong: rename replaces the
+ * target *inode*, so the temp file's permissions are what survive — the
+ * destination's are discarded. A plain openSync(tmp, 'w') creates 0666 & ~umask
+ * (0644 on a default umask), which would silently widen this file on every
+ * single write, and make a fresh install world-readable from its first one.
+ * The explicit fchmod after the open is what makes it umask-proof, since the
+ * mode argument to open is itself masked.
+ *
+ * The parent userData directory is usually 0700, but a credential store
+ * shouldn't borrow its confidentiality from its parent. It matters most on
+ * Linux, where safeStorage falls back to a `basic_text` backend with a
+ * hardcoded key when no keyring is available — world-readable ciphertext there
+ * is effectively plaintext.
  */
 function writeJsonFileAtomic(filePath, value) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
-  const fd = fs.openSync(tmp, 'w');
   try {
-    fs.writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8');
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
+    const fd = fs.openSync(tmp, 'w', STORE_FILE_MODE);
+    try {
+      fs.fchmodSync(fd, STORE_FILE_MODE);
+      fs.writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, filePath);
   } catch (err) {
-    // Don't leave the temp file behind if the rename itself failed.
+    // Covers the whole sequence, not just the rename: an ENOSPC during write
+    // or fsync would otherwise strand a temp file holding a complete-or-partial
+    // encrypted secrets blob, one per distinct pid, accumulating across
+    // restarts.
     try {
       fs.unlinkSync(tmp);
     } catch {
-      /* the rename error is the one worth reporting */
+      /* the original error is the one worth reporting */
     }
     throw err;
+  }
+  // The rename's own durability. fsync on the file guarantees its contents
+  // survive a power loss; only fsync on the containing directory guarantees
+  // the renamed *entry* does. Without it the two store files can be recovered
+  // in the opposite order from the one writeStoreFiles deliberately chose.
+  // Best-effort: opening a directory for fsync throws EPERM/EISDIR on Windows.
+  try {
+    const dirFd = fs.openSync(dir, 'r');
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
+  } catch {
+    /* not supported on this platform; the rename itself is still atomic */
   }
 }
 
@@ -115,7 +190,7 @@ function buildEngineConnections(connections, secrets, decrypt) {
       try {
         secret = decrypt(encoded);
       } catch (err) {
-        failures.push({ id: meta.id, name: meta.name, reason: err instanceof Error ? err.message : String(err) });
+        failures.push({ id: meta.id, name: meta.name, reason: describeSecretFailure(err) });
       }
     }
     return {
@@ -133,4 +208,13 @@ function buildEngineConnections(connections, secrets, decrypt) {
   return { connections: built, failures };
 }
 
-module.exports = { CorruptStoreError, readJsonFile, writeJsonFileAtomic, buildEngineConnections };
+module.exports = {
+  CorruptStoreError,
+  SecretDecryptError,
+  SecretFormatError,
+  STORE_FILE_MODE,
+  describeSecretFailure,
+  readJsonFile,
+  writeJsonFileAtomic,
+  buildEngineConnections,
+};

@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { CorruptStoreError, readJsonFile, writeJsonFileAtomic, buildEngineConnections } = require('../electron/src/connectionStoreCore.js');
+const {
+  CorruptStoreError,
+  SecretFormatError,
+  STORE_FILE_MODE,
+  describeSecretFailure,
+  readJsonFile,
+  writeJsonFileAtomic,
+  buildEngineConnections,
+} = require('../electron/src/connectionStoreCore.js');
 
 let dir: string;
 
@@ -56,7 +64,11 @@ describe('buildEngineConnections', () => {
     expect(connections[2].token).toBe('secret-token');
     expect(failures).toHaveLength(1);
     expect(failures[0]).toMatchObject({ id: 'b', name: 'conn-b' });
-    expect(failures[0].reason).toContain('decrypting');
+    // The reason is describeSecretFailure's fixed text, never the thrown
+    // error's own message — this assertion originally checked the raw message,
+    // which is exactly the string that could carry credential material.
+    expect(failures[0].reason).toContain('keychain could not decrypt');
+    expect(failures[0].reason).not.toContain('safeStorage');
   });
 
   // Kept in the list rather than dropped, so buildAuthHeader raises
@@ -173,5 +185,136 @@ describe('writeJsonFileAtomic', () => {
     writeJsonFileAtomic(path, { a: 1, b: 2, c: 3 });
     writeJsonFileAtomic(path, { a: 1 });
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ a: 1 });
+  });
+});
+
+describe('writeJsonFileAtomic file permissions', () => {
+  const modeOf = (p: string) => (statSync(p).mode & 0o777).toString(8);
+  const skipOnWindows = process.platform === 'win32';
+
+  // A regression this fix introduced and had to take back out: rename replaces
+  // the target inode, so the *temp* file's mode is what survives. A plain
+  // openSync(tmp, 'w') creates 0644 under a default umask, so every write
+  // silently widened a credential file that main's writeFileSync had left at
+  // 0600 (O_TRUNC on an existing file doesn't touch its mode).
+  it.skipIf(skipOnWindows)('writes a new file owner-only, not umask-default 0644', () => {
+    const path = join(dir, 'secrets.enc.json');
+    writeJsonFileAtomic(path, { secrets: {} });
+    expect(modeOf(path)).toBe('600');
+  });
+
+  it.skipIf(skipOnWindows)('does not widen an existing 0600 file', () => {
+    const path = join(dir, 'secrets.enc.json');
+    writeJsonFileAtomic(path, { generation: 1 });
+    chmodSync(path, 0o600);
+    writeJsonFileAtomic(path, { generation: 2 });
+    expect(modeOf(path)).toBe('600');
+  });
+
+  // The explicit fchmod is what makes this umask-proof: open's mode argument
+  // is itself masked, so a umask of 0077 would be fine but 0022 would not.
+  it.skipIf(skipOnWindows)('stays owner-only under a permissive umask', () => {
+    const previous = process.umask(0o000);
+    try {
+      const path = join(dir, 'secrets.enc.json');
+      writeJsonFileAtomic(path, { secrets: {} });
+      expect(modeOf(path)).toBe('600');
+    } finally {
+      process.umask(previous);
+    }
+  });
+
+  it('exposes the mode it enforces, so this is pinned to a literal', () => {
+    expect(STORE_FILE_MODE).toBe(0o600);
+  });
+});
+
+describe('writeJsonFileAtomic durability and cleanup', () => {
+  const fs = require('node:fs');
+
+  // Previously untested: deleting the fsync call entirely left all 405 tests
+  // passing, so half of what this helper exists for had no coverage at all.
+  it('fsyncs the file before renaming it, not after', () => {
+    const order: string[] = [];
+    const realFsync = fs.fsyncSync;
+    const realRename = fs.renameSync;
+    fs.fsyncSync = (fd: number) => {
+      order.push('fsync');
+      return realFsync(fd);
+    };
+    fs.renameSync = (from: string, to: string) => {
+      order.push('rename');
+      return realRename(from, to);
+    };
+    try {
+      writeJsonFileAtomic(join(dir, 'out.json'), { ok: true });
+    } finally {
+      fs.fsyncSync = realFsync;
+      fs.renameSync = realRename;
+    }
+    expect(order[0]).toBe('fsync');
+    expect(order).toContain('rename');
+    expect(order.indexOf('fsync')).toBeLessThan(order.indexOf('rename'));
+  });
+
+  // The temp file holds a complete-or-partial encrypted secrets blob, so a
+  // failure anywhere in the sequence must not strand one — the old cleanup
+  // only covered a failed rename.
+  it('removes the temp file when the write itself fails, not just the rename', () => {
+    const realWrite = fs.writeFileSync;
+    fs.writeFileSync = () => {
+      const err = new Error('ENOSPC: no space left on device') as NodeJS.ErrnoException;
+      err.code = 'ENOSPC';
+      throw err;
+    };
+    try {
+      expect(() => writeJsonFileAtomic(join(dir, 'out.json'), { ok: true })).toThrow(/ENOSPC/);
+    } finally {
+      fs.writeFileSync = realWrite;
+    }
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('removes the temp file when the rename fails', () => {
+    const realRename = fs.renameSync;
+    fs.renameSync = () => {
+      throw new Error('EPERM: operation not permitted');
+    };
+    try {
+      expect(() => writeJsonFileAtomic(join(dir, 'out.json'), { ok: true })).toThrow(/EPERM/);
+    } finally {
+      fs.renameSync = realRename;
+    }
+    expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('describeSecretFailure', () => {
+  // The reported leak: decryptSecret is a decrypt followed by a JSON.parse,
+  // and V8 quotes a prefix of the parse input in its message —
+  //   Unexpected token 'g', "glsa_SUPER"... is not valid JSON
+  // — which reached console.error and the GUI tooltip. So a *successful*
+  // decrypt with an unexpected payload published live credential material.
+  it('never repeats the underlying error message, which can quote the plaintext', () => {
+    let parseError: unknown;
+    try {
+      JSON.parse('glsa_SUPERSECRETTOKEN_abcdef');
+    } catch (err) {
+      parseError = err;
+    }
+    // Confirm the hazard is real before asserting we avoid it.
+    expect((parseError as Error).message).toContain('glsa_SUPER');
+
+    const described = describeSecretFailure(new SecretFormatError('stored credential is not in the expected format'));
+    expect(described).not.toContain('glsa');
+    expect(described).not.toContain('SUPER');
+    expect(described).toContain('not in the expected format');
+  });
+
+  it('distinguishes a keychain failure from a payload-format failure', () => {
+    // Only the keychain case is fixed by re-entering the credential, which is
+    // what the GUI status and README both tell the user to do.
+    expect(describeSecretFailure(new Error('safeStorage said no'))).toContain('keychain');
+    expect(describeSecretFailure(new SecretFormatError('x'))).not.toContain('keychain');
   });
 });
