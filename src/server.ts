@@ -37,7 +37,13 @@ export function createServer(
 
   const server = new McpServer({
     name: 'timebuddy-incident-investigator',
-    version: '0.1.0',
+    // Kept in step with package.json by release-please. The trailing comment
+    // is load-bearing, not decoration: it's the marker release-please's
+    // generic updater looks for, and a .ts file can't take the `jsonpath`
+    // entry the JSON artifacts use. This string is what the server reports to
+    // Claude Code/Desktop in the initialize handshake, so if it stops being
+    // updated it misreports the running version to every client, forever.
+    version: '0.1.0', // x-release-please-version
   });
 
   registerAllTools(server, { registry, config, screenshotter, activityLog });
