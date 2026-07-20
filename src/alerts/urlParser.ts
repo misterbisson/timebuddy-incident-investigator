@@ -42,14 +42,19 @@ function isSafeVariableValue(value: string): boolean {
  * plainly exists, pointing the investigation at Grafana instead of at the URL.
  */
 function parsePanelId(raw: string): number {
-  const panelId = Number(raw.replace(/^panel-/, ''));
-  if (!Number.isInteger(panelId)) {
+  // Digits-only rather than a Number()/isInteger() guard, which is looser than
+  // it reads: Number('') is 0, so "panel-" alone would yield panel id 0 — an id
+  // no dashboard has, landing back on the "panel not found" symptom this exists
+  // to remove. Number also accepts "-2", "0x10" and "1e3", each of which
+  // resolves to a real-looking id and would silently investigate another panel.
+  const stripped = raw.replace(/^panel-/, '');
+  if (!/^\d+$/.test(stripped)) {
     throw new Error(
       `Could not parse a panel id from "${raw}" — expected a number ("viewPanel=3", "panelId=3") or Grafana 11's ` +
         'scenes form ("viewPanel=panel-3")',
     );
   }
-  return panelId;
+  return Number(stripped);
 }
 
 export interface ParsedAlertRuleUrl {
