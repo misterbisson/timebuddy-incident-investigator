@@ -2,6 +2,7 @@ const { BrowserWindow, session } = require('electron');
 const { mkdtemp, readFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
+const { originOf, attachAuthHeaders } = require('./authGuard');
 
 let partitionCounter = 0;
 
@@ -70,9 +71,9 @@ function createScreenshotter() {
   return {
     async capturePanel({ url, headers, width, height, timeoutMs }) {
       const ses = session.fromPartition(`screenshot-${++partitionCounter}`, { cache: false });
-      ses.webRequest.onBeforeSendHeaders((details, callback) => {
-        callback({ requestHeaders: { ...details.requestHeaders, ...headers } });
-      });
+      // Only the panel's own origin gets the credentials — see authGuard.js.
+      const targetOrigin = originOf(url);
+      attachAuthHeaders(ses, (origin) => (origin === targetOrigin ? headers : null));
 
       const activity = trackNetworkActivity(ses);
       const win = new BrowserWindow({
@@ -102,9 +103,9 @@ function createScreenshotter() {
 
     async exportPanelCsv({ url, headers, timeoutMs }) {
       const ses = session.fromPartition(`csv-export-${++partitionCounter}`, { cache: false });
-      ses.webRequest.onBeforeSendHeaders((details, callback) => {
-        callback({ requestHeaders: { ...details.requestHeaders, ...headers } });
-      });
+      // Only the panel's own origin gets the credentials — see authGuard.js.
+      const targetOrigin = originOf(url);
+      attachAuthHeaders(ses, (origin) => (origin === targetOrigin ? headers : null));
 
       const activity = trackNetworkActivity(ses);
       const win = new BrowserWindow({
