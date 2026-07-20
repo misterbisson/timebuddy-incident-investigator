@@ -131,9 +131,12 @@ skill exists to handle for them.
      same baseline and will still catch it. Don't just trust a "common" label at face value.
    - **`classification: baseline-all-zero` means there is no baseline to compare against.** Every
      control window was flat zero and the incident window isn't — something that never happened
-     is happening. That's real information, but it is *not* a statistical result: `zScore` is
-     `NaN`, and no magnitude of it can make the finding statistically strong, because there's no
-     spread to be strong relative to. Report it as a presence change, cite the actual numbers
+     is happening. That's real information, but it is *not* a statistical result: `zScore` comes
+     back as `null` (there's no meaningful value to report, and JSON has no `NaN`), and no
+     number could make the finding statistically strong anyway, because there's no spread to be
+     strong relative to. A `null` `zScore` here means "not applicable", not "zero" and not
+     "missing data" — that's `insufficient-data`, a different classification.
+     Report it as a presence change, cite the actual numbers
      from `incidentStats` (peak, nonzero sample count) rather than any sigma figure, and lean on
      corroboration — did the alert's own threshold cross, did anything correlate — to decide
      whether it matters. Don't describe it as "highly unusual" or similar; you don't know that.

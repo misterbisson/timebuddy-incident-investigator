@@ -83,6 +83,20 @@ describe('summarizeFindings', () => {
       expect(report.missingData.join(' ')).toMatch(/Baseline was all zeros/);
     });
 
+    // Every other assertion here checks the in-process object, where the value
+    // is NaN — so none of them can catch the wire representation drifting from
+    // what the tool description and skill tell the agent to expect. JSON has no
+    // NaN, so what actually reaches the model is null.
+    it('serializes zScore to null, which is what agent-facing docs promise', () => {
+      const input = presenceInput();
+      input.thresholdCrossed = true;
+      const wire = JSON.parse(JSON.stringify(summarizeFindings(input)));
+      expect(wire.triggeredSignal.zScore).toBeNull();
+      // null here means "not applicable", and must not be confused with 0.
+      expect(wire.triggeredSignal.zScore).not.toBe(0);
+      expect(wire.triggeredSignal.classification).toBe('baseline-all-zero');
+    });
+
     it('carries the NaN zScore through without rendering it as a number', () => {
       const input = presenceInput();
       input.thresholdCrossed = true;

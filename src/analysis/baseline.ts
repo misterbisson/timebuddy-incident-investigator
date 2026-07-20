@@ -49,6 +49,11 @@ export type BaselineClassification =
    * z-score needs spread to be meaningful, and there is none. Judge it on
    * `incidentStats` magnitude plus corroboration (threshold crossing,
    * correlated signals), not on sigma.
+   *
+   * NaN in process, but `null` once it reaches the model: JSON has no NaN, so
+   * `JSON.stringify` emits null (the same round-trip `tools/summarizeFindings.ts`
+   * handles with `nullableNumber`/`toNaN`). Agent-facing text — this tool's
+   * description and the investigate skill — says null for that reason.
    */
   | 'baseline-all-zero';
 
