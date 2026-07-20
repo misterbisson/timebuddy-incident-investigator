@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import type { DatasourceInfo } from '../grafana/types.js';
-import { resolveToolClient } from './shared.js';
+import { resolveToolClient, toolErrorResult } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -74,7 +74,7 @@ export function registerListDatasources(server: McpServer, { registry, config }:
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        return toolErrorResult(err, config);
       }
     },
   );

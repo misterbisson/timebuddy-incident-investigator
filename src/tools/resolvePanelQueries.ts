@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries, stripInactiveQueryFields } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
-import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -102,7 +102,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
         });
       } catch (err) {
         const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
+        return toolErrorResult(err, config, url);
       }
     },
   );

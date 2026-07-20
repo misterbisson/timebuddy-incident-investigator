@@ -5,7 +5,7 @@ import { computeWindows, excludeOverlapping, type TimeWindow } from '../query/wi
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
 import { clampRunList } from '../security/limits.js';
-import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -166,7 +166,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
         });
       } catch (err) {
         const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
+        return toolErrorResult(err, config, url);
       }
     },
   );

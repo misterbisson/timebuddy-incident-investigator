@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import type { MetricIndex, MetricIndexEntry } from '../index-builder/store.js';
-import { dashboardUrlFor, resolveToolClient } from './shared.js';
+import { dashboardUrlFor, resolveToolClient, toolErrorResult } from './shared.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -263,7 +263,7 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        return toolErrorResult(err, config);
       }
     },
   );

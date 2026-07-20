@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { dashboardUrlFor, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, resolveToolClient, toolErrorResult } from './shared.js';
 import { findProductContextAcrossConnection, resolveProductContext } from '../knowledge/lookup.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -50,7 +50,7 @@ export function registerGetProductContext(server: McpServer, { registry, config 
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: toolErrorText(err) }], isError: true };
+        return toolErrorResult(err, config);
       }
     },
   );

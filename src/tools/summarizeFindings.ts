@@ -4,6 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { summarizeFindings, type SummarizeFindingsInput } from '../analysis/summarize.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import { toolErrorResult } from './shared.js';
 
 // Numeric fields that are NaN when a series has no data serialize to `null`
 // over JSON (JSON.stringify(NaN) === "null"), so a value round-tripped from
@@ -133,7 +134,7 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(report, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        return toolErrorResult(err, config);
       }
     },
   );

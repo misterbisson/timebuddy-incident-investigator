@@ -10,7 +10,7 @@ import { mergeVariableOverrides } from '../dashboards/variables.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildSoloPanelUrl } from '../grafana/urlBuilder.js';
 import { enforceWindowLimit } from '../security/limits.js';
-import { dashboardUrlFor, recordActivity, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveToolClient, toolErrorResult } from './shared.js';
 import { resolveRenderWindow } from './renderDashboard.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -187,7 +187,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
         });
       } catch (err) {
         const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, errorUrl) }], isError: true };
+        return toolErrorResult(err, config, errorUrl);
       }
     },
   );

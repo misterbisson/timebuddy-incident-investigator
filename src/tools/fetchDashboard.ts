@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { parseGrafanaUrl } from '../alerts/urlParser.js';
 import { flattenPanels, resolvePanelDataLinks } from '../dashboards/panelQueries.js';
-import { dashboardUrlFor, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, resolveToolClient, toolErrorResult } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -91,7 +91,7 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
         });
       } catch (err) {
         const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, errorUrl) }], isError: true };
+        return toolErrorResult(err, config, errorUrl);
       }
     },
   );

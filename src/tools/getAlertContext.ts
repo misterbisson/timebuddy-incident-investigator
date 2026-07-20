@@ -4,7 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { resolveAlertContext } from '../alerts/ingest.js';
 import { getLatestWebhook, getWebhookByFingerprint } from '../webhook/store.js';
 import { resolveConnection } from '../connections/resolve.js';
-import { dashboardUrlFor } from './shared.js';
+import { dashboardUrlFor, toolErrorResult } from './shared.js';
 import { resolveProductContext } from '../knowledge/lookup.js';
 import type { ProductKnowledge } from '../knowledge/types.js';
 import { redact } from '../security/redact.js';
@@ -150,7 +150,7 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
           return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        return toolErrorResult(err, config);
       }
     },
   );
