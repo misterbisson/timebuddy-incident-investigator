@@ -81,7 +81,10 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'result as unscoped/unverified rather than trusting it or narrowing it down with a naming-convention guess. ' +
         'Pass includePoints: false to drop each series\' raw "points" array from the response - "stats" and "runs" ' +
         '(when threshold is set) are still computed from the full data either way, so this only removes the raw ' +
-        'array a wide/long-window call doesn\'t need, keeping the response from spilling to disk.',
+        'array a wide/long-window call doesn\'t need, keeping the response from spilling to disk. ' +
+        'If a series carries "runsTotal", its "runs" array was truncated to the first 1000 of that many crossings ' +
+        '— the series crosses the threshold too often for a run list to be meaningful, so re-query a narrower ' +
+        'window rather than reading the truncated list as the complete set.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
