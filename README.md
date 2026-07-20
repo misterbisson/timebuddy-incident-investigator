@@ -291,6 +291,12 @@ omitted:
   auto-discovering candidates) fan out across every configured connection and merge
   results, each tagged with its `connectionId`.
 
+The single-connection fallback only applies when nothing contradicts it. If you pass a URL
+whose host matches no configured connection, that's an error listing the available ids —
+even with exactly one connection configured — rather than a silent fall back to it, which
+would investigate a different Grafana than the one the link points at. Add the host to that
+connection's `matchHosts` if it's an alias for one of them.
+
 See [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md) for how this project handles a few Grafana edge
 cases: the product-knowledge-dashboard convention for publishing institutional knowledge
 (what a panel means, known false positives, runbook links), live resolution of "all"
