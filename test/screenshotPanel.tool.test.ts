@@ -123,10 +123,14 @@ describe('screenshot_panel dimension clamping', () => {
   // production only because zod's .default() fills it in first.
   it('falls back to the default size, not the maximum, when a dimension is missing or non-finite', async () => {
     const { call, captured } = harness();
-    await call('screenshot_panel', baseArgs);
+    const result = await call('screenshot_panel', baseArgs);
     expect(captured[0]).toMatchObject({ width: 1600, height: 900 });
+    // A fallback is not a clamp. This previously warned "Requested
+    // undefinedxundefined was clamped to 1600x900" on the plain defaults path.
+    expect(payload(result).warnings).toBeUndefined();
 
-    await call('screenshot_panel', { ...baseArgs, width: Number.POSITIVE_INFINITY, height: Number.NaN });
+    const nonFinite = await call('screenshot_panel', { ...baseArgs, width: Number.POSITIVE_INFINITY, height: Number.NaN });
     expect(captured[1]).toMatchObject({ width: 1600, height: 900 });
+    expect(payload(nonFinite).warnings).toBeUndefined();
   });
 });

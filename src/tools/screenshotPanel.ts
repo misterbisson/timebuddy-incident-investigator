@@ -191,7 +191,11 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             title: panel.title,
             type: panel.type,
             window: { fromMs, toMs },
-            // The dimensions actually captured, not the ones requested.
+            // The dimensions *asked of* the capture after clamping, not the
+            // ones originally requested — and deliberately not described as
+            // the dimensions captured: capturePanel returns only a Buffer, so
+            // nothing here observes the window's real content size, which the
+            // OS or useContentSize can still adjust. See issue #96.
             width: w.value,
             height: h.value,
             savedTo,
