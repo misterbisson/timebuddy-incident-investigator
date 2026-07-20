@@ -129,6 +129,12 @@ skill exists to handle for them.
      short-lived event (e.g. a health signal fully down for a few minutes inside a much longer
      window) into looking routine. `briefExcursions` is a separate, point-level check against the
      same baseline and will still catch it. Don't just trust a "common" label at face value.
+   - **A `runsTotal` or `briefExcursionsTotal` field means the list next to it was truncated.**
+     Both appear only when a series produced more than 1000 threshold crossings, and both report
+     the real count. Don't read the truncated list as the complete set, and don't reason about
+     "the first crossing" from it — a series that noisy is telling you the threshold or the
+     window is wrong for it, so re-query a narrower window (or a coarser aggregation) and look
+     again rather than summarizing what came back.
 
 4. **If there's no dashboard/panel link** (warnings said so, or there was nothing to paste in
    step 1), fall back to `find_related_dashboards` using `alertContext.labels` (or whatever labels

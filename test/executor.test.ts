@@ -66,7 +66,7 @@ describe('executeQueryWindow', () => {
     expect(result.series).toEqual([]);
   });
 
-  it('downsamples a series the datasource returned at full resolution despite maxDataPoints', async () => {
+  it('returns the full series a datasource sent despite maxDataPoints, leaving downsampling to the emitting tool', async () => {
     const pointCount = config.maxDataPoints * 10;
     const times = Array.from({ length: pointCount }, (_, i) => 1_700_000_000_000 + i * 1000);
     const values = Array.from({ length: pointCount }, (_, i) => i);
@@ -88,8 +88,10 @@ describe('executeQueryWindow', () => {
       window,
       config,
     );
-    expect(result.series[0]?.points).toHaveLength(config.maxDataPoints);
-    expect(result.series[0]?.pointsTotal).toBe(pointCount);
+    // The clamp is a response-shaping step applied where points are emitted
+    // (execute_query_window / render_dashboard), not at this boundary — every
+    // analysis downstream reads these points and needs them un-subsampled.
+    expect(result.series[0]?.points).toHaveLength(pointCount);
   });
 
   it('rejects a target with no resolvable datasource uid', async () => {
