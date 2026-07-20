@@ -8,6 +8,8 @@ import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
 import { buildDashboardUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
 import type { ActivityLog } from '../activity/activityLog.js';
+import type { Config } from '../config.js';
+import { redact } from '../security/redact.js';
 
 /**
  * A time boundary as either a raw epoch-ms number or an ISO 8601 date/time
@@ -105,9 +107,30 @@ export function recordActivity(
  * to. Omit `url` when nothing was resolved yet (e.g. connection resolution
  * itself failed) — there's nothing truthful to link to in that case.
  */
-export function toolErrorText(err: unknown, url?: string): string {
+function toolErrorText(err: unknown, url?: string): string {
   const message = `Error: ${err instanceof Error ? err.message : String(err)}`;
   return url ? `${message}\n\nDashboard/panel: ${url}` : message;
+}
+
+/**
+ * The whole error response for a tool's catch block, redacted. Every tool
+ * returns this rather than assembling `{ content, isError }` itself, for the
+ * same reason `security/audit.ts` redacts centrally instead of trusting each
+ * caller: redaction is meant to be a hard guarantee, and a guarantee that
+ * depends on fourteen call sites each remembering to apply it isn't one.
+ *
+ * It matters specifically here because `grafana/client.ts` embeds up to 500
+ * characters of the raw Grafana response body in `GrafanaApiError`'s message.
+ * A datasource rejecting a query echoes the offending query text back — and
+ * that text has template variables already substituted in, so it carries
+ * exactly the customer identifiers `redactionPatterns` exists to mask.
+ * Success paths were redacted from the start; error paths were the gap.
+ */
+export function toolErrorResult(err: unknown, config: Config, url?: string) {
+  return {
+    content: [{ type: 'text' as const, text: redact(toolErrorText(err, url), config.redactionPatterns) }],
+    isError: true,
+  };
 }
 
 /**

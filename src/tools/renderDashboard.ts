@@ -10,7 +10,7 @@ import { substituteTargetFields, mergeVariableOverrides } from '../dashboards/va
 import { executeQueryWindow } from '../query/executor.js';
 import { computeStats } from '../analysis/baseline.js';
 import { clampSeriesPoints, enforceWindowLimit } from '../security/limits.js';
-import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -297,7 +297,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
         });
       } catch (err) {
         const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, errorUrl) }], isError: true };
+        return toolErrorResult(err, config, errorUrl);
       }
     },
   );

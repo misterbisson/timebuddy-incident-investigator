@@ -7,7 +7,7 @@ import { findThresholdRuns } from '../analysis/runs.js';
 import { computeStats } from '../analysis/baseline.js';
 import { clampRunList, clampSeriesPoints } from '../security/limits.js';
 import type { Config } from '../config.js';
-import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -185,7 +185,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         });
       } catch (err) {
         const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
+        return toolErrorResult(err, config, url);
       }
     },
   );

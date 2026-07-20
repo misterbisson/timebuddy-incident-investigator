@@ -15,7 +15,7 @@ import { enforceWindowLimit, clampMaxDataPoints } from '../security/limits.js';
 import { buildSeriesColumnNames, frameToCsv, parseCsvLine, seriesToCsv } from '../export/csv.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildInspectDataUrl } from '../grafana/urlBuilder.js';
-import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
 import { resolveRenderWindow } from './renderDashboard.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
@@ -332,7 +332,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         });
       } catch (err) {
         const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, errorUrl) }], isError: true };
+        return toolErrorResult(err, config, errorUrl);
       }
     },
   );

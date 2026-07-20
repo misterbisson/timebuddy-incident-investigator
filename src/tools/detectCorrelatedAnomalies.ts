@@ -8,7 +8,7 @@ import { rankCorrelatedAnomalies, type CorrelationCandidateInput } from '../anal
 import { getCachedIndexIfFresh, getOrBuildIndex } from '../index-builder/metricIndex.js';
 import type { MetricIndex } from '../index-builder/store.js';
 import { extractQueryInfo } from '../index-builder/extract.js';
-import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { resolveProductContext } from '../knowledge/lookup.js';
 import { extractRelatedDashboardUids } from '../knowledge/relatedDashboards.js';
@@ -344,7 +344,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         const url = primaryConnectionId
           ? dashboardUrlFor(registry, primaryConnectionId, primaryDashboardUid, { panelId: primaryPanelId })
           : undefined;
-        return { content: [{ type: 'text' as const, text: toolErrorText(err, url) }], isError: true };
+        return toolErrorResult(err, config, url);
       }
     },
   );
