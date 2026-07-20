@@ -4,6 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows, excludeOverlapping, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
+import { clampRunList } from '../security/limits.js';
 import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
@@ -28,7 +29,9 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
         'classification is based on the whole window\'s *mean*, which can dilute a real, sharp, short-lived event ' +
         '(e.g. a health signal that was fully down for a few minutes inside a much longer analysis window) into ' +
         'looking routine. briefExcursions is a separate, point-level check against the same baseline and will still ' +
-        'catch that. A control window whose offset is smaller than the incident\'s own duration (e.g. the default ' +
+        'catch that. If a series carries "briefExcursionsTotal", its "briefExcursions" array was truncated to the ' +
+        'first 1000 of that many excursions — treat that as "this series is too noisy for an excursion list to mean ' +
+        'much" and re-query a narrower window, not as the complete set. A control window whose offset is smaller than the incident\'s own duration (e.g. the default ' +
         'prior-hour control against an incident longer than ~1h) mostly overlaps the incident itself, so it\'s ' +
         'excluded from pooling automatically — check "warnings" for which ones, since a long incident can leave few ' +
         'or no default controls usable. If "endsAtMs" is omitted for a resolved (not still-firing) alert, this can ' +
@@ -120,10 +123,16 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
                 Math.abs(c.stats.mean - comparison.incidentStats.mean) <= (c.stats.stddev || 1) * 1.5,
             );
 
+            // Bounded for the same reason execute_query_window bounds `runs` —
+            // crossing count, not point count, sets this list's length.
+            const excursions = clampRunList(comparison.briefExcursions);
+
             return {
               refId: incidentSeries.refId,
               labels: incidentSeries.labels,
               ...comparison,
+              briefExcursions: excursions.list,
+              ...(excursions.truncated ? { briefExcursionsTotal: excursions.total } : {}),
               recurringPatternNote:
                 comparison.classification === 'common-during-normal-operations' && recurringMatch
                   ? `Magnitude is similar to the "${recurringMatch.label}" window — looks like a recurring pattern, not a fresh anomaly.`

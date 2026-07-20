@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerExecuteQueryWindow } from '../src/tools/executeQueryWindow.js';
 import type { Config, GrafanaConnection } from '../src/config.js';
-import type { DashboardGetResponse, DsQueryRequest } from '../src/grafana/types.js';
+import type { DashboardGetResponse, DsQueryRequest, DsQueryResponse } from '../src/grafana/types.js';
+import type { GrafanaClient } from '../src/grafana/client.js';
 import { fakeGrafanaClient, fakeRegistry, fakeServer } from './toolTestHelpers.js';
 
 const connections: GrafanaConnection[] = [{ id: 'test', name: 'test', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' }];
@@ -170,5 +171,79 @@ describe('execute_query_window tool', () => {
     const parsed = JSON.parse(result.content[0]!.text);
 
     expect(Array.isArray(parsed.incident.series[0].points)).toBe(true);
+  });
+
+  // Regression for the case where the response clamp also truncated the input
+  // to computeStats/findThresholdRuns: a short dip landing between surviving
+  // samples was reported as "never left full health" during a real outage.
+  it('computes stats and runs from the full series, not the downsampled points', async () => {
+    // A raw InfluxQL target with no `GROUP BY time()` ignores maxDataPoints and
+    // returns every 1s sample over the window — ~21.6k points against a 2000 cap.
+    const pointCount = 21_600;
+    const times = Array.from({ length: pointCount }, (_, i) => 1_700_000_000_000 + i * 1000);
+    const values = Array.from({ length: pointCount }, () => 1);
+    // Stride is 21600/2000 = 10.8, so kept indexes run 0, 10, 21, 32, ... —
+    // indexes 1-3 survive nowhere in the emitted points.
+    values[1] = 0;
+    values[2] = 0;
+    values[3] = 0;
+
+    const dashboard: DashboardGetResponse = {
+      dashboard: {
+        uid: 'dash1',
+        title: 'Uptime',
+        version: 1,
+        panels: [
+          {
+            id: 1,
+            title: 'Target uptime',
+            targets: [{ refId: 'A', datasource: { uid: 'influx1' }, query: 'SELECT "v" FROM "m"', rawQuery: true }],
+          },
+        ],
+      },
+      meta: {},
+    };
+    const response: DsQueryResponse = {
+      results: {
+        A: {
+          frames: [
+            {
+              schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'Value', type: 'number' }] },
+              data: { values: [times, values] },
+            },
+          ],
+        },
+      },
+    };
+    const client = {
+      getDashboard: vi.fn(async () => dashboard),
+      queryDs: vi.fn(async (_req: DsQueryRequest) => response),
+      listDatasources: vi.fn(async () => [{ uid: 'influx1', id: 1, name: 'InfluxDB', type: 'influxdb' }]),
+    } as unknown as GrafanaClient;
+
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('execute_query_window', {
+      dashboardUid: 'dash1',
+      panelId: 1,
+      startsAtMs: Date.parse('2026-07-07T15:38:50Z'),
+      endsAtMs: Date.parse('2026-07-07T16:38:50Z'),
+      threshold: 1,
+      thresholdDirection: 'below',
+      includePoints: true,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const series = JSON.parse(result.content[0]!.text).incident.series[0];
+
+    // The outage is found even though none of its samples are in `points`.
+    expect(series.runs).toHaveLength(1);
+    expect(series.runs[0].pointCount).toBe(3);
+    expect(series.stats.min).toBe(0);
+
+    // ...and the response is still bounded.
+    expect(series.points).toHaveLength(2000);
+    expect(series.pointsTotal).toBe(pointCount);
+    expect(series.points.some((p: { v: number }) => p.v === 0)).toBe(false);
   });
 });

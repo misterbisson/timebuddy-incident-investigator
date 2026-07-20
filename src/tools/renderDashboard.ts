@@ -9,7 +9,7 @@ import { flattenPanels, resolvePanelQueries } from '../dashboards/panelQueries.j
 import { substituteTargetFields, mergeVariableOverrides } from '../dashboards/variables.js';
 import { executeQueryWindow } from '../query/executor.js';
 import { computeStats } from '../analysis/baseline.js';
-import { enforceWindowLimit } from '../security/limits.js';
+import { clampSeriesPoints, enforceWindowLimit } from '../security/limits.js';
 import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorText } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
@@ -217,9 +217,11 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
                 hasTargets: true,
                 url,
                 targets: targets.map((t) => ({ refId: t.refId, datasourceUid: t.datasourceUid, resolvedQuery: t.raw })),
-                series: result.series.map((s) => {
+                // stats from the full series, only the emitted points downsampled
+                // — see the note in query/executor.ts on why the clamp lives here.
+                series: clampSeriesPoints(result.series, config).map((s, i) => {
                   const { points, ...rest } = s;
-                  return { ...rest, ...(includePoints ? { points } : {}), stats: computeStats(points) };
+                  return { ...rest, ...(includePoints ? { points } : {}), stats: computeStats(result.series[i]!.points) };
                 }),
                 errors: result.errors,
               };

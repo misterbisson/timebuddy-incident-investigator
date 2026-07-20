@@ -5,6 +5,8 @@ import { computeWindows, windowsOverlap } from '../query/windows.js';
 import { executeQueryWindows, type WindowQueryResult } from '../query/executor.js';
 import { findThresholdRuns } from '../analysis/runs.js';
 import { computeStats } from '../analysis/baseline.js';
+import { clampRunList, clampSeriesPoints } from '../security/limits.js';
+import type { Config } from '../config.js';
 import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
@@ -29,16 +31,24 @@ function annotateSeries(
   threshold: number | undefined,
   direction: 'below' | 'above',
   includePoints: boolean,
+  config: Config,
 ) {
+  // stats and runs come from the full series; only the emitted `points` array
+  // is downsampled. Doing it the other way round hid short threshold crossings
+  // from `runs` — the one output you least want computed on a subsample.
+  // clampSeriesPoints maps 1:1 and preserves order, so the indexes line up.
+  const clamped = clampSeriesPoints(result.series, config);
   return {
     ...result,
-    series: result.series.map((s) => {
+    series: clamped.map((s, i) => {
       const { points, ...rest } = s;
+      const full = result.series[i]!.points;
+      const runs = threshold !== undefined ? clampRunList(findThresholdRuns(full, threshold, direction)) : undefined;
       return {
         ...rest,
         ...(includePoints ? { points } : {}),
-        stats: computeStats(points),
-        ...(threshold !== undefined ? { runs: findThresholdRuns(points, threshold, direction) } : {}),
+        stats: computeStats(full),
+        ...(runs ? { runs: runs.list, ...(runs.truncated ? { runsTotal: runs.total } : {}) } : {}),
       };
     }),
   };
@@ -71,7 +81,10 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'result as unscoped/unverified rather than trusting it or narrowing it down with a naming-convention guess. ' +
         'Pass includePoints: false to drop each series\' raw "points" array from the response - "stats" and "runs" ' +
         '(when threshold is set) are still computed from the full data either way, so this only removes the raw ' +
-        'array a wide/long-window call doesn\'t need, keeping the response from spilling to disk.',
+        'array a wide/long-window call doesn\'t need, keeping the response from spilling to disk. ' +
+        'If a series carries "runsTotal", its "runs" array was truncated to the first 1000 of that many crossings ' +
+        '— the series crosses the threshold too often for a run list to be meaningful, so re-query a narrower ' +
+        'window rather than reading the truncated list as the complete set.',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -136,7 +149,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
               const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, config.maxDataPoints, panelTitle);
               resolvedPanelTitle ??= panel.title;
               const [result] = await executeQueryWindows(client, targets, [window], config);
-              return annotateSeries(result!, threshold, thresholdDirection, includePoints);
+              return annotateSeries(result!, threshold, thresholdDirection, includePoints, config);
             }),
           );
 
