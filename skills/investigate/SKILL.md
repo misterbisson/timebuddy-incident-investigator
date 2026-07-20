@@ -95,9 +95,13 @@ skill exists to handle for them.
      `validate_baseline`/`detect_correlated_anomalies` all reject an ambiguous `panelId` outright
      rather than guessing, listing the candidate titles in the error — but that costs a whole extra
      round trip of retries you can just avoid up front by always passing the title when you have it.
-   - Pass `includePoints: false` when you're re-confirming something `stats`/`briefExcursions`/
-     `runs` already told you and don't need the raw series — same tradeoff as `render_dashboard`'s
-     option above, for the same reason.
+   - Pass `includePoints: false` **on `execute_query_window`** when you're re-confirming something
+     `stats`/`runs` already told you and don't need the raw series — same tradeoff as
+     `render_dashboard`'s option above, for the same reason. `validate_baseline` has no such
+     parameter, and passing it there is silently ignored rather than rejected (zod strips unknown
+     keys), so you'd believe you'd asked for a compact response and get the full one — which is the
+     response-overflow problem in step 3, not a fix for it. To keep a `validate_baseline` response
+     small, narrow the window instead.
    - `execute_query_window` with `dashboardUid`, `panelId`, `startsAtMs` (use `alertContext.startsAt`),
      `connection` — this gets you the incident window, a pre-window buffer, and baseline control
      windows in one call. Every series in the response already includes `stats`
@@ -196,10 +200,19 @@ skill exists to handle for them.
    reading "0% for 5 hours" next to real traffic that only dipped 4% and was concentrated on one
    account is a materially different, more useful finding than the first panel alone.
 
-   A stat panel using Grafana's built-in "-- Dashboard --" datasource (re-displays another panel's
-   already-computed value; no backend to query) is detected automatically — it never shows up as a
-   404 or an `executionError`, it carries `mirrorsPanelIds` instead. Read the referenced panel(s)
-   directly rather than investigating the 404 yourself; there's nothing to fix, it's this Grafana
+   A stat panel using Grafana's built-in "-- Dashboard --" datasource re-displays another panel's
+   already-computed value client-side and has no backend to query, so it can never be executed. How
+   that reaches you depends on which tool you called, and it matters here because
+   `detect_correlated_anomalies` is one of the tools that *throws*:
+
+   - `render_dashboard` and `resolve_panel_queries` report it gracefully, as `mirrorsPanelIds` on
+     the panel, and carry on with the rest of the dashboard.
+   - `execute_query_window`, `validate_baseline`, and `detect_correlated_anomalies` resolve panels
+     through a different path and surface it as a **thrown error** instead.
+
+   Either way it is expected, not a failure to investigate: the thrown error's own message names the
+   mirrored panel id(s). Call that panel directly and move on. Don't go looking for a
+   misconfiguration, and don't treat the throw as this dashboard being broken — it's this Grafana
    feature working as designed.
 
    If a panel's queries fail with something like "404 Data source not found" for any *other*

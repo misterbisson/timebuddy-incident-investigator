@@ -42,7 +42,7 @@ bundled with the desktop app, so it's usually a couple of clicks, no separate do
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. `includePoints: false` drops each series' raw points (stats/runs are still returned) for a wide window that would otherwise overflow. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. `includePoints: false` drops raw points from every panel's series for a compact, stats-only survey. A panel mirroring another via Grafana's built-in "-- Dashboard --" datasource (see below) is reported with `mirrorsPanelIds`, never executed or errored. |
 | `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. In the Electron app, first tries to capture the panel's real on-screen data by driving a hidden browser to Grafana's own Inspect > Data view with "Apply panel transformations" checked (`transformationsApplied: true` in the result) — so a join/reduce/rename configured on the panel comes back exactly as shown, not just the raw query result. Otherwise (no transformations configured, or no Electron/`screenshotter`) falls back to a direct export: table panels as-is (every raw column); timeseries/graph panels pivoted wide (one UTC-timestamp column plus one column per series). |
-| `screenshot_panel` | *Electron app only.* Captures a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed, on-screen content isn't visible in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). The one tool whose output is **not** passed through the redaction layer. |
+| `screenshot_panel` | *Electron app only.* Captures a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed, on-screen content isn't visible in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). The one tool whose output is only **partly** covered by the redaction layer: its JSON payload is redacted like every other tool's, but the **image itself is not** — redaction only understands text, so anything legible on the panel (legend values, axis labels, annotation text) reaches the model as rendered. |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. When auto-discovering, checks one `scope` tier per call — `product` (default; the primary dashboard plus its Timebuddy knowledge panel's declared ops/SLI dashboards and dependencies, or just the primary dashboard alone with no knowledge published), `connection`, then `all-connections` — so a caller can report each tier's result and only pay for a wider, more expensive search when the narrower one didn't answer it. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
@@ -162,8 +162,7 @@ credential.
 
 ### How connections are stored
 
-Connections live under Electron's per-OS `userData` directory (shown in the app's UI,
-with a "copy path" button), in two files:
+Connections live under Electron's per-OS `userData` directory, in two files:
 
 - `connections.json` — non-secret metadata (name, URL, auth type, etc.), plaintext (it
   holds nothing sensitive).
@@ -282,14 +281,15 @@ omitted:
   `matchHosts`, for cases like a load balancer alias) — and returns `resolvedConnectionId`
   for you to pass into every subsequent call for that incident.
 - Single-target tools (`resolve_panel_queries`, `execute_query_window`, `validate_baseline`,
-  `get_product_context`, `list_datasources`, and the primary panel in `detect_correlated_anomalies`)
+  `get_product_context`, and the primary panel in `detect_correlated_anomalies`)
   fall back to the one configured connection if there's only one, otherwise error out listing the
   available connection ids — they never guess. `fetch_dashboard`, `render_dashboard`,
   `export_panel_csv`, and `screenshot_panel` additionally auto-detect the connection from a `url`'s
   host (before the same fallback), the same way `get_alert_context` does.
-- The two search tools (`find_related_dashboards`, and `detect_correlated_anomalies` when
-  auto-discovering candidates) fan out across every configured connection and merge
-  results, each tagged with its `connectionId`.
+- The fan-out tools (`find_related_dashboards`, `list_datasources`, and
+  `detect_correlated_anomalies` when auto-discovering candidates) query every configured
+  connection and merge results, each tagged with its `connectionId`. Passing `connection`
+  explicitly narrows any of them back to that one.
 
 The single-connection fallback only applies when nothing contradicts it. If you pass a URL
 whose host matches no configured connection, that's an error listing the available ids —

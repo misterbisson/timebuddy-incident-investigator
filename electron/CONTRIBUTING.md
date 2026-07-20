@@ -52,7 +52,8 @@ Each of those first runs the root package's `tsc` build (`npm run build --prefix
 the engine's `dist/` is current, then invokes `electron-builder` for that platform. Output
 lands in `electron/dist/`.
 
-`.github/workflows/release.yml` builds all three platforms on every push/PR to `main`.
+`.github/workflows/release.yml` builds all three platforms on every PR to `main`, and on a
+push to `main` only when that push actually cuts a release (see below).
 
 Pushes to `main` first run a `version` job: [`release-please`](https://github.com/googleapis/release-please)
 (`release-please-config.json`/`.release-please-manifest.json`, repo root) analyzes commits
