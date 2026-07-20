@@ -39,6 +39,12 @@ yourself; don't just describe what could be done.
    - If the result's `files` array has more than one entry, say so and mention why - the `note` field
      explains it (this only happens in the direct-export fallback: more than one query feeding the
      panel, with no merge applied).
+   - If `formulaNeutralized` is `false`, add a one-line caveat when you report the path in step 4.
+     That file is Grafana's own CSV byte for byte, so cells beginning with `=`, `+`, `-`, or `@` were
+     left as-is and a spreadsheet will execute them on open; this server's own exports have them
+     neutralized, Grafana's are not. The `formulaNeutralizationNote` field gives the wording. Don't
+     omit this just because the export otherwise succeeded - the whole point of the file is that
+     someone opens it in a spreadsheet.
 
 3. **Also capture a screenshot** when: the person asked for one explicitly, or
    `transformationsApplied` is `false` for a table/matrix panel (i.e. the CSV is this server's raw
