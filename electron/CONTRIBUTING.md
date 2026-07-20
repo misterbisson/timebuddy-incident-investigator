@@ -69,10 +69,12 @@ picks them up — without that, a merged Dependabot PR, including a security fix
 silently produce no release at all.
 
 Merging the accumulated release PR (through the same required status checks as any other
-PR) is what actually cuts the release: release-please bumps `package.json` and
-`electron/package.json` in lockstep (an `extra-files` entry in
-`release-please-config.json` keeps the latter in sync), updates `CHANGELOG.md`, and tags
-the merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
+PR) is what actually cuts the release: release-please bumps `package.json`,
+`electron/package.json`, and `.claude-plugin/plugin.json` in lockstep (`extra-files`
+entries in `release-please-config.json` keep the latter two in sync — the plugin one
+matters because `electron/package.json` ships that directory as `extraResources`, so a
+stale version there would be visible to anyone who installed the bundled plugin), updates
+`CHANGELOG.md`, and tags the merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
 published, checked out at that new tag, and does the actual platform builds +
 `electron-builder --publish always` (so `electron-updater` — not yet wired into `main.js`
 — can eventually point at those release artifacts; release-please itself is configured
