@@ -99,4 +99,14 @@ error — read the referenced panel(s) directly for the real data. `export_panel
 same when the Electron browser-capture path is available; otherwise (and always for
 `execute_query_window`, `validate_baseline`, and `detect_correlated_anomalies`, which resolve
 panels through a different, non-graceful path) a mirror panel surfaces as a thrown error
-instead — its message still names the mirrored panel id(s) to call directly.
+instead — its message still names the mirrored panel id(s) to call directly. Note
+`export_panel_csv` raises its own separate error for this rather than going through
+`resolvePanelForWindow`, so it belongs in the throwing group too even though it isn't one of
+the three named above.
+
+There is a third outcome worth stating explicitly, because it isn't an error at all: when
+`detect_correlated_anomalies` encounters a mirror panel among the candidates it *auto-discovered*
+(rather than as the primary panel it was asked about), the rejection is swallowed by the
+`Promise.allSettled` + skip-non-fulfilled loop that guards candidate scanning. That candidate is
+neither returned nor reported — it is simply absent from the results, which a caller should not
+read as "checked and found unrelated."

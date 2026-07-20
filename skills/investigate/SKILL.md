@@ -205,15 +205,19 @@ skill exists to handle for them.
    that reaches you depends on which tool you called, and it matters here because
    `detect_correlated_anomalies` is one of the tools that *throws*:
 
-   - `render_dashboard` and `resolve_panel_queries` report it gracefully, as `mirrorsPanelIds` on
-     the panel, and carry on with the rest of the dashboard.
-   - `execute_query_window`, `validate_baseline`, and `detect_correlated_anomalies` resolve panels
-     through a different path and surface it as a **thrown error** instead.
+   - **Reported gracefully** by `render_dashboard` and `resolve_panel_queries`, as `mirrorsPanelIds`
+     on the panel — the rest of the dashboard still comes back normally.
+   - **Thrown as an error** by `execute_query_window`, `validate_baseline`, `export_panel_csv`, and
+     `detect_correlated_anomalies` *when the mirror panel is the one you named*. The message names
+     the mirrored panel id(s), so call that panel directly and move on.
+   - **Silently omitted** when `detect_correlated_anomalies` hits one among the candidates it
+     auto-discovered, rather than as the primary panel. Those run under `Promise.allSettled` and
+     rejected candidates are skipped, so the mirror panel is neither returned nor reported — it just
+     isn't in the results. Don't read a candidate's absence as evidence it was checked and cleared.
 
-   Either way it is expected, not a failure to investigate: the thrown error's own message names the
-   mirrored panel id(s). Call that panel directly and move on. Don't go looking for a
-   misconfiguration, and don't treat the throw as this dashboard being broken — it's this Grafana
-   feature working as designed.
+   All three are expected, not failures to investigate. Don't go looking for a misconfiguration and
+   don't treat the throw as the dashboard being broken — it's this Grafana feature working as
+   designed.
 
    If a panel's queries fail with something like "404 Data source not found" for any *other*
    reason, check whether its datasource reference is a literal name rather than a UID (not a

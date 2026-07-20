@@ -70,14 +70,17 @@ Three things shape almost every module here and are easy to miss from a partial 
    hatch anywhere in the tool layer — that boundary is what makes the read-only guarantee
    real rather than just a description. Don't add a generic proxy method to this client.
 
-2. **Every tool output is redacted before it reaches the model.** `security/redact.ts`
+2. **Every tool's structured output is redacted before it reaches the model.** `security/redact.ts`
    masks secret-shaped keys and configured customer-identifier patterns; tools call it on
    their result just before returning `content`. `security/limits.ts` enforces the
    max-lookback/max-data-points/concurrency caps on every query window, and
    `security/audit.ts` logs every tool invocation to a local JSONL file. New tools should
    follow the same `withAudit(...) { ...; return { content: [...] } }` /
    `redact(result, config.redactionPatterns)` pattern used in `src/tools/*.ts` rather than
-   returning raw data.
+   returning raw data. The one exception is image bytes: `screenshot_panel` redacts its JSON
+   payload like everything else, but the PNG content block goes to the model as rendered,
+   since redaction only understands text. Don't generalize that into a second exception —
+   any new *text* output belongs behind `redact()`.
 
 3. **A tool call doesn't target one fixed Grafana — it resolves a connection first.**
    `src/grafana/registry.ts`'s `ConnectionRegistry` lazily builds and caches one
