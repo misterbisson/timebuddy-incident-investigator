@@ -171,6 +171,15 @@ Connections live under Electron's per-OS `userData` directory, in two files:
   in-memory, only inside this same process, when `--mcp-server` mode needs to build a
   Grafana client — the decrypted form is never written back to disk.
 
+Both files are written atomically (temp file plus rename), so an interrupted write or a
+crash can't leave either one truncated.
+
+If a connection's row shows **"Can't decrypt secret"**, its stored credential is still
+there but this machine's keychain can no longer open it — most often after an OS
+reinstall, a keychain reset, or migrating to a new machine. Edit that connection and
+re-enter its token/password to fix it. Only that one connection is affected; the others
+keep working normally, and tool calls that don't use it are unaffected.
+
 ## Registering with Claude
 
 Once you've added your connections, the app's "Register with Claude" section shows a
@@ -343,6 +352,13 @@ dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
   panel has no transformations configured, or the capture attempt itself fails, the tool
   falls back to its own direct export: a table panel backed by more than one query/frame is
   then written to one CSV file per frame, not a merged table.
+- **CSV files captured from Grafana byte-for-byte are not neutralized against spreadsheet
+  formula injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula
+  when the file is opened in Excel, LibreOffice, or Google Sheets. This server's *own*
+  exports prefix such cells with an apostrophe so they display instead of executing; a file
+  captured from Grafana is that tool's own bytes and can't be rewritten without ceasing to
+  be a faithful copy. The result says which you got — `formulaNeutralized` — so check it
+  before opening a captured file in a spreadsheet, or handing one to someone else.
 
 ## Acknowledgments
 

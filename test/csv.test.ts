@@ -98,3 +98,123 @@ describe('parseCsvLine', () => {
     expect(parseCsvLine('"say ""hi""",c')).toEqual(['say "hi"', 'c']);
   });
 });
+
+describe('spreadsheet formula neutralization', () => {
+  const cells = (values: string[]): GrafanaFrame =>
+    ({ schema: { fields: [{ name: 'label', type: 'string' }] }, data: { values: [values] } }) as GrafanaFrame;
+  const rows = (f: GrafanaFrame) => frameToCsv(f).trimEnd().split('\r\n');
+
+  // The reported vector: a leading = is executed on open by Excel,
+  // LibreOffice, and Sheets. RFC 4180 quoting is not a defense — Excel
+  // evaluates a quoted field's contents just the same.
+  it('neutralizes each formula lead character', () => {
+    expect(rows(cells(['=cmd|\' /C calc\'!A0', '+1+1', '@SUM(A1)', '-2+3']))).toEqual([
+      'label',
+      "'=cmd|' /C calc'!A0",
+      "'+1+1",
+      "'@SUM(A1)",
+      "'-2+3",
+    ]);
+  });
+
+  it('neutralizes a leading tab or CR, which spreadsheets strip before the formula check', () => {
+    // A tab needs no RFC 4180 quoting (it isn't a delimiter here); a CR does.
+    expect(rows(cells(['\t=1+1']))[1]).toBe("'\t=1+1");
+    expect(frameToCsv(cells(['\r=1+1']))).toContain('"\'\r=1+1"');
+  });
+
+  // Load-bearing: negative numbers reach escapeCsvField as strings via
+  // formatCell's String(...), and mangling them into text would break the
+  // numeric analysis this export exists to enable.
+  it('leaves negative and signed numbers untouched', () => {
+    expect(rows(cells(['-1.5', '-0.5', '+2', '-1e3', '-.5', '-0']))).toEqual([
+      'label',
+      '-1.5',
+      '-0.5',
+      '+2',
+      '-1e3',
+      '-.5',
+      '-0',
+    ]);
+  });
+
+  it('neutralizes something that only looks numeric', () => {
+    expect(rows(cells(['-1.5x', '-', '-1-1', '- 1']))).toEqual(['label', "'-1.5x", "'-", "'-1-1", "'- 1"]);
+  });
+
+  it('leaves ordinary text alone, including an = that is not in the leading position', () => {
+    expect(rows(cells(['web1', 'up', 'a=b']))).toEqual(['label', 'web1', 'up', 'a=b']);
+  });
+
+  it('puts the apostrophe inside the quotes when the cell also needs RFC 4180 escaping', () => {
+    expect(rows(cells(['=a,b', '=say "hi"']))).toEqual(['label', '"\'=a,b"', '"\'=say ""hi"""']);
+  });
+
+  // Column names derive from Grafana-supplied refId/label values, so the
+  // header row is an injection vector too, not just the data rows.
+  it('neutralizes a formula in a column header, not just in cells', () => {
+    const f = { schema: { fields: [{ name: '=cmd|\' /C calc\'!A0', type: 'string' }] }, data: { values: [[]] } } as GrafanaFrame;
+    expect(frameToCsv(f)).toBe("'=cmd|' /C calc'!A0\r\n");
+  });
+
+  // The issue's own example. seriesColumnName falls back to refId when a
+  // series has no labels, so a hostile refId lands in the leading position of
+  // a header cell — where a label *value* never can, since it's always
+  // preceded by "key=".
+  it('neutralizes a seriesToCsv column name taken from a hostile refId', () => {
+    const csv = seriesToCsv([series("=cmd|' /C calc'!A0", {}, [[0, 1]])]);
+    // No RFC 4180 quoting here: the payload's quotes are single, not double,
+    // and it has no comma or newline — which is precisely why quoting was
+    // never the defense against this.
+    expect(csv.split('\r\n')[0]).toBe("timestamp,'=cmd|' /C calc'!A0");
+  });
+
+  it('neutralizes a column name whose leading label key starts with a formula character', () => {
+    const csv = seriesToCsv([series('A', { '=x': 'web1' }, [[0, 1]])]);
+    expect(csv.split('\r\n')[0]).toBe("timestamp,'=x=web1");
+  });
+
+  it('does not mangle seriesToCsv numeric data, including negatives', () => {
+    const csv = seriesToCsv([series('A', {}, [[0, -1.5]])]);
+    expect(csv.split('\r\n')[1]).toBe('1970-01-01T00:00:00.000Z,-1.5');
+  });
+});
+
+describe('formula neutralization edge cases the first pass missed', () => {
+  const cells = (values: string[]): GrafanaFrame =>
+    ({ schema: { fields: [{ name: 'label', type: 'string' }] }, data: { values: [values] } }) as GrafanaFrame;
+  const rows = (f: GrafanaFrame) => frameToCsv(f).trimEnd().split('\r\n');
+
+  // LF was reachable by the docstring's own logic (spreadsheets strip it
+  // before the formula check, exactly like tab and CR) but wasn't in the
+  // trigger set, so "\n=1+1" shipped quoted-but-live.
+  it('neutralizes every leading whitespace character that a spreadsheet strips', () => {
+    for (const ws of ['\t', '\r', '\n', '\v', '\f']) {
+      const csv = frameToCsv(cells([`${ws}=1+1`]));
+      expect(csv, `leading ${JSON.stringify(ws)}`).toContain(`'${ws}=1+1`);
+    }
+  });
+
+  // Not a bypass, and worth pinning so nobody "fixes" it: spreadsheets do NOT
+  // strip a leading space before formula detection, so the space is itself the
+  // neutralizer. Adding it would mangle legitimately space-padded labels.
+  it('leaves a leading space alone, which is already safe', () => {
+    expect(rows(cells([' =1+1']))[1]).toBe(' =1+1');
+  });
+
+  // The NUMERIC anchors are load-bearing. Relaxing them to /^\s*...\s*$/ —
+  // which looks like harmless leniency — passed all 24 original tests while
+  // re-opening exactly the whitespace-smuggling class above.
+  // Asserted against the raw CSV, not the rows() helper: that helper trimEnd()s
+  // and splits on \r\n, which eats a trailing space and mangles a quoted field
+  // containing a newline — both of which are exactly what's under test here.
+  it('does not treat a whitespace-padded number as numeric, which would defeat the trigger set', () => {
+    expect(frameToCsv(cells(['\t-1.5']))).toContain("'\t-1.5");
+    expect(frameToCsv(cells(['\t-1+1']))).toContain("'\t-1+1");
+    expect(frameToCsv(cells(['\n-1.5']))).toContain("\"'\n-1.5\"");
+  });
+
+  it('neutralizes a trailing-whitespace number, which is not a value we need to preserve', () => {
+    expect(frameToCsv(cells(['-1.5 ']))).toContain("'-1.5 ");
+  });
+});
