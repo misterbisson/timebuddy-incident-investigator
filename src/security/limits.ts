@@ -72,3 +72,47 @@ export function clampRunList<T>(runs: T[]): { list: T[]; total: number; truncate
   if (runs.length <= MAX_RETURNED_RUNS) return { list: runs, total: runs.length, truncated: false };
   return { list: runs.slice(0, MAX_RETURNED_RUNS), total: runs.length, truncated: true };
 }
+
+/**
+ * Bounds for screenshot_panel's pixel dimensions. Unlike every other limit
+ * here, the resource being protected isn't the response size — it's the
+ * Electron main process itself: capturePanel allocates a BrowserWindow at the
+ * requested content size, so the pixel buffer is allocated in the same process
+ * that *is* the MCP server. An oversized request doesn't produce a slow or
+ * truncated answer, it takes the server down mid-investigation and loses every
+ * other in-flight tool call with it.
+ *
+ * 3840 is deliberately well past any real need (the default capture is
+ * 1600x900) and applies to both axes rather than as a 4K aspect box, so a tall
+ * table panel can still be captured in full. The floor matters too: a window a
+ * few pixels wide renders no legible chart, and Electron rejects a
+ * non-positive dimension outright, so a bad-but-plausible 0 would surface as
+ * an opaque Electron error rather than a usable image.
+ */
+export const MIN_SCREENSHOT_PX = 200;
+export const MAX_SCREENSHOT_PX = 3840;
+
+/**
+ * Clamps rather than rejects, matching clampMaxDataPoints: a slightly
+ * oversized request should still yield a usable screenshot. Callers are
+ * expected to surface `clamped` to the model — a capture silently returned at
+ * dimensions other than the ones asked for is a result that looks complete but
+ * isn't what was requested.
+ *
+ * `fallback` is required rather than defaulted so a non-finite input can never
+ * resolve to a bound: NaN/Infinity/undefined mean "no meaningful pixel count
+ * was given", and the safe reading of that is the tool's normal size, not the
+ * largest one this function would otherwise permit. The caller's zod schema
+ * already applies its own `.default()`, so in practice this only fires for
+ * ±Infinity — but a guard whose safety depends on the caller's schema being
+ * right isn't a guard, and this one exists precisely because the unvalidated
+ * path is what OOMs the process.
+ */
+export function clampScreenshotDimension(requested: number, fallback: number): { value: number; clamped: boolean } {
+  // Rounded because Electron's BrowserWindow takes integer pixels; zod's
+  // z.number() admits floats, and 1600.5 is a plausible thing for a model to
+  // compute from an aspect ratio.
+  const usable = Number.isFinite(requested) ? Math.round(requested) : fallback;
+  const value = Math.min(Math.max(usable, MIN_SCREENSHOT_PX), MAX_SCREENSHOT_PX);
+  return { value, clamped: value !== requested };
+}

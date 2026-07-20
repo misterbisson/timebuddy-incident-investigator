@@ -9,7 +9,7 @@ import { findPanel } from '../dashboards/panelQueries.js';
 import { mergeVariableOverrides } from '../dashboards/variables.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildSoloPanelUrl } from '../grafana/urlBuilder.js';
-import { enforceWindowLimit } from '../security/limits.js';
+import { clampScreenshotDimension, enforceWindowLimit, MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../security/limits.js';
 import { dashboardUrlFor, recordActivity, resolveToolClient, toolErrorResult } from './shared.js';
 import { resolveRenderWindow } from './renderDashboard.js';
 import { redact } from '../security/redact.js';
@@ -57,6 +57,9 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
         "model) see the panel, but the person you're talking to may not see inline image content the same way you " +
         'do, depending on how they\'re connected to you - always mention the savedTo path in your response so they ' +
         'can open the actual file themselves, not just your description of it. ' +
+        `"width"/"height" are each clamped to ${MIN_SCREENSHOT_PX}-${MAX_SCREENSHOT_PX}px; if that changed what you asked ` +
+        'for, the result carries a "warnings" array saying so and the returned "width"/"height" are the dimensions ' +
+        'actually captured - read those rather than assuming your requested size was used. ' +
         'Note: unlike every other tool here, the image is NOT passed through the redaction layer - that only ' +
         'understands text - so anything visible on the panel itself (legend values, axis labels, annotation text) ' +
         'reaches the model as-is.',
@@ -68,13 +71,13 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
         fromMs: z.number().optional().describe('Window start, epoch ms - overrides the url\'s own "from" when both are given'),
         toMs: z.number().optional().describe('Window end, epoch ms - overrides the url\'s own "to" when both are given'),
         variableOverrides: z.record(z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
-        width: z.number().optional().default(DEFAULT_WIDTH).describe('Screenshot width in pixels'),
-        height: z.number().optional().default(DEFAULT_HEIGHT).describe('Screenshot height in pixels'),
+        width: z.number().optional().default(DEFAULT_WIDTH).describe(`Screenshot width in pixels (clamped to ${MIN_SCREENSHOT_PX}-${MAX_SCREENSHOT_PX})`),
+        height: z.number().optional().default(DEFAULT_HEIGHT).describe(`Screenshot height in pixels (clamped to ${MIN_SCREENSHOT_PX}-${MAX_SCREENSHOT_PX})`),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Screenshot panel' },
     },
-    async ({ url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, width, height, connection }) => {
+    async ({ url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, width: inputWidth, height: inputHeight, connection }) => {
       let resolvedConnectionId: string | undefined;
       let resolvedDashboardUid: string | undefined;
       try {
@@ -147,11 +150,25 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             throw new Error(`Unknown Grafana connection "${connectionId}".`);
           }
           const soloUrl = buildSoloPanelUrl(rawConnection.url, dashboardUid, panelId, { fromMs, toMs, variables: overrides });
+          // Clamped immediately before the capture, so nothing downstream can
+          // see an unbounded dimension — this is the only path into
+          // capturePanel, and the BrowserWindow it allocates lives in the same
+          // process as the MCP server.
+          const w = clampScreenshotDimension(inputWidth, DEFAULT_WIDTH);
+          const h = clampScreenshotDimension(inputHeight, DEFAULT_HEIGHT);
+          const warnings: string[] = [];
+          if (w.clamped || h.clamped) {
+            warnings.push(
+              `Requested ${inputWidth}x${inputHeight} was clamped to ${w.value}x${h.value} ` +
+                `(each dimension is bounded to ${MIN_SCREENSHOT_PX}-${MAX_SCREENSHOT_PX}px). The image below is at the ` +
+                'clamped size, so its aspect ratio may differ from what you asked for.',
+            );
+          }
           const png = await screenshotter.capturePanel({
             url: soloUrl,
             headers: { Authorization: buildAuthHeader(rawConnection) },
-            width,
-            height,
+            width: w.value,
+            height: h.value,
             timeoutMs: config.screenshotTimeoutMs,
           });
           const savedTo = await saveScreenshot(png, dashboardUid, panelId, config);
@@ -174,9 +191,11 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             title: panel.title,
             type: panel.type,
             window: { fromMs, toMs },
-            width,
-            height,
+            // The dimensions actually captured, not the ones requested.
+            width: w.value,
+            height: h.value,
             savedTo,
+            ...(warnings.length > 0 ? { warnings } : {}),
           };
           return {
             content: [

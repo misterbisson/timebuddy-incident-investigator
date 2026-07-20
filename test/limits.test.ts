@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampSeriesPoints } from '../src/security/limits.js';
+import { clampScreenshotDimension, clampSeriesPoints, MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../src/security/limits.js';
 import type { Config } from '../src/config.js';
 import type { QuerySeries } from '../src/query/executor.js';
 
@@ -43,5 +43,35 @@ describe('clampSeriesPoints', () => {
     const [result] = clampSeriesPoints([series(1000)], config);
     const times = result?.points.map((p) => p.t) ?? [];
     expect(times).toEqual([...times].sort((a, b) => a - b));
+  });
+});
+
+describe('clampScreenshotDimension', () => {
+  it('leaves an in-bounds value untouched and reports no clamp', () => {
+    expect(clampScreenshotDimension(1600, 1600)).toEqual({ value: 1600, clamped: false });
+  });
+
+  it('clamps above the ceiling and below the floor', () => {
+    expect(clampScreenshotDimension(100_000, 1600)).toEqual({ value: MAX_SCREENSHOT_PX, clamped: true });
+    expect(clampScreenshotDimension(-1, 1600)).toEqual({ value: MIN_SCREENSHOT_PX, clamped: true });
+  });
+
+  it('accepts the bounds themselves without reporting a clamp', () => {
+    expect(clampScreenshotDimension(MAX_SCREENSHOT_PX, 1600).clamped).toBe(false);
+    expect(clampScreenshotDimension(MIN_SCREENSHOT_PX, 1600).clamped).toBe(false);
+  });
+
+  it('rounds fractional pixels, and counts the rounding as a clamp', () => {
+    expect(clampScreenshotDimension(1600.5, 1600)).toEqual({ value: 1601, clamped: true });
+  });
+
+  it('resolves a non-finite request to the fallback, never to a bound', () => {
+    expect(clampScreenshotDimension(Number.NaN, 900).value).toBe(900);
+    expect(clampScreenshotDimension(Number.POSITIVE_INFINITY, 900).value).toBe(900);
+    expect(clampScreenshotDimension(undefined as unknown as number, 900).value).toBe(900);
+  });
+
+  it('still bounds a fallback that is itself out of range', () => {
+    expect(clampScreenshotDimension(Number.NaN, 999_999).value).toBe(MAX_SCREENSHOT_PX);
   });
 });
