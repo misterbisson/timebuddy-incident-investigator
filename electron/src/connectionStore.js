@@ -2,6 +2,7 @@ const { app, safeStorage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { readJsonFile, writeJsonFileAtomic, buildEngineConnections } = require('./connectionStoreCore.js');
 
 function storageDir() {
   return app.getPath('userData');
@@ -15,23 +16,37 @@ function secretsFilePath() {
   return path.join(storageDir(), 'secrets.enc.json');
 }
 
-function readJson(filePath, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (err) {
-    if (err.code === 'ENOENT') return fallback;
-    throw err;
-  }
-}
-
 function readConnectionsFile() {
-  return readJson(connectionsFilePath(), { version: 1, connections: [] });
+  return readJsonFile(connectionsFilePath(), { version: 1, connections: [] });
 }
 
 // secrets.enc.json holds this app's own working copy, encrypted with the OS
 // keychain via safeStorage — only this Electron app can ever read it back.
 function readSecretsFile() {
-  return readJson(secretsFilePath(), { version: 1, secrets: {} });
+  return readJsonFile(secretsFilePath(), { version: 1, secrets: {} });
+}
+
+/**
+ * Both files are written atomically, but they're still two files: a crash
+ * between them leaves them briefly out of step. The order below decides which
+ * way that skew falls, so it isn't arbitrary.
+ *
+ * Secrets are written first on write and last on delete, which makes an
+ * orphaned secret (encrypted, unreferenced, invisible) the only reachable
+ * intermediate state. The opposite order would leave a connection listed in
+ * connections.json whose secret hasn't landed yet — the exact "connection
+ * exists but won't authenticate" state this change is otherwise about
+ * eliminating.
+ */
+function writeStoreFiles(connectionsFile, secretsFile, order) {
+  fs.mkdirSync(storageDir(), { recursive: true });
+  if (order === 'secrets-first') {
+    writeJsonFileAtomic(secretsFilePath(), secretsFile);
+    writeJsonFileAtomic(connectionsFilePath(), connectionsFile);
+  } else {
+    writeJsonFileAtomic(connectionsFilePath(), connectionsFile);
+    writeJsonFileAtomic(secretsFilePath(), secretsFile);
+  }
 }
 
 function encryptSecret(payload) {
@@ -55,29 +70,43 @@ function decryptSecret(encoded) {
 function getConnectionsForEngine() {
   const { connections } = readConnectionsFile();
   const { secrets } = readSecretsFile();
+  const { connections: built, failures } = buildEngineConnections(connections, secrets, decryptSecret);
 
-  return connections.map((meta) => {
-    const encoded = secrets[meta.id];
-    const secret = encoded ? decryptSecret(encoded) : undefined;
-    return {
-      id: meta.id,
-      name: meta.name,
-      url: meta.url,
-      authType: meta.authType,
-      matchHosts: meta.matchHosts,
-      tlsVerify: meta.tlsVerify,
-      token: secret?.authType === 'bearer' ? secret.token : undefined,
-      username: secret?.authType === 'basic' ? secret.username : meta.username,
-      password: secret?.authType === 'basic' ? secret.password : undefined,
-    };
-  });
+  for (const failure of failures) {
+    // console.error, not console.log — in --mcp-server mode stdout is the
+    // JSON-RPC channel. This is the only place the *reason* is visible; the
+    // per-call error the engine raises can only say the credential is missing.
+    console.error(
+      `Connection "${failure.name}" (${failure.id}): stored credential could not be decrypted, so this connection ` +
+        `will fail to authenticate until its credential is re-entered. Other connections are unaffected. ` +
+        `Cause: ${failure.reason}`,
+    );
+  }
+  return built;
 }
 
-/** Non-secret connection list for the UI table — never includes a password/token. */
+/**
+ * Non-secret connection list for the UI table — never includes a
+ * password/token. `secretError` distinguishes "a secret is stored but this
+ * machine can no longer decrypt it" from "no secret was ever saved": the two
+ * look identical to the engine, but only the first is fixed by re-entering
+ * the credential, so the UI has to be able to say which one it is.
+ */
 function listConnectionsForDisplay() {
   const { connections } = readConnectionsFile();
   const { secrets } = readSecretsFile();
-  return connections.map((c) => ({ ...c, hasSecret: Boolean(secrets[c.id]) }));
+  return connections.map((c) => {
+    const encoded = secrets[c.id];
+    let secretError;
+    if (encoded) {
+      try {
+        decryptSecret(encoded);
+      } catch (err) {
+        secretError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return { ...c, hasSecret: Boolean(encoded), ...(secretError ? { secretError } : {}) };
+  });
 }
 
 /**
@@ -89,7 +118,9 @@ function upsertConnection(draft) {
   const connectionsFile = readConnectionsFile();
   const secretsFile = readSecretsFile();
 
-  const now = draft.updatedAt ?? new Date(0).toISOString();
+  // The renderer's readDraft() never sets updatedAt, so the `?? new Date(0)`
+  // this replaces meant every connection was stamped 1970-01-01 in practice.
+  const now = draft.updatedAt ?? new Date().toISOString();
   const existingIndex = draft.id ? connectionsFile.connections.findIndex((c) => c.id === draft.id) : -1;
   const id = draft.id ?? crypto.randomUUID();
   const existing = existingIndex >= 0 ? connectionsFile.connections[existingIndex] : undefined;
@@ -122,9 +153,7 @@ function upsertConnection(draft) {
     secretsFile.secrets[id] = encryptSecret(payload);
   }
 
-  fs.mkdirSync(storageDir(), { recursive: true });
-  fs.writeFileSync(connectionsFilePath(), JSON.stringify(connectionsFile, null, 2), 'utf8');
-  fs.writeFileSync(secretsFilePath(), JSON.stringify(secretsFile, null, 2), 'utf8');
+  writeStoreFiles(connectionsFile, secretsFile, 'secrets-first');
 
   return { ...meta, hasSecret: Boolean(secretsFile.secrets[id]) };
 }
@@ -136,8 +165,7 @@ function deleteConnection(id) {
   connectionsFile.connections = connectionsFile.connections.filter((c) => c.id !== id);
   delete secretsFile.secrets[id];
 
-  fs.writeFileSync(connectionsFilePath(), JSON.stringify(connectionsFile, null, 2), 'utf8');
-  fs.writeFileSync(secretsFilePath(), JSON.stringify(secretsFile, null, 2), 'utf8');
+  writeStoreFiles(connectionsFile, secretsFile, 'connections-first');
 }
 
 module.exports = {
