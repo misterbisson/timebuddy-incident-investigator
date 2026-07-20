@@ -89,6 +89,46 @@ describe('compareToBaseline', () => {
     expect(result.briefExcursions).toEqual([]);
   });
 
+  // The reported failure: one lone error against all-zero controls produced
+  // zScore 1e8, classification 'statistically-unusual', and (via
+  // summarize_findings) verdict 'real-anomaly' at 'high' confidence. An error
+  // count legitimately 0 across every control window is the most common shape
+  // for this class of metric.
+  describe('all-zero baseline', () => {
+    const allZeroControls = [
+      { label: 'prior-hour', points: points(Array.from({ length: 10 }, () => 0)) },
+      { label: 'same-hour-yesterday', points: points(Array.from({ length: 10 }, () => 0)) },
+    ];
+
+    it('classifies a single event against an all-zero baseline as a presence change, not 1e8 sigma', () => {
+      const incident = points([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+      const result = compareToBaseline(incident, allZeroControls);
+
+      expect(result.classification).toBe('baseline-all-zero');
+      expect(Number.isNaN(result.zScore)).toBe(true);
+      expect(result.classification).not.toBe('statistically-unusual');
+    });
+
+    it('still reports the nonzero point as a brief excursion', () => {
+      // The useful signal for this shape: against an all-zero baseline the 2-sigma
+      // bar reduces to "any nonzero point", which is the right question to ask.
+      const result = compareToBaseline(points([0, 0, 0, 1]), allZeroControls);
+      expect(result.briefExcursions.length).toBeGreaterThan(0);
+    });
+
+    it('treats an all-zero incident against an all-zero baseline as common, not a presence change', () => {
+      const result = compareToBaseline(points([0, 0, 0, 0]), allZeroControls);
+      expect(result.classification).toBe('common-during-normal-operations');
+      expect(result.zScore).toBe(0);
+    });
+
+    it('does not fire for a nonzero baseline with zero variance (the 0.01*mean floor still applies)', () => {
+      const steady = [{ label: 'prior-hour', points: points([5, 5, 5, 5]) }];
+      const result = compareToBaseline(points([5, 5, 5, 5]), steady);
+      expect(result.classification).toBe('common-during-normal-operations');
+    });
+  });
+
   it('pools between-window variance, not just within-window variance, when control means differ (seasonality)', () => {
     // Each control window is individually rock-steady (stddev 0), but the
     // three windows' means differ by day-of-week seasonality (10 / 20 / 30).

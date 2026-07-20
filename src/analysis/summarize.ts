@@ -71,6 +71,51 @@ export function summarizeFindings(input: SummarizeFindingsInput): FindingsReport
     };
   }
 
+  // A metric that was flat zero across every control window and is nonzero now
+  // is real information, but it is not a sigma deviation and must never be
+  // scored as one — there is no baseline spread to be confident against. So
+  // this branch reports magnitude rather than z-score, and caps confidence at
+  // medium however strong the corroboration: "this never happened before and
+  // is happening now" is a genuine finding, and also the entire finding.
+  if (input.baseline.classification === 'baseline-all-zero') {
+    const { max, nonZeroCount, count } = input.baseline.incidentStats;
+    reasons.push(
+      `Every control window (prior hour/day/week) was flat zero; the incident window has ${nonZeroCount} nonzero ` +
+        `sample(s) of ${count}, peaking at ${max}. That's a presence change rather than a deviation — no baseline ` +
+        'spread exists to compute a meaningful z-score against, so judge this on magnitude and corroboration.',
+    );
+    if (confirmedCorrelated.length > 0) {
+      reasons.push(
+        `${confirmedCorrelated.length} correlated signal(s) moved in the same window: ${confirmedCorrelated
+          .slice(0, 5)
+          .map((c) => c.panelTitle ?? `panel ${c.panelId}`)
+          .join(', ')}.`,
+      );
+    }
+    if (input.thresholdCrossed !== true) {
+      missingData.push(
+        'Baseline was all zeros, so the usual statistical comparison does not apply — confirm whether this ' +
+          "magnitude is operationally significant for this metric, which the baseline can't tell you.",
+      );
+    }
+    const corroborated = input.thresholdCrossed === true || confirmedCorrelated.length > 0;
+    return {
+      verdict: input.thresholdCrossed === true ? 'real-anomaly' : 'inconclusive',
+      confidence: corroborated ? 'medium' : 'low',
+      reasons,
+      triggeredSignal: {
+        alertName: input.alertName,
+        labels: input.labels,
+        zScore: input.baseline.zScore,
+        classification: input.baseline.classification,
+      },
+      correlatedSignals: confirmedCorrelated,
+      likelyScope: describeScope(confirmedCorrelated),
+      evidence: input.evidence,
+      missingData,
+    };
+  }
+
   const unusual = input.baseline.classification === 'statistically-unusual';
   const zAbs = Math.abs(input.baseline.zScore);
   const briefExcursions = input.baseline.briefExcursions ?? [];

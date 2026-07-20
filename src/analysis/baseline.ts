@@ -39,7 +39,18 @@ function effectiveStddev(mean: number, stddev: number): number {
   return stddev || Math.abs(mean) * 0.01 || 1e-9;
 }
 
-export type BaselineClassification = 'statistically-unusual' | 'common-during-normal-operations' | 'insufficient-data';
+export type BaselineClassification =
+  | 'statistically-unusual'
+  | 'common-during-normal-operations'
+  | 'insufficient-data'
+  /**
+   * Every control window was flat zero and the incident window wasn't: a
+   * presence change rather than a deviation. `zScore` is NaN for this — a
+   * z-score needs spread to be meaningful, and there is none. Judge it on
+   * `incidentStats` magnitude plus corroboration (threshold crossing,
+   * correlated signals), not on sigma.
+   */
+  | 'baseline-all-zero';
 
 export interface BaselineComparison {
   incidentStats: SeriesStats;
@@ -108,6 +119,38 @@ export function compareToBaseline(
     ...findThresholdRuns(incidentPoints, pooledBaselineMean - 2 * stddev, 'below'),
     ...findThresholdRuns(incidentPoints, pooledBaselineMean + 2 * stddev, 'above'),
   ].sort((a, b) => a.startMs - b.startMs);
+
+  // A baseline that is flat zero across every control window carries no scale:
+  // effectiveStddev falls through to its 1e-9 epsilon, and any nonzero incident
+  // value divided by that is ~1e8 "sigma". That number is noise wearing the
+  // costume of precision — it says nothing about how unusual the event is,
+  // because there is no spread to be unusual relative to. An error count that
+  // is legitimately 0 across every control window is the most common shape for
+  // this class of metric, so this is exactly where a false "maximally
+  // confident anomaly" would be generated.
+  //
+  // What actually happened is a *presence* change: something that never
+  // occurred in any baseline window occurred in this one. That's reported as
+  // its own classification, with no z-score, and callers weigh it on magnitude
+  // and corroboration instead (see analysis/summarize.ts). briefExcursions
+  // still works and is the useful signal here — against an all-zero baseline
+  // its 2-sigma bar reduces to "any nonzero point", which is the right
+  // question for this shape.
+  //
+  // An all-zero incident against an all-zero baseline is not a presence change
+  // at all; it falls through to the normal path, where it scores 0 and reads
+  // as common, which is correct.
+  if (pooledBaselineMean === 0 && pooledBaselineStddev === 0 && incidentStats.nonZeroCount > 0) {
+    return {
+      incidentStats,
+      controlStats,
+      pooledBaselineMean,
+      pooledBaselineStddev,
+      zScore: NaN,
+      classification: 'baseline-all-zero',
+      briefExcursions,
+    };
+  }
 
   return {
     incidentStats,
