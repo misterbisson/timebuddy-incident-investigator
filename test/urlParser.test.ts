@@ -22,6 +22,20 @@ describe('parseGrafanaUrl', () => {
     expect(parsed).toMatchObject({ type: 'dashboard', uid: 'abc123', panelId: 3 });
   });
 
+  it("parses Grafana 11's scenes panel form (viewPanel=panel-3)", () => {
+    const parsed = parseGrafanaUrl('https://grafana.example.com/d/abc123/my-dashboard?viewPanel=panel-3&orgId=1');
+    expect(parsed).toMatchObject({ type: 'dashboard', uid: 'abc123', panelId: 3 });
+  });
+
+  it('throws a panel-id parse error rather than yielding NaN, which would surface as "panel not found"', () => {
+    expect(() => parseGrafanaUrl('https://grafana.example.com/d/abc123/slug?viewPanel=row-2')).toThrow(
+      /Could not parse a panel id from "row-2"/,
+    );
+    expect(() => parseGrafanaUrl('https://grafana.example.com/d/abc123/slug?viewPanel=3.5')).toThrow(
+      /Could not parse a panel id/,
+    );
+  });
+
   it('parses an alert rule view URL', () => {
     const parsed = parseGrafanaUrl('https://grafana.example.com/alerting/grafana/rule-uid-1/view?orgId=1');
     expect(parsed).toEqual({ type: 'alert-rule', ruleUid: 'rule-uid-1' });

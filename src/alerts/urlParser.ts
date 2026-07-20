@@ -29,6 +29,29 @@ function isSafeVariableValue(value: string): boolean {
   return !UNSAFE_VAR_VALUE_RE.test(value);
 }
 
+/**
+ * Grafana 11's scenes-based dashboards emit `viewPanel=panel-3` where earlier
+ * versions emitted `viewPanel=3` (the older numeric `panelId=3` d-solo form is
+ * unchanged). Both are the same panel id, so strip the prefix rather than
+ * treating the newer shape as unparseable.
+ *
+ * Throws rather than returning undefined for a value that's present but not a
+ * panel id: a bare `Number.parseInt` here yields NaN, which survives all the
+ * way to findPanel(), where `p.panelId === NaN` is never true — so a URL this
+ * function couldn't understand surfaces as "panel not found" for a panel that
+ * plainly exists, pointing the investigation at Grafana instead of at the URL.
+ */
+function parsePanelId(raw: string): number {
+  const panelId = Number(raw.replace(/^panel-/, ''));
+  if (!Number.isInteger(panelId)) {
+    throw new Error(
+      `Could not parse a panel id from "${raw}" — expected a number ("viewPanel=3", "panelId=3") or Grafana 11's ` +
+        'scenes form ("viewPanel=panel-3")',
+    );
+  }
+  return panelId;
+}
+
 export interface ParsedAlertRuleUrl {
   type: 'alert-rule';
   ruleUid: string;
@@ -64,7 +87,7 @@ export function parseGrafanaUrl(rawUrl: string): ParsedGrafanaUrl {
       type: 'dashboard',
       uid: uid!,
       slug,
-      panelId: panelIdRaw ? Number.parseInt(panelIdRaw, 10) : undefined,
+      panelId: panelIdRaw ? parsePanelId(panelIdRaw) : undefined,
       vars,
       ...(rejectedVars.size > 0 ? { rejectedVars: [...rejectedVars] } : {}),
       from: url.searchParams.get('from') ?? undefined,
