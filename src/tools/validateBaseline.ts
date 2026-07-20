@@ -4,6 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import { computeWindows, excludeOverlapping, type TimeWindow } from '../query/windows.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { compareToBaseline } from '../analysis/baseline.js';
+import { clampRunList } from '../security/limits.js';
 import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorText, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
@@ -120,10 +121,16 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
                 Math.abs(c.stats.mean - comparison.incidentStats.mean) <= (c.stats.stddev || 1) * 1.5,
             );
 
+            // Bounded for the same reason execute_query_window bounds `runs` —
+            // crossing count, not point count, sets this list's length.
+            const excursions = clampRunList(comparison.briefExcursions);
+
             return {
               refId: incidentSeries.refId,
               labels: incidentSeries.labels,
               ...comparison,
+              briefExcursions: excursions.list,
+              ...(excursions.truncated ? { briefExcursionsTotal: excursions.total } : {}),
               recurringPatternNote:
                 comparison.classification === 'common-during-normal-operations' && recurringMatch
                   ? `Magnitude is similar to the "${recurringMatch.label}" window — looks like a recurring pattern, not a fresh anomaly.`
