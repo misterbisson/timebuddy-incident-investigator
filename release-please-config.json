@@ -8,7 +8,8 @@
       "pull-request-title-pattern": "chore(release): ${version}",
       "extra-files": [
         { "type": "json", "path": "electron/package.json", "jsonpath": "$.version" },
-        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
+        "src/server.ts"
       ]
     }
   }

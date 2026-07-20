@@ -35,8 +35,12 @@ jobs:
       # workspace, whose postinstall downloads the ~100MB Electron binary —
       # pure cost for this job, since nothing below launches the app. The
       # Electron-specific test (electron/test/mcpServerMode.mjs) needs that
-      # binary and a display server, so it belongs with the packaging jobs in
-      # release.yml rather than here.
+      # binary and a display server, so it doesn't belong here.
+      #
+      # It doesn't currently run anywhere else either: release.yml's
+      # build-pr/release jobs run electron-builder but never invoke it, so it
+      # only runs when someone types it by hand. Tracked in #97 — don't read a
+      # green CI as evidence that the packaged app still lists the right tools.
       - name: Install dependencies
         run: npm ci --workspaces=false --include-workspace-root
 

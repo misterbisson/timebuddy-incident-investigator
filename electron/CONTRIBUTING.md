@@ -36,6 +36,13 @@ No live Grafana instance is required; the seeded connection points at a placehol
 specifically so the test can assert the call got *past* connection resolution, not that it
 succeeded against a real Grafana.
 
+**This test is manual-only — no CI job runs it.** `ci.yml` deliberately installs with
+`--workspaces=false`, so there's no Electron binary there, and `release.yml`'s build jobs
+run `electron-builder` but never invoke this script. Run it yourself before merging
+anything that changes the tool set, connection storage, or `--mcp-server` startup; a green
+CI says nothing about any of them. Tracked in
+[#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
+
 ## Building, signing, and releasing
 
 Packaging is `electron-builder`, configured in this package's `build` field in
@@ -73,8 +80,11 @@ PR) is what actually cuts the release: release-please bumps `package.json`,
 `electron/package.json`, and `.claude-plugin/plugin.json` in lockstep (`extra-files`
 entries in `release-please-config.json` keep the latter two in sync — the plugin one
 matters because `electron/package.json` ships that directory as `extraResources`, so a
-stale version there would be visible to anyone who installed the bundled plugin), updates
-`CHANGELOG.md`, and tags the merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
+stale version there would be visible to anyone who installed the bundled plugin), bumps
+the version string `src/server.ts` reports to MCP clients in the `initialize` handshake
+(via release-please's generic updater and the `x-release-please-version` marker comment,
+since a `.ts` file can't take a `jsonpath` entry), updates `CHANGELOG.md`, and tags the
+merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
 published, checked out at that new tag, and does the actual platform builds +
 `electron-builder --publish always` (so `electron-updater` — not yet wired into `main.js`
 — can eventually point at those release artifacts; release-please itself is configured
