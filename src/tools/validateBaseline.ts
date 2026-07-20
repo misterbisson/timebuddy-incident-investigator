@@ -23,7 +23,12 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
       description:
         'Compares the incident window against prior-hour, same-hour-yesterday, and same-hour-last-week control ' +
         'windows (or custom offsets) for one panel, per series. Classifies each series as "statistically-unusual" ' +
-        '(z-score beyond threshold vs. the pooled baseline) or "common-during-normal-operations", and flags when a ' +
+        '(z-score beyond threshold vs. the pooled baseline) or "common-during-normal-operations". ' +
+        'A series whose every control window was flat zero classifies as "baseline-all-zero", with "zScore" null ' +
+        'instead of a number: that\'s a presence change (something that never happened is happening), not a ' +
+        'deviation, and no meaningful z-score exists without baseline spread, so null here means "not applicable" ' +
+        'rather than zero — judge it on "incidentStats" magnitude and ' +
+        'corroboration, and don\'t describe it as statistically unusual. It also flags when a ' +
         'similar-magnitude window recurs daily/weekly so recurring patterns aren\'t mistaken for a fresh anomaly. ' +
         'Always check each series\' "briefExcursions" too, even when classification says common — that ' +
         'classification is based on the whole window\'s *mean*, which can dilute a real, sharp, short-lived event ' +

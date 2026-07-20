@@ -35,7 +35,7 @@ const baselineSchema = z.object({
   pooledBaselineMean: nullableNumber,
   pooledBaselineStddev: nullableNumber,
   zScore: nullableNumber,
-  classification: z.enum(['statistically-unusual', 'common-during-normal-operations', 'insufficient-data']),
+  classification: z.enum(['statistically-unusual', 'common-during-normal-operations', 'insufficient-data', 'baseline-all-zero']),
   briefExcursions: z
     .array(thresholdRunSchema)
     .optional()

@@ -129,6 +129,17 @@ skill exists to handle for them.
      short-lived event (e.g. a health signal fully down for a few minutes inside a much longer
      window) into looking routine. `briefExcursions` is a separate, point-level check against the
      same baseline and will still catch it. Don't just trust a "common" label at face value.
+   - **`classification: baseline-all-zero` means there is no baseline to compare against.** Every
+     control window was flat zero and the incident window isn't — something that never happened
+     is happening. That's real information, but it is *not* a statistical result: `zScore` comes
+     back as `null` (there's no meaningful value to report, and JSON has no `NaN`), and no
+     number could make the finding statistically strong anyway, because there's no spread to be
+     strong relative to. A `null` `zScore` here means "not applicable", not "zero" and not
+     "missing data" — that's `insufficient-data`, a different classification.
+     Report it as a presence change, cite the actual numbers
+     from `incidentStats` (peak, nonzero sample count) rather than any sigma figure, and lean on
+     corroboration — did the alert's own threshold cross, did anything correlate — to decide
+     whether it matters. Don't describe it as "highly unusual" or similar; you don't know that.
    - **A `runsTotal` or `briefExcursionsTotal` field means the list next to it was truncated.**
      Both appear only when a series produced more than 1000 threshold crossings, and both report
      the real count. Don't read the truncated list as the complete set, and don't reason about
