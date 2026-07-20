@@ -32,6 +32,10 @@ export function clampMaxDataPoints(requested: number | undefined, config: Config
  * connection rather than just being slow. Downsamples with a uniform stride, always keeping
  * the last point so the window's end boundary stays exact; `pointsTotal` reports the
  * untruncated count so callers can tell downsampling happened.
+ *
+ * Apply this where points are *emitted* to the model, not at the query boundary: every
+ * analysis in analysis/ reads the same series and needs it at full resolution (see the note
+ * in query/executor.ts).
  */
 export function clampSeriesPoints(series: QuerySeries[], config: Config): QuerySeries[] {
   return series.map((s) => {
@@ -47,4 +51,24 @@ export function clampSeriesPoints(series: QuerySeries[], config: Config): QueryS
     points.push(s.points[pointsTotal - 1]!);
     return { ...s, points, pointsTotal };
   });
+}
+
+/**
+ * Companion cap for the run/excursion lists derived from a series. Those are
+ * emitted as arrays too, and their length is bounded by the number of threshold
+ * *crossings* rather than by clampSeriesPoints — a noisy signal hovering right
+ * at the bar can cross on nearly every sample. While analyses ran on already-
+ * downsampled points this was incidentally capped at maxDataPoints/2; now that
+ * they see the full series (which is the point of that change — short runs were
+ * being missed), it needs its own bound.
+ *
+ * Generous on purpose: any real incident's run list is orders of magnitude
+ * under this, so hitting it means the series is pathological, and the total is
+ * reported alongside so a truncated list never reads as a complete one.
+ */
+export const MAX_RETURNED_RUNS = 1000;
+
+export function clampRunList<T>(runs: T[]): { list: T[]; total: number; truncated: boolean } {
+  if (runs.length <= MAX_RETURNED_RUNS) return { list: runs, total: runs.length, truncated: false };
+  return { list: runs.slice(0, MAX_RETURNED_RUNS), total: runs.length, truncated: true };
 }

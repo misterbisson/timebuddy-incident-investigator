@@ -2,7 +2,7 @@ import type { Config } from '../config.js';
 import type { GrafanaClient } from '../grafana/client.js';
 import type { DsQueryRequest, DsQueryResponse, DsQueryTarget } from '../grafana/types.js';
 import type { ResolvedTarget } from '../dashboards/panelQueries.js';
-import { clampMaxDataPoints, clampSeriesPoints, enforceWindowLimit } from '../security/limits.js';
+import { clampMaxDataPoints, enforceWindowLimit } from '../security/limits.js';
 import type { TimeWindow } from './windows.js';
 
 export interface SeriesPoint {
@@ -83,7 +83,18 @@ export async function executeQueryWindow(
   };
   const response = await client.queryDs(request);
   const { series, errors } = parseFrames(response);
-  return { window, series: clampSeriesPoints(series, config), errors };
+  // Full, un-downsampled series on purpose. clampSeriesPoints is a *response*
+  // shaping step and belongs at the point where points are emitted to the
+  // model (execute_query_window and render_dashboard both apply it), not here:
+  // clamping at this boundary also truncated the input to every analysis
+  // downstream, so computeStats/findThresholdRuns/compareToBaseline all ran on
+  // a subsample. A raw InfluxQL target with no `GROUP BY time()` returns ~21.6k
+  // points over 6h against a 2000 default, and a short outage lands entirely
+  // between surviving samples — the tool then reports "never left full health"
+  // during a real one. Callers that analyze but don't emit points
+  // (validate_baseline, detect_correlated_anomalies) need the full series and
+  // return no raw points, so nothing here reaches the model unclamped.
+  return { window, series, errors };
 }
 
 /** Executes the same targets across several windows (incident + baselines) in parallel. */
