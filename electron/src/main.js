@@ -3,6 +3,7 @@ const path = require('node:path');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
+const { originOf, attachAuthHeaders } = require('./authGuard.js');
 
 // Populated once runMcpServer() has dynamically imported the engine package —
 // null in the normal (non --mcp-server) GUI launch, since there's no
@@ -89,37 +90,14 @@ function buildMenu() {
 // the same way screenshotter.js authenticates its one-shot capture windows —
 // injecting a connection's own Authorization header via webRequest — but
 // long-lived instead of destroyed after one call, and picking which
-// connection's header to inject per-request by matching the request's host
+// connection's header to inject per-request by matching the request's origin
 // against every configured connection's URL, since one <webview> may be
 // pointed at panels from different connections over the life of the window.
 function setupLiveViewSession(buildAuthHeader) {
   const ses = session.fromPartition('persist:activity-live-view', { cache: false });
-  ses.webRequest.onBeforeSendHeaders((details, callback) => {
-    let requestHost;
-    try {
-      requestHost = new URL(details.url).host;
-    } catch {
-      callback({});
-      return;
-    }
-    const connection = store.getConnectionsForEngine().find((c) => {
-      try {
-        return new URL(c.url).host === requestHost;
-      } catch {
-        return false;
-      }
-    });
-    if (!connection) {
-      callback({});
-      return;
-    }
-    try {
-      callback({ requestHeaders: { ...details.requestHeaders, Authorization: buildAuthHeader(connection) } });
-    } catch {
-      // Misconfigured connection (e.g. bearer auth with no token saved yet) —
-      // load without auth rather than crash the whole live-view session.
-      callback({});
-    }
+  attachAuthHeaders(ses, (origin) => {
+    const connection = store.getConnectionsForEngine().find((c) => originOf(c.url) === origin);
+    return connection ? { Authorization: buildAuthHeader(connection) } : null;
   });
 }
 
