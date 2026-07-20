@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import type { DsQueryRequest, DsQueryResponse } from '../grafana/types.js';
 import type { GrafanaClient } from '../grafana/client.js';
-import { resolveToolClient } from './shared.js';
+import { resolveToolClient, toolErrorResult } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -173,7 +173,7 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        return toolErrorResult(err, config);
       }
     },
   );

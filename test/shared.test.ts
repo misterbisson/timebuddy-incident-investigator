@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, toolErrorText, windowSizeWarning } from '../src/tools/shared.js';
+import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, toolErrorResult, windowSizeWarning } from '../src/tools/shared.js';
+import type { Config } from '../src/config.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { ConnectionRegistry } from '../src/grafana/registry.js';
 import type { GrafanaConnection } from '../src/config.js';
@@ -83,18 +84,56 @@ describe('dashboardUrlFor', () => {
   });
 });
 
-describe('toolErrorText', () => {
+describe('toolErrorResult', () => {
+  /** Config with only the fields toolErrorResult reads. */
+  const cfg = (redactionPatterns: RegExp[] = []) => ({ redactionPatterns }) as unknown as Config;
+  const textOf = (r: { content: Array<{ text: string }> }) => r.content[0]!.text;
+
   it('formats a bare error message when no url is available', () => {
-    expect(toolErrorText(new Error('boom'))).toBe('Error: boom');
+    const result = toolErrorResult(new Error('boom'), cfg());
+    expect(textOf(result)).toBe('Error: boom');
+    expect(result.isError).toBe(true);
   });
 
   it('appends the dashboard/panel url when one was already resolved', () => {
-    const text = toolErrorText(new Error('timed out'), 'https://grafana.example.com/d/abc123?viewPanel=4');
-    expect(text).toBe('Error: timed out\n\nDashboard/panel: https://grafana.example.com/d/abc123?viewPanel=4');
+    const result = toolErrorResult(new Error('timed out'), cfg(), 'https://grafana.example.com/d/abc123?viewPanel=4');
+    expect(textOf(result)).toBe(
+      'Error: timed out\n\nDashboard/panel: https://grafana.example.com/d/abc123?viewPanel=4',
+    );
   });
 
   it('handles a non-Error thrown value', () => {
-    expect(toolErrorText('plain string error')).toBe('Error: plain string error');
+    expect(textOf(toolErrorResult('plain string error', cfg()))).toBe('Error: plain string error');
+  });
+
+  // The reported leak: grafana/client.ts embeds up to 500 chars of the raw
+  // response body in GrafanaApiError, and a datasource rejecting a query
+  // echoes back the query text with template variables already substituted.
+  it('redacts a configured pattern out of an echoed datasource error', () => {
+    const err = new Error(
+      'Grafana POST /api/ds/query failed: 400 error parsing query: ' +
+        'SELECT mean("v") FROM "m" WHERE "customer" = \'acme-corp-4417\'',
+    );
+    const text = textOf(toolErrorResult(err, cfg([/acme-corp-\d+/g])));
+    expect(text).not.toContain('acme-corp-4417');
+    expect(text).toContain('Grafana POST /api/ds/query failed: 400');
+  });
+
+  // Boundary worth pinning: redact() masks secret-shaped *keys* when walking an
+  // object, but redactString only ever applies the configured patterns — so
+  // free text is untouched with none configured. That's true of success paths
+  // too, and predates this change; the point here is that routing errors
+  // through redact() buys the configured-pattern guarantee and nothing more.
+  it('leaves error text alone when no redaction patterns are configured', () => {
+    const text = textOf(toolErrorResult(new Error('failed with token=abcd1234secretvalue'), cfg()));
+    expect(text).toBe('Error: failed with token=abcd1234secretvalue');
+  });
+
+  it('redacts the url too, not just the message', () => {
+    const text = textOf(
+      toolErrorResult(new Error('boom'), cfg([/acme-corp-\d+/g]), 'https://grafana.example.com/d/abc?var-cust=acme-corp-4417'),
+    );
+    expect(text).not.toContain('acme-corp-4417');
   });
 });
 
