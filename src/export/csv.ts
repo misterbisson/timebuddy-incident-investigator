@@ -4,13 +4,24 @@ import type { QuerySeries } from '../query/executor.js';
 /**
  * A cell that a spreadsheet would evaluate rather than display. Excel,
  * LibreOffice, and Google Sheets all treat a leading =, +, -, or @ as the
- * start of a formula. The whitespace characters are here for a second reason:
- * they're stripped *before* that check, so they smuggle the character after
- * them into the leading position. The whole ASCII whitespace class is included
- * rather than just tab and CR — LF is equally reachable (frameToCsv passes
- * arbitrary string fields through verbatim) and costs nothing to cover.
+ * start of a formula.
  *
- * A leading *space* is deliberately not in this set, and that's not an
+ * The leading `[\t\r\n\v\f]*` is the second half of the story: spreadsheets
+ * strip that run of ASCII control-whitespace *before* the formula check, so a
+ * formula character hiding behind it (`"\t=1+1"`) still reaches the leading
+ * position and must be neutralized. But the run only matters when a formula
+ * character actually follows: a cell that legitimately begins with a tab or
+ * newline and *then ordinary text* (`"\tHello"`) is not a formula and must NOT
+ * be neutralized — the earlier `/^[...\t\r\n\v\f]/` form triggered on any
+ * leading whitespace regardless of what came next, adding a spurious
+ * apostrophe to exactly those cells (issue #106). Requiring the formula char
+ * after the run fixes that; the two character classes are disjoint, so this
+ * stays a single linear-time match with no backtracking. The whole ASCII
+ * control-whitespace class is covered rather than just tab and CR — LF/VT/FF
+ * are equally reachable (frameToCsv passes arbitrary string fields through
+ * verbatim) and cost nothing to include.
+ *
+ * A leading *space* is deliberately not in the stripped set, and that's not an
  * oversight: spreadsheets don't strip it before formula detection, so the
  * space is itself the neutralizer. Same for NBSP.
  *
@@ -21,7 +32,7 @@ import type { QuerySeries } from '../query/executor.js';
  * Grafana-supplied refId/label values, and frameToCsv passes through arbitrary
  * string fields from query results.
  */
-const FORMULA_LEAD = /^[=+\-@\t\r\n\v\f]/;
+const FORMULA_LEAD = /^[\t\r\n\v\f]*[=+\-@]/;
 
 /**
  * Numbers must survive this untouched. `-1.5` is both a legitimate value and a
