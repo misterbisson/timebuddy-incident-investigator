@@ -136,7 +136,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         panelTitle: z.string().optional().describe('Disambiguates panelId when a dashboard has more than one panel sharing that id'),
         fromMs: z.number().optional().describe('Window start, epoch ms - overrides the url\'s own "from" when both are given'),
         toMs: z.number().optional().describe('Window end, epoch ms - overrides the url\'s own "to" when both are given'),
-        variableOverrides: z.record(z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
+        variableOverrides: z.record(z.string(), z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Export panel CSV' },
