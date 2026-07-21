@@ -185,4 +185,17 @@ describe('screenshot_panel result, persistence, and errors', () => {
     expect(text).toContain('Panel 999 not found');
     expect(text).toContain('grafana.example.com');
   });
+
+  // The dashboard is known by the time panelId is found missing, so the error
+  // still carries a clickable dashboard link — the resolve prologue must report
+  // the resolved dashboardUid before, not after, the panelId check.
+  it('still attaches the dashboard link when only panelId is missing', async () => {
+    const { call } = setup();
+    const result = (await call('screenshot_panel', { dashboardUid: 'reqs', fromMs: 1_000_000, toMs: 2_000_000, connection: 'test' })) as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    const text = result.content.find((c) => c.type === 'text')!.text!;
+    expect(text).toContain('panelId');
+    expect(text).toContain('grafana.example.com');
+  });
 });

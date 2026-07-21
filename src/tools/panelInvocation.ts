@@ -129,10 +129,13 @@ export async function resolvePanelInvocation(
   if (!dashboardUid) {
     throw new Error('Must provide either "url" (a dashboard or alert-rule link) or "dashboardUid".');
   }
+  // Report the resolved dashboard before the panelId check so a caller's error
+  // path (e.g. screenshot_panel's toolErrorResult) can still attach a clickable
+  // dashboard link when only panelId is missing — matching pre-refactor behavior.
+  onContext?.({ connectionId, dashboardUid });
   if (panelId === undefined) {
     throw new Error('Must provide "panelId" (or a url that already carries one, e.g. a "viewPanel"/"panelId" link).');
   }
-  onContext?.({ connectionId, dashboardUid });
 
   const { dashboard } = await client.getDashboard(dashboardUid);
   const panel = findPanel(dashboard, panelId, input.panelTitle);

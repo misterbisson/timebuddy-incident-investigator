@@ -78,6 +78,11 @@ function selectEntry(id) {
   const canExport = Boolean(entry.url) && entry.panelId != null;
   exportCsvBtn.classList.toggle('hidden', !canExport);
   captureScreenshotBtn.classList.toggle('hidden', !canExport);
+  // The busy/disabled state is global to the two buttons, but a run only
+  // re-enables them when its own entry is still selected. Reset it on every
+  // switch so an export left in-flight on a prior entry can't leave the buttons
+  // permanently disabled for the panel now on screen.
+  setExportBusy(false);
   resetExportStatus();
   webviewEl.classList.add('hidden');
   webviewEl.src = 'about:blank';
