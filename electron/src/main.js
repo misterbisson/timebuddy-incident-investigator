@@ -3,7 +3,7 @@ const path = require('node:path');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
-const { originOf, attachAuthHeaders } = require('./authGuard.js');
+const { attachAuthHeaders } = require('./authGuard.js');
 
 // Populated once runMcpServer() has dynamically imported the engine package —
 // null in the normal (non --mcp-server) GUI launch, since there's no
@@ -90,13 +90,20 @@ function buildMenu() {
 // the same way screenshotter.js authenticates its one-shot capture windows —
 // injecting a connection's own Authorization header via webRequest — but
 // long-lived instead of destroyed after one call, and picking which
-// connection's header to inject per-request by matching the request's origin
-// against every configured connection's URL, since one <webview> may be
+// connection's header to inject per-request, since one <webview> may be
 // pointed at panels from different connections over the life of the window.
-function setupLiveViewSession(buildAuthHeader) {
+//
+// The per-request match goes through the engine's originMatchesConnection so a
+// connection's `matchHosts` aliases are honored here exactly as they are in
+// tool-call connection resolution — a load-balancer/vanity alias the user was
+// told to add there (the #83 error message points at matchHosts) would
+// otherwise render an unauthenticated panel here, silently. originMatchesConnection
+// pins the alias to the connection's own scheme, so this never widens the
+// origin guarantee attachAuthHeaders exists to keep (see authGuard.js / #85).
+function setupLiveViewSession(buildAuthHeader, originMatchesConnection) {
   const ses = session.fromPartition('persist:activity-live-view', { cache: false });
   attachAuthHeaders(ses, (origin) => {
-    const connection = store.getConnectionsForEngine().find((c) => originOf(c.url) === origin);
+    const connection = store.getConnectionsForEngine().find((c) => originMatchesConnection(origin, c));
     return connection ? { Authorization: buildAuthHeader(connection) } : null;
   });
 }
@@ -127,13 +134,13 @@ async function runMcpServer() {
   const startupConnections = store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
-  const { startMcpServer, createActivityLog, buildAuthHeader } = await import('timebuddy-incident-investigator');
+  const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection } = await import('timebuddy-incident-investigator');
 
   activityLog = createActivityLog();
   activityLog.onEntry((entry) => {
     getOrCreateActivityWindow().webContents.send('activity:entry', entry);
   });
-  setupLiveViewSession(buildAuthHeader);
+  setupLiveViewSession(buildAuthHeader, originMatchesConnection);
 
   // Pass a thunk, not the snapshot above, so the engine re-reads
   // connections.json/secrets.enc.json on every tool call — a connection

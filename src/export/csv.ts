@@ -148,6 +148,109 @@ export function parseCsvLine(line: string): string[] {
 }
 
 /**
+ * Full RFC 4180 parse of an entire CSV *document* into rows of string fields.
+ * Distinct from parseCsvLine (one line, metadata only) precisely because it is
+ * document-level: a quoted field may contain literal CR/LF, so field/row
+ * boundaries can't be found by splitting on newlines first — the quote state
+ * has to be tracked across the whole text. Handles commas and escaped quotes
+ * ("") inside quoted fields, and accepts \r\n, lone \n, and lone \r as record
+ * separators. A trailing record separator does not produce a spurious empty
+ * final row; a genuinely blank interior line becomes a single empty field.
+ *
+ * Used to neutralize Grafana's own captured "Download CSV" against spreadsheet
+ * formula injection (see neutralizeCsvDocument) — the one path that previously
+ * wrote bytes straight through. Does NOT strip a leading BOM; the caller keeps
+ * that concern so it can re-emit it (see neutralizeCsvDocument).
+ */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  // Whether anything at all (a char, or a field-separating comma) has been seen
+  // since the last record terminator — so EOF after a terminator emits no row,
+  // but "a,b" with no trailing newline still emits its row.
+  let rowStarted = false;
+
+  const endField = () => {
+    fields.push(current);
+    current = '';
+  };
+  const endRow = () => {
+    endField();
+    rows.push(fields);
+    fields = [];
+    rowStarted = false;
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += c;
+      }
+      rowStarted = true;
+      continue;
+    }
+    if (c === '"') {
+      inQuotes = true;
+      rowStarted = true;
+    } else if (c === ',') {
+      endField();
+      rowStarted = true;
+    } else if (c === '\n') {
+      endRow();
+    } else if (c === '\r') {
+      if (text[i + 1] === '\n') i++;
+      endRow();
+    } else {
+      current += c;
+      rowStarted = true;
+    }
+  }
+  if (rowStarted || current !== '' || fields.length > 0) endRow();
+  return rows;
+}
+
+/**
+ * Neutralizes a whole CSV document this server captured from Grafana byte-for-
+ * byte (export_panel_csv's browser-transformed path) against spreadsheet
+ * formula injection: it parses the document (parseCsv), then re-serializes it
+ * with every cell run through escapeCsvField — the same neutralize-then-quote
+ * this server's own exports use.
+ *
+ * This is deliberately a parse/re-serialize round-trip, the tradeoff #91
+ * settled: the result is *semantically* identical to Grafana's Download CSV but
+ * no longer byte-for-byte identical — field quoting is minimized (only fields
+ * needing it are quoted) and line endings are normalized to CRLF. A leading
+ * UTF-8 BOM (which Excel uses to detect encoding) is preserved when present, so
+ * that property doesn't silently change. `redact()` is applied later by the
+ * caller, on the serialized text, exactly as it was on the raw bytes before.
+ *
+ * Returns the parsed rows alongside the text so the caller can report accurate
+ * row/column metadata without parsing twice — and, unlike the old line-split
+ * heuristic, these counts are correct even when a field spans multiple lines.
+ */
+// U+FEFF, written as an escape rather than a literal so it stays visible in
+// source (an invisible BOM char in a string literal is a maintenance hazard).
+const BOM = String.fromCharCode(0xfeff);
+
+export function neutralizeCsvDocument(text: string): { csv: string; rows: string[][] } {
+  const hadBom = text.charCodeAt(0) === 0xfeff;
+  const rows = parseCsv(hadBom ? text.slice(1) : text);
+  const body = rows.map(toCsvRow).join('\r\n');
+  const csv = (hadBom ? BOM : '') + (rows.length > 0 ? body + '\r\n' : '');
+  return { csv, rows };
+}
+
+/**
  * "As-is" CSV for one raw Grafana data frame (a table panel's query result):
  * every field becomes a column, in schema order — including string/boolean
  * fields, unlike query/executor.ts's parseFrames which only extracts number

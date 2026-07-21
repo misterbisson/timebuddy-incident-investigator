@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSeriesColumnNames, frameToCsv, parseCsvLine, seriesToCsv } from '../src/export/csv.js';
+import { buildSeriesColumnNames, frameToCsv, neutralizeCsvDocument, parseCsv, parseCsvLine, seriesToCsv } from '../src/export/csv.js';
 import type { QuerySeries } from '../src/query/executor.js';
 import type { GrafanaFrame } from '../src/grafana/types.js';
 
@@ -216,5 +216,100 @@ describe('formula neutralization edge cases the first pass missed', () => {
 
   it('neutralizes a trailing-whitespace number, which is not a value we need to preserve', () => {
     expect(frameToCsv(cells(['-1.5 ']))).toContain("'-1.5 ");
+  });
+});
+
+describe('parseCsv (document-level RFC 4180)', () => {
+  it('parses simple CRLF rows', () => {
+    expect(parseCsv('a,b\r\nc,d\r\n')).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+    ]);
+  });
+
+  it('keeps a comma inside a quoted field', () => {
+    expect(parseCsv('"a,b",c')).toEqual([['a,b', 'c']]);
+  });
+
+  it('keeps a newline inside a quoted field as one field on one row', () => {
+    // The whole reason this can't be a line-oriented parser: the CRLF here is
+    // data, not a record separator, so this is ONE row of two fields.
+    expect(parseCsv('"line1\r\nline2",b\r\n')).toEqual([['line1\r\nline2', 'b']]);
+  });
+
+  it('unescapes doubled quotes inside a quoted field', () => {
+    expect(parseCsv('"he said ""hi""",x')).toEqual([['he said "hi"', 'x']]);
+  });
+
+  it('does not emit a spurious empty final row for a trailing separator', () => {
+    expect(parseCsv('a\r\n')).toEqual([['a']]);
+    expect(parseCsv('a,b\r\n')).toEqual([['a', 'b']]);
+  });
+
+  it('emits the final row when there is no trailing separator', () => {
+    expect(parseCsv('a,b')).toEqual([['a', 'b']]);
+  });
+
+  it('accepts a lone \\n and a lone \\r as record separators', () => {
+    expect(parseCsv('a\nb')).toEqual([['a'], ['b']]);
+    expect(parseCsv('a\rb')).toEqual([['a'], ['b']]);
+  });
+
+  it('preserves empty fields', () => {
+    expect(parseCsv('a,,b')).toEqual([['a', '', 'b']]);
+  });
+
+  it('represents a blank interior line as a single empty field', () => {
+    expect(parseCsv('a\r\n\r\nb')).toEqual([['a'], [''], ['b']]);
+  });
+
+  it('returns no rows for empty input', () => {
+    expect(parseCsv('')).toEqual([]);
+  });
+});
+
+describe('neutralizeCsvDocument (Grafana-captured CSV path, issue #91)', () => {
+  it('round-trips a plain document, minimizing quotes and normalizing to CRLF', () => {
+    const { csv, rows } = neutralizeCsvDocument('"a","b"\nx,y\n');
+    expect(csv).toBe('a,b\r\nx,y\r\n');
+    expect(rows).toEqual([
+      ['a', 'b'],
+      ['x', 'y'],
+    ]);
+  });
+
+  it('neutralizes a formula-leading cell with a leading apostrophe', () => {
+    const { csv, rows } = neutralizeCsvDocument('h\r\n=1+1\r\n');
+    expect(csv).toBe("h\r\n'=1+1\r\n");
+    // The returned rows are the raw parse (pre-neutralization) — the caller
+    // neutralizes them itself for column reporting.
+    expect(rows[1]).toEqual(['=1+1']);
+  });
+
+  it('neutralizes a formula lead that was hidden inside a quoted field', () => {
+    // "=1,2" is quoted only because of its comma; the = is still a formula lead
+    // once parsed, and must be neutralized (and then re-quoted for the comma).
+    expect(neutralizeCsvDocument('h\r\n"=1,2"\r\n').csv).toBe('h\r\n"\'=1,2"\r\n');
+  });
+
+  it('re-quotes a field whose value contains a newline, counting it as one row', () => {
+    const { csv, rows } = neutralizeCsvDocument('h\r\n"a\nb"\r\n');
+    expect(csv).toBe('h\r\n"a\nb"\r\n');
+    expect(rows).toHaveLength(2); // header + one data row, not three lines
+  });
+
+  it('leaves a legitimate negative number untouched', () => {
+    expect(neutralizeCsvDocument('h\r\n-1.5\r\n').csv).toBe('h\r\n-1.5\r\n');
+  });
+
+  it('preserves a leading UTF-8 BOM', () => {
+    const bom = String.fromCharCode(0xfeff);
+    const { csv } = neutralizeCsvDocument(`${bom}a,b\r\n`);
+    expect(csv.charCodeAt(0)).toBe(0xfeff);
+    expect(csv).toBe(`${bom}a,b\r\n`);
+  });
+
+  it('returns empty output for empty input', () => {
+    expect(neutralizeCsvDocument('')).toEqual({ csv: '', rows: [] });
   });
 });
