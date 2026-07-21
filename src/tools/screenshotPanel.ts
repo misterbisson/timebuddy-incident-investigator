@@ -4,20 +4,20 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import type { Screenshotter } from '../screenshot/types.js';
-import { parseGrafanaUrl } from '../alerts/urlParser.js';
-import { findPanel } from '../dashboards/panelQueries.js';
-import { mergeVariableOverrides } from '../dashboards/variables.js';
-import { buildAuthHeader } from '../grafana/client.js';
-import { buildSoloPanelUrl } from '../grafana/urlBuilder.js';
-import { clampScreenshotDimension, enforceWindowLimit, MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../security/limits.js';
-import { dashboardUrlFor, recordActivity, resolveToolClient, toolErrorResult } from './shared.js';
-import { resolveRenderWindow } from './renderDashboard.js';
+import { MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../security/limits.js';
+import { dashboardUrlFor, recordActivity, toolErrorResult } from './shared.js';
+import {
+  DEFAULT_SCREENSHOT_HEIGHT,
+  DEFAULT_SCREENSHOT_WIDTH,
+  generatePanelPng,
+  resolvePanelInvocation,
+} from './panelInvocation.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 import type { Config } from '../config.js';
 
-const DEFAULT_WIDTH = 1600;
-const DEFAULT_HEIGHT = 900;
+const DEFAULT_WIDTH = DEFAULT_SCREENSHOT_WIDTH;
+const DEFAULT_HEIGHT = DEFAULT_SCREENSHOT_HEIGHT;
 
 /**
  * Persists the captured PNG to disk and returns its absolute path. The MCP
@@ -82,122 +82,53 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('screenshot_panel', { url, dashboardUid: inputDashboardUid, panelId: inputPanelId }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection, hintUrl: url });
-          resolvedConnectionId = connectionId;
+          const inv = await resolvePanelInvocation(
+            registry,
+            config,
+            { url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, connection },
+            {
+              toolName: 'screenshot_panel',
+              verb: 'capture',
+              windowLabel: 'screenshot',
+              onContext: (c) => {
+                if (c.connectionId) resolvedConnectionId = c.connectionId;
+                if (c.dashboardUid) resolvedDashboardUid = c.dashboardUid;
+              },
+            },
+          );
 
-          let dashboardUid = inputDashboardUid;
-          let panelId = inputPanelId;
-          let urlVars: Record<string, string[]> = {};
-          let urlFromRaw: string | undefined;
-          let urlToRaw: string | undefined;
-
-          if (url) {
-            const parsed = parseGrafanaUrl(url);
-            if (parsed.type === 'dashboard') {
-              dashboardUid = parsed.uid;
-              panelId = panelId ?? parsed.panelId;
-              urlVars = parsed.vars;
-              urlFromRaw = parsed.from;
-              urlToRaw = parsed.to;
-            } else {
-              // Alert-rule URL: resolve its linked dashboard+panel the same
-              // way get_alert_context does. That tool only warns when a rule
-              // has no dashboard/panel link - but this tool categorically
-              // needs one specific panel to capture, so the same condition
-              // is a hard error here.
-              const rule = await client.getAlertRuleByUid(parsed.ruleUid);
-              const dashUid = rule.annotations?.__dashboardUid__;
-              const panelIdStr = rule.annotations?.__panelId__;
-              if (!dashUid || !panelIdStr) {
-                throw new Error(
-                  `Alert rule "${rule.title}" has no linked dashboard panel - screenshot_panel needs one specific ` +
-                    "panel to capture. Use find_related_dashboards with the rule's labels to locate relevant dashboards.",
-                );
-              }
-              dashboardUid = dashUid;
-              panelId = Number.parseInt(panelIdStr, 10);
-            }
-          }
-
-          if (!dashboardUid) {
-            throw new Error('Must provide either "url" (a dashboard or alert-rule link) or "dashboardUid".');
-          }
-          resolvedDashboardUid = dashboardUid;
-          if (panelId === undefined) {
-            throw new Error('Must provide "panelId" (or a url that already carries one, e.g. a "viewPanel"/"panelId" link).');
-          }
-
-          const { dashboard } = await client.getDashboard(dashboardUid);
-          const panel = findPanel(dashboard, panelId, panelTitle);
-          if (!panel) {
-            throw new Error(`Panel ${panelId} not found on dashboard ${dashboardUid}.`);
-          }
-          const overrides = mergeVariableOverrides(urlVars, variableOverrides);
-
-          const { fromMs, toMs } = resolveRenderWindow({
-            inputFromMs,
-            inputToMs,
-            urlFromRaw,
-            urlToRaw,
-            dashboardTimeFrom: dashboard.time?.from,
-            dashboardTimeTo: dashboard.time?.to,
-            nowMs: Date.now(),
-          });
-          enforceWindowLimit({ label: 'screenshot', fromMs, toMs }, config);
-
-          const rawConnection = registry.list().find((c) => c.id === connectionId);
-          if (!rawConnection) {
-            throw new Error(`Unknown Grafana connection "${connectionId}".`);
-          }
-          const soloUrl = buildSoloPanelUrl(rawConnection.url, dashboardUid, panelId, { fromMs, toMs, variables: overrides });
           // Clamped immediately before the capture, so nothing downstream can
           // see an unbounded dimension — this is the only path into
           // capturePanel, and the BrowserWindow it allocates lives in the same
           // process as the MCP server.
-          const w = clampScreenshotDimension(inputWidth, DEFAULT_WIDTH);
-          const h = clampScreenshotDimension(inputHeight, DEFAULT_HEIGHT);
-          const warnings: string[] = [];
-          if (w.clamped || h.clamped) {
-            warnings.push(
-              `Requested ${inputWidth}x${inputHeight} was clamped to ${w.value}x${h.value} ` +
-                `(each dimension is bounded to ${MIN_SCREENSHOT_PX}-${MAX_SCREENSHOT_PX}px). The image below is at the ` +
-                'clamped size, so its aspect ratio may differ from what you asked for.',
-            );
-          }
-          const png = await screenshotter.capturePanel({
-            url: soloUrl,
-            headers: { Authorization: buildAuthHeader(rawConnection) },
-            width: w.value,
-            height: h.value,
-            timeoutMs: config.screenshotTimeoutMs,
-          });
-          const savedTo = await saveScreenshot(png, dashboardUid, panelId, config);
+          const { png, width, height, warnings } = await generatePanelPng(screenshotter, config, inv, { width: inputWidth, height: inputHeight });
+          const savedTo = await saveScreenshot(png, inv.dashboardUid, inv.panelId, config);
 
-          const resultUrl = dashboardUrlFor(registry, connectionId, dashboardUid, { panelId, fromMs, toMs, variables: overrides });
+          const resultUrl = dashboardUrlFor(registry, inv.connectionId, inv.dashboardUid, { panelId: inv.panelId, fromMs: inv.fromMs, toMs: inv.toMs, variables: inv.overrides });
           recordActivity(registry, activityLog, {
             toolName: 'screenshot_panel',
-            connectionId,
-            dashboardUid,
-            dashboardTitle: dashboard.title,
-            panelId,
-            panelTitle: panel.title,
+            connectionId: inv.connectionId,
+            dashboardUid: inv.dashboardUid,
+            dashboardTitle: inv.dashboard.title,
+            panelId: inv.panelId,
+            panelTitle: inv.panel.title,
             url: resultUrl,
             screenshotPath: savedTo,
           });
           const result = {
             url: resultUrl,
-            dashboardUid,
-            panelId,
-            title: panel.title,
-            type: panel.type,
-            window: { fromMs, toMs },
+            dashboardUid: inv.dashboardUid,
+            panelId: inv.panelId,
+            title: inv.panel.title,
+            type: inv.panel.type,
+            window: { fromMs: inv.fromMs, toMs: inv.toMs },
             // The dimensions *asked of* the capture after clamping, not the
             // ones originally requested — and deliberately not described as
             // the dimensions captured: capturePanel returns only a Buffer, so
             // nothing here observes the window's real content size, which the
             // OS or useContentSize can still adjust. See issue #96.
-            width: w.value,
-            height: h.value,
+            width,
+            height,
             savedTo,
             ...(warnings.length > 0 ? { warnings } : {}),
           };

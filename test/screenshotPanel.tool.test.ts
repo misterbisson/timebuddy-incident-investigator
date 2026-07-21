@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import type { Config, GrafanaConnection } from '../src/config.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { CapturePanelRequest, Screenshotter } from '../src/screenshot/types.js';
 import type { DashboardGetResponse } from '../src/grafana/types.js';
+import type { ActivityEntry, ActivityLog } from '../src/activity/activityLog.js';
 import { fakeRegistry, fakeServer } from './toolTestHelpers.js';
 
 const connections: GrafanaConnection[] = [
@@ -132,5 +133,69 @@ describe('screenshot_panel dimension clamping', () => {
     const nonFinite = await call('screenshot_panel', { ...baseArgs, width: Number.POSITIVE_INFINITY, height: Number.NaN });
     expect(captured[1]).toMatchObject({ width: 1600, height: 900 });
     expect(payload(nonFinite).warnings).toBeUndefined();
+  });
+});
+
+describe('screenshot_panel result, persistence, and errors', () => {
+  function recordingActivityLog(): { activityLog: ActivityLog; recorded: Omit<ActivityEntry, 'id' | 'timestamp'>[] } {
+    const recorded: Omit<ActivityEntry, 'id' | 'timestamp'>[] = [];
+    return { activityLog: { record: (e) => recorded.push(e) }, recorded };
+  }
+
+  function setup(activityLog?: ActivityLog) {
+    const png = Buffer.from('fake-png');
+    const client = { getDashboard: vi.fn(async () => dashboard()) } as unknown as GrafanaClient;
+    const screenshotter = { capturePanel: vi.fn(async () => png), exportPanelCsv: vi.fn() } as unknown as Screenshotter;
+    const { server, call } = fakeServer();
+    registerScreenshotPanel(server, { registry: fakeRegistry(connections, client), config: config(), screenshotter, activityLog } as never);
+    return { call, png };
+  }
+
+  it('returns the PNG inline, echoes panel identity, and writes the image to disk', async () => {
+    const { call, png } = setup();
+    const result = (await call('screenshot_panel', { ...baseArgs, connection: 'test' })) as {
+      content: Array<{ type: string; data?: string; text?: string }>;
+    };
+
+    const image = result.content.find((c) => c.type === 'image');
+    expect(image?.data).toBe(png.toString('base64'));
+    const parsed = payload(result);
+    expect(parsed).toMatchObject({ dashboardUid: 'reqs', panelId: 2, title: 'Requests', type: 'timeseries' });
+    expect(parsed.url).toContain('grafana.example.com');
+    expect(await readFile(parsed.savedTo as string)).toEqual(png);
+  });
+
+  it('records an activity entry carrying the saved screenshot path', async () => {
+    const { activityLog, recorded } = recordingActivityLog();
+    const { call } = setup(activityLog);
+
+    await call('screenshot_panel', { ...baseArgs, connection: 'test' });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ toolName: 'screenshot_panel', dashboardUid: 'reqs', panelId: 2 });
+    expect(recorded[0]!.screenshotPath).toMatch(/\.png$/);
+  });
+
+  it('returns an error result with a dashboard link when the panel is not found', async () => {
+    const { call } = setup();
+    const result = (await call('screenshot_panel', { ...baseArgs, panelId: 999, connection: 'test' })) as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    const text = result.content.find((c) => c.type === 'text')!.text!;
+    expect(text).toContain('Panel 999 not found');
+    expect(text).toContain('grafana.example.com');
+  });
+
+  // The dashboard is known by the time panelId is found missing, so the error
+  // still carries a clickable dashboard link — the resolve prologue must report
+  // the resolved dashboardUid before, not after, the panelId check.
+  it('still attaches the dashboard link when only panelId is missing', async () => {
+    const { call } = setup();
+    const result = (await call('screenshot_panel', { dashboardUid: 'reqs', fromMs: 1_000_000, toMs: 2_000_000, connection: 'test' })) as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    const text = result.content.find((c) => c.type === 'text')!.text!;
+    expect(text).toContain('panelId');
+    expect(text).toContain('grafana.example.com');
   });
 });
