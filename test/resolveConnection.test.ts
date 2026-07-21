@@ -144,4 +144,18 @@ describe('originMatchesConnection', () => {
     const broken: GrafanaConnection = { ...prod, url: 'not a url', matchHosts: ['grafana-alias.example.com'] };
     expect(originMatchesConnection('https://grafana-alias.example.com', broken)).toBe(false);
   });
+
+  // A matchHosts entry is meant to be a bare hostname. One that smuggles in
+  // userinfo/a path/a port would, if fed straight to new URL(), resolve to a
+  // *different* host than its literal text — so it must be rejected here exactly
+  // as hostMatchesConnection's string compare would reject it, or the two
+  // matchers would disagree on what the alias set is.
+  it('does not honor a malformed matchHosts entry that resolves to another host', () => {
+    const sneaky: GrafanaConnection = { ...prod, matchHosts: ['admin@evil.example.com'] };
+    expect(originMatchesConnection('https://evil.example.com', sneaky)).toBe(false);
+    const pathed: GrafanaConnection = { ...prod, matchHosts: ['evil.example.com/x'] };
+    expect(originMatchesConnection('https://evil.example.com', pathed)).toBe(false);
+    const ported: GrafanaConnection = { ...prod, matchHosts: ['evil.example.com:80'] };
+    expect(originMatchesConnection('https://evil.example.com', ported)).toBe(false);
+  });
 });

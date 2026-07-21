@@ -63,12 +63,20 @@ export function originMatchesConnection(origin: string, connection: GrafanaConne
     return false;
   }
   if (connUrl.origin === origin) return true;
-  // `${protocol}//${host}` — protocol already carries its trailing colon, so
-  // this is e.g. "https://grafana-alias.example.com", which normalizes to that
-  // scheme's default-port origin.
+  // Each matchHosts entry is a bare hostname; build its origin under the
+  // connection's own scheme (protocol carries its trailing colon, so this is
+  // e.g. "https://grafana-alias.example.com", normalizing to that scheme's
+  // default-port origin). Require the parsed hostname to equal the entry, so an
+  // entry that smuggles in userinfo, a path, or a port ("admin@evil.com",
+  // "evil.com/x", "evil.com:80") is rejected here exactly as
+  // hostMatchesConnection's string compare rejects it, rather than silently
+  // resolving to some other host — that keeps the two matchers' alias set the
+  // same, which is the whole reason they sit together.
   return (connection.matchHosts ?? []).some((entry) => {
+    const host = entry.toLowerCase();
     try {
-      return new URL(`${connUrl.protocol}//${entry}`).origin === origin;
+      const aliasUrl = new URL(`${connUrl.protocol}//${entry}`);
+      return aliasUrl.hostname === host && aliasUrl.origin === origin;
     } catch {
       return false;
     }
