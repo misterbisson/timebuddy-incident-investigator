@@ -68,9 +68,12 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'points to answer things like "was there any traffic at all" or "what\'s the min/max here". ' +
         'Pass "threshold" (and optionally "thresholdDirection") to get each series\' precise dip/spike windows back ' +
         'directly — e.g. threshold: 1, thresholdDirection: "below" for an uptime-style metric (1.0 = fully up) finds ' +
-        'exactly when each refId/series dropped below full health and for how long, including whether sibling ' +
+        'exactly when each refId/series dropped below full health, including whether sibling ' +
         'series (e.g. other hosts/cells in the same panel) dipped too, and threshold: 0, thresholdDirection: "above" ' +
-        'finds exactly when a volume/count metric had any activity. Always prefer stats/threshold over fetching the ' +
+        'finds exactly when a volume/count metric had any activity. Each run\'s "durationMs" is the span from its first ' +
+        'crossing sample to its last, not a bucket-aware outage length: a dip caught in a single sample reads as 0 ms, ' +
+        'and every run understates the true duration by up to one sample interval — read it alongside "pointCount" and ' +
+        'the series\' sample spacing rather than as an exact length. Always prefer stats/threshold over fetching the ' +
         'raw points and scripting the same analysis yourself. If "endsAtMs" is omitted and the alert is resolved ' +
         '(not still firing), it defaults to now — for an old/resolved alert this can silently build a many-day ' +
         'window, so this call errors instead of running in that case; pass "endsAtMs" explicitly (from the alert\'s ' +
@@ -94,7 +97,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         preWindowMs: z.number().optional().describe('Buffer before the incident start, ms; defaults to max(30min, incident duration)'),
         variableOverrides: z.record(z.array(z.string())).optional(),
         includeControls: z.boolean().optional().default(true).describe('Include prior-hour/day/week baseline windows'),
-        threshold: z.number().optional().describe('When set, each returned series gets a "runs" array of contiguous points crossing this value (start/end/duration/min/max) - e.g. 1 for an uptime metric'),
+        threshold: z.number().optional().describe('When set, each returned series gets a "runs" array of contiguous points crossing this value (start/end/duration/min/max) - e.g. 1 for an uptime metric. Each run\'s "durationMs" spans its first crossing sample to its last, so a single-sample crossing is 0 ms and every run understates the outage by up to one sample interval; read it with "pointCount" and the sample spacing, not as an exact length'),
         thresholdDirection: z.enum(['below', 'above']).optional().default('below').describe('Whether "threshold" means find runs below or above that value'),
         includePoints: z.boolean().optional().default(true).describe('Set false to omit each series\' raw "points" array - stats/runs are still computed and returned either way'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
