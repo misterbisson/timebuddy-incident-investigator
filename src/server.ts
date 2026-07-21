@@ -44,7 +44,7 @@ export function createServer(
     // entry the JSON artifacts use. This string is what the server reports to
     // Claude Code/Desktop in the initialize handshake, so if it stops being
     // updated it misreports the running version to every client, forever.
-    version: '0.1.0', // x-release-please-version
+    version: '0.2.0', // x-release-please-version
   });
 
   registerAllTools(server, { registry, config, screenshotter, activityLog });
