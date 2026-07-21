@@ -1,6 +1,6 @@
 const { app, BrowserWindow, Menu, ipcMain, session, shell } = require('electron');
 const path = require('node:path');
-const { mkdir, writeFile } = require('node:fs/promises');
+const { writeToDir, isWithinDirectory } = require('./downloads.js');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
@@ -217,29 +217,12 @@ ipcMain.handle('activity:openExternal', (_event, url) => {
   if (parsed.protocol === 'http:' || parsed.protocol === 'https:') shell.openExternal(url);
 });
 
-// Writes `data` into the user's Downloads folder under `filename`, without ever
-// clobbering an existing file: on a name collision it appends " (2)", " (3)",
-// … until one is free. The `wx` flag makes each attempt fail rather than
-// overwrite if the name appeared between attempts, so this is race-free (no
-// check-then-write TOCTOU gap). Only the basename of `filename` is used, so a
-// engine-suggested name can never write outside Downloads.
+// Writes `data` into the user's Downloads folder under `filename`. The
+// collision-avoidance and basename-only guarantee live in writeToDir
+// (downloads.js) so they're unit-testable without Electron; here we just bind
+// them to the Downloads path.
 async function writeToDownloads(filename, data) {
-  const dir = app.getPath('downloads');
-  await mkdir(dir, { recursive: true });
-  const safe = path.basename(filename);
-  const ext = path.extname(safe);
-  const stem = path.basename(safe, ext);
-  for (let n = 1; ; n++) {
-    const name = n === 1 ? `${stem}${ext}` : `${stem} (${n})${ext}`;
-    const full = path.join(dir, name);
-    try {
-      await writeFile(full, data, { flag: 'wx' });
-      return full;
-    } catch (err) {
-      if (err && err.code === 'EEXIST') continue;
-      throw err;
-    }
-  }
+  return writeToDir(app.getPath('downloads'), filename, data);
 }
 
 // The Activity window's "Export CSV" / "Capture screenshot" buttons. Both take
@@ -271,9 +254,8 @@ ipcMain.handle('activity:revealInFolder', (_event, filePath) => {
   // renderer-supplied path. showItemInFolder opens a native file-manager window
   // selecting the file, so scope it to the one directory these buttons write to.
   const downloads = app.getPath('downloads');
-  const resolved = path.resolve(String(filePath));
-  if (resolved === downloads || resolved.startsWith(downloads + path.sep)) {
-    shell.showItemInFolder(resolved);
+  if (isWithinDirectory(downloads, filePath)) {
+    shell.showItemInFolder(path.resolve(String(filePath)));
   }
 });
 

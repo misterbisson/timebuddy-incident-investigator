@@ -88,6 +88,24 @@ describe('createPanelActions.screenshot', () => {
     expect(arg.width).toBe(1600);
     expect(arg.height).toBe(900);
   });
+
+  it('keeps a configured identifier out of the screenshot filename', async () => {
+    state.dashboard = {
+      dashboard: {
+        uid: 'reqs',
+        title: 'Dash',
+        panels: [{ id: 2, title: 'ACME Requests', type: 'timeseries', targets: [{ refId: 'A', datasource: { uid: 'ds1' }, expr: 'x' }] }],
+      },
+      meta: {},
+    };
+    const actions = createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(async () => Buffer.from('PNG')), exportPanelCsv: vi.fn() });
+
+    const res = await actions.screenshot({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
+
+    expect(res.suggestedFilename).not.toContain('ACME');
+    expect(res.suggestedFilename).toMatch(/-panel2\.png$/);
+    expect(res.meta.title).toBe('[REDACTED] Requests');
+  });
 });
 
 describe('createPanelActions.exportCsv', () => {
@@ -139,6 +157,32 @@ describe('createPanelActions.exportCsv', () => {
     // Same redact() applies to the returned metadata, so a shared status line
     // can't leak a matched identifier either.
     expect(res.meta.title).toBe('[REDACTED]');
+  });
+
+  it('keeps a configured identifier out of the suggested filename and the column metadata, not just the content', async () => {
+    // Finding on PR #107: the file content was redacted but suggestedFilename
+    // (derived from the panel title) and columns were not — so a configured
+    // customer identifier reached an on-disk Downloads name and returned
+    // metadata that disagreed with the file it described.
+    state.dashboard = {
+      dashboard: {
+        uid: 'reqs',
+        title: 'Dash',
+        panels: [{ id: 2, title: 'ACME Requests', type: 'timeseries', targets: [{ refId: 'A', datasource: { uid: 'ds1' }, expr: 'x' }] }],
+      },
+      meta: {},
+    };
+    const exportPanelCsv = vi.fn(async () => ({ csv: Buffer.from('host,ACME-customer\r\nweb1,42\r\n') }));
+    const actions = createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(), exportPanelCsv });
+
+    const res = await actions.exportCsv({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
+
+    // The on-disk filename must not carry the identifier the panel title held.
+    expect(res.files[0]!.suggestedFilename).not.toContain('ACME');
+    // Column metadata is redacted to agree with the (already redacted) content.
+    expect(res.files[0]!.columns).toEqual(['host', '[REDACTED]-customer']);
+    expect(res.files[0]!.content).toContain('host,[REDACTED]-customer');
+    expect(res.files[0]!.content).not.toContain('ACME');
   });
 
   it('derives a filesystem-safe filename from a panel title with path-significant characters', async () => {

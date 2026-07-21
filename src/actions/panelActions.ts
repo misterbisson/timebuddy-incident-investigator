@@ -111,7 +111,7 @@ export function createPanelActions(
         },
         config.redactionPatterns,
       );
-      return { png, suggestedFilename: suggestName(inv, 'png'), meta };
+      return { png, suggestedFilename: suggestName(inv, 'png', config.redactionPatterns), meta };
     },
 
     async exportCsv(input) {
@@ -122,11 +122,16 @@ export function createPanelActions(
       });
       const generated = await generatePanelCsv(screenshotter, config, inv);
       const files: PanelCsvFileResult[] = generated.files.map((f) => ({
-        suggestedFilename: suggestName(inv, 'csv', f.suffix),
+        suggestedFilename: suggestName(inv, 'csv', config.redactionPatterns, f.suffix),
         content: f.content,
         ...(f.refId ? { refId: f.refId } : {}),
         rows: f.rows,
-        columns: f.columns,
+        // Column names can carry a configured customer identifier just like the
+        // file content (which generatePanelCsv already redacts). Redact them
+        // here too, so the returned metadata can't disagree with the file it
+        // describes — the MCP export_panel_csv path redacts its whole result
+        // for the same reason.
+        columns: f.columns.map((c) => redact(c, config.redactionPatterns)),
       }));
       const meta = redact(
         {
@@ -157,10 +162,20 @@ export function createPanelActions(
  * panel id and any multi-frame suffix. The caller owns collision handling in
  * the target directory — this only guarantees the name has no path-significant
  * or reserved characters and isn't empty.
+ *
+ * Configured customer identifiers are redacted out of the label *before*
+ * sanitizing, so a matched identifier never survives into the on-disk Downloads
+ * filename (nor the `suggestedFilename` returned to the renderer) — matching how
+ * `meta.title` and the CSV content are already masked.
  */
-function suggestName(inv: PanelInvocation, ext: 'png' | 'csv', suffix?: string): string {
+function suggestName(
+  inv: PanelInvocation,
+  ext: 'png' | 'csv',
+  redactionPatterns: RegExp[],
+  suffix?: string,
+): string {
   const label = inv.panel.title || inv.dashboard.title || inv.dashboardUid;
-  const base = sanitizeForFilename(label);
+  const base = sanitizeForFilename(redact(label, redactionPatterns));
   return `${base}-panel${inv.panelId}${suffix ? `-${sanitizeForFilename(suffix)}` : ''}.${ext}`;
 }
 
