@@ -387,13 +387,15 @@ just a way to fill a disk.
   panel has no transformations configured, or the capture attempt itself fails, the tool
   falls back to its own direct export: a table panel backed by more than one query/frame is
   then written to one CSV file per frame, not a merged table.
-- **CSV files captured from Grafana byte-for-byte are not neutralized against spreadsheet
-  formula injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula
-  when the file is opened in Excel, LibreOffice, or Google Sheets. This server's *own*
-  exports prefix such cells with an apostrophe so they display instead of executing; a file
-  captured from Grafana is that tool's own bytes and can't be rewritten without ceasing to
-  be a faithful copy. The result says which you got — `formulaNeutralized` — so check it
-  before opening a captured file in a spreadsheet, or handing one to someone else.
+- **Every CSV `export_panel_csv` writes is neutralized against spreadsheet formula
+  injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula when the
+  file is opened in Excel, LibreOffice, or Google Sheets, so every such cell is prefixed with
+  an apostrophe (it then displays instead of executing). The direct exports neutralize at the
+  cell level; the Grafana-captured path neutralizes by re-parsing and re-serializing Grafana's
+  output (a full RFC 4180 round-trip, since a quoted field can span lines). That makes the
+  captured file *semantically* identical to Grafana's Download CSV rather than byte-for-byte —
+  quoting is minimized, line endings normalized to CRLF, a leading BOM preserved — reported as
+  `formulaNeutralized: true` with a `formulaNeutralizationNote` explaining the re-serialization.
 
 ## Acknowledgments
 

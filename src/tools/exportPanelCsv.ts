@@ -12,7 +12,7 @@ import { findPanel } from '../dashboards/panelQueries.js';
 import { mergeVariableOverrides, substituteTargetFields } from '../dashboards/variables.js';
 import { buildDsQueryTarget, executeQueryWindow } from '../query/executor.js';
 import { enforceWindowLimit, clampMaxDataPoints } from '../security/limits.js';
-import { buildSeriesColumnNames, frameToCsv, neutralizeFormula, parseCsvLine, seriesToCsv } from '../export/csv.js';
+import { buildSeriesColumnNames, frameToCsv, neutralizeCsvDocument, neutralizeFormula, seriesToCsv } from '../export/csv.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildInspectDataUrl } from '../grafana/urlBuilder.js';
 import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
@@ -98,22 +98,25 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         'this first tries to capture the panel\'s real on-screen data - driving a hidden browser to Grafana\'s own ' +
         'Inspect > Data view with "Apply panel transformations" checked, so a panel with a join/reduce/rename/etc. ' +
         'configured comes back exactly as a person looking at the dashboard would see it, not just the raw per-query ' +
-        'result. "transformationsApplied: true" means that succeeded - the file is Grafana\'s own output, byte for ' +
-        'byte. Otherwise ("transformationsApplied: false") this panel has no transformations configured (nothing to ' +
+        'result. "transformationsApplied: true" means that succeeded - the file is Grafana\'s own on-screen data, ' +
+        're-serialized (RFC 4180) so it can be neutralized against spreadsheet formula injection: semantically ' +
+        'identical to Grafana\'s Download CSV, not byte-for-byte (see formulaNeutralizationNote). Otherwise ' +
+        '("transformationsApplied: false") this panel has no transformations configured (nothing to ' +
         'gain from the browser this way) or no screenshotter is available (standalone CLI), and the file is this ' +
         "server's own direct export instead: table panels as-is (every column from the query's raw data frame, in " +
         'order); timeseries/graph panels pivoted wide (a UTC-timestamp column plus one column per series, named from ' +
         'its labels or refId, outer-joined on timestamp so series sampled at different rates don\'t drop each ' +
         'other\'s points). Check "transformCaptureNote" when present - it means the browser attempt was made but ' +
         'failed, so a real transformation may exist that this fallback data doesn\'t reflect. ' +
-        'Check "formulaNeutralized": this server\'s own exports prefix any cell beginning with =, +, -, or @ (or a ' +
-        'whitespace character hiding one) with an apostrophe, so a spreadsheet displays it instead of executing it. ' +
-        'Numbers are exempt, so negative values are untouched - but a non-numeric cell like "-" or "-Infinity" does ' +
-        'gain that apostrophe, so a few cells can differ from the same values in a query result; that is the export ' +
-        'being neutralized, not wrong. Reported "columns" are neutralized too, so they match the file\'s header row. ' +
-        'A file captured from Grafana byte-for-byte cannot be neutralized (that would mean rewriting its bytes), so ' +
-        'it comes back "formulaNeutralized: false" with a note - pass that caveat along if you point someone at the ' +
-        'file to open in a spreadsheet. Pass a dashboard/panel ' +
+        'Every file this tool writes is neutralized against spreadsheet formula injection ("formulaNeutralized": true ' +
+        'always): any cell beginning with =, +, -, or @ (or a whitespace character hiding one) is prefixed with an ' +
+        'apostrophe, so a spreadsheet displays it instead of executing it. Numbers are exempt, so negative values are ' +
+        'untouched - but a non-numeric cell like "-" or "-Infinity" does gain that apostrophe, so a few cells can ' +
+        'differ from the same values in a query result; that is the export being neutralized, not wrong. Reported ' +
+        '"columns" are neutralized too, so they match the file\'s header row. The Grafana-captured path ' +
+        '(transformationsApplied: true) is neutralized by re-serializing Grafana\'s output rather than at cell level, ' +
+        'so that file is semantically identical to Grafana\'s Download CSV but not byte-for-byte - see ' +
+        'formulaNeutralizationNote. Pass a dashboard/panel ' +
         'URL (its own "from"/"to" and var-* overrides are used automatically) or an alert-rule URL (resolved to its ' +
         'linked dashboard+panel, the same way get_alert_context does), or dashboardUid + panelId + connection ' +
         'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). Returns ' +
@@ -228,17 +231,26 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
           const transformationsApplied = browserResult !== undefined && 'csv' in browserResult;
 
           if (transformationsApplied && browserResult && 'csv' in browserResult) {
-            // NOTE: this file is Grafana's own CSV bytes, so unlike the
-            // fallback exports below it does not go through export/csv.ts's
-            // escapeCsvField and is therefore NOT neutralized against
-            // spreadsheet formula injection. Neutralizing it would mean
-            // parsing and re-serializing Grafana's output — a full RFC 4180
-            // parse, since quoted fields can span lines — which is a real
-            // corruption risk against the one path documented as byte-for-byte
-            // faithful. Surfaced in the result instead; see issue #91.
-            const path = await saveCsv(browserResult.csv, config, dashboardUid, panelId);
-            const lines = browserResult.csv.split(/\r\n|\n/).filter((l) => l.length > 0);
-            files.push({ path, rows: Math.max(0, lines.length - 1), columns: lines[0] ? parseCsvLine(lines[0]) : [] });
+            // Grafana's own captured CSV. It used to be written through
+            // verbatim, which left it — unlike the fallback exports below — NOT
+            // neutralized against spreadsheet formula injection, on what is the
+            // normal end-user path (Electron app running). neutralizeCsvDocument
+            // parses it (full RFC 4180, since a quoted field can span lines) and
+            // re-serializes it with every cell run through the same
+            // neutralize-then-quote the direct exports use. The tradeoff #91
+            // settled: the file is now semantically identical to Grafana's
+            // Download CSV rather than byte-for-byte identical (minimized
+            // quoting, CRLF line endings; a leading BOM is preserved).
+            const { csv: neutralized, rows } = neutralizeCsvDocument(browserResult.csv);
+            const path = await saveCsv(neutralized, config, dashboardUid, panelId);
+            files.push({
+              path,
+              rows: Math.max(0, rows.length - 1),
+              // From the parsed header row, neutralized to match the bytes
+              // actually written — correct even when a field spanned lines,
+              // which the old line-split count was not.
+              columns: (rows[0] ?? []).map(neutralizeFormula),
+            });
           } else if (panel.mirrorsPanelIds) {
             // Grafana's built-in "-- Dashboard --" datasource: no backend to
             // query at all, so /api/ds/query always 404s here (the browser
@@ -336,18 +348,21 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
             window: { fromMs, toMs },
             transformationsApplied,
             files,
-            // Only this server's own exports are neutralized; Grafana's
-            // byte-for-byte output isn't. Reported per-call rather than left
-            // implicit, so "a CSV came back" never reads as "a CSV safe to
-            // hand to someone" on the path where it isn't.
-            formulaNeutralized: !transformationsApplied,
+            // Both paths are neutralized now: the direct exports at cell level,
+            // and Grafana's captured CSV by parse + re-serialize (see
+            // neutralizeCsvDocument). Kept as an always-true field rather than
+            // dropped so an existing caller keying off it doesn't suddenly read
+            // undefined — and paired below with the note on what re-serializing
+            // the captured path costs.
+            formulaNeutralized: true,
             ...(transformationsApplied
               ? {
                   formulaNeutralizationNote:
-                    'This file is Grafana\'s own CSV output byte for byte, so it has NOT been neutralized against ' +
-                    'spreadsheet formula injection (a cell beginning with =, +, -, or @ is executed on open by Excel, ' +
-                    'LibreOffice, and Google Sheets). This server\'s own exports are neutralized; Grafana\'s are not. ' +
-                    'Mention this if you point someone at the file to open in a spreadsheet.',
+                    'This file is Grafana\'s own transformed on-screen data, re-parsed and re-serialized (RFC 4180) so ' +
+                    'formula-leading cells could be neutralized against spreadsheet injection (a cell beginning with =, ' +
+                    '+, -, or @ is executed on open by Excel, LibreOffice, and Google Sheets). It is therefore ' +
+                    'semantically identical to Grafana\'s Download CSV but not byte-for-byte identical: field quoting is ' +
+                    'minimized and line endings are normalized to CRLF (a leading BOM, if any, is preserved).',
                 }
               : {}),
             ...(Object.keys(errors).length > 0 ? { errors } : {}),
