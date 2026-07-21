@@ -1,8 +1,31 @@
 import type { SeriesPoint } from '../query/executor.js';
 
 export interface ThresholdRun {
+  /** Timestamp of the first sample in the run. */
   startMs: number;
+  /**
+   * Timestamp of the *last* sample in the run — the instant of that sample,
+   * not the end of its bucket. The excursion continues for however wide that
+   * final sample's bucket is (at least one sample interval past endMs), which
+   * this function has no way to know: it only sees sample timestamps.
+   */
   endMs: number;
+  /**
+   * endMs - startMs: the span from the first crossing sample to the last, NOT
+   * a bucket-aware outage length. Consequences worth knowing before reporting
+   * this as a duration:
+   *   - A run of a single sample has startMs === endMs, so durationMs === 0.
+   *     A one-minute outage caught in one 60s-resolution sample reads as 0 ms,
+   *     which is not "instantaneous" — it's "one bucket wide, and we can't see
+   *     the bucket from here."
+   *   - Every run understates the true duration by up to one sample interval,
+   *     because the final sample's own bucket isn't counted.
+   * This is deliberate (see issue #67): rather than guess a bucket width from
+   * the median gap between points and bake it into a single number, the raw
+   * sample span is returned and consumers that need an outage length read it
+   * together with pointCount and the series' sample spacing. The tool
+   * descriptions for execute_query_window / validate_baseline say the same.
+   */
   durationMs: number;
   minValue: number;
   maxValue: number;
