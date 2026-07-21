@@ -150,6 +150,15 @@ skill exists to handle for them.
      "the first crossing" from it — a series that noisy is telling you the threshold or the
      window is wrong for it, so re-query a narrower window (or a coarser aggregation) and look
      again rather than summarizing what came back.
+   - **A run's `durationMs` is the span between its first and last crossing *sample*, not a
+     bucket-aware outage length — don't report it as the exact length.** A dip caught in a single
+     sample has `durationMs: 0` (start and end are the same timestamp); that is "one bucket wide,"
+     *not* instantaneous or a blip — a one-minute outage on a 60s-resolution series looks exactly
+     like this. Every run also understates the real duration by up to one sample interval, because
+     the final sample's own bucket isn't counted. Read `durationMs` together with `pointCount` and
+     the series' sample spacing (the gap between adjacent points): a `pointCount: 1` run lasted at
+     least one interval, and "N samples at ~S apart" is the honest way to describe how long a dip
+     persisted.
 
 4. **If there's no dashboard/panel link** (warnings said so, or there was nothing to paste in
    step 1), fall back to `find_related_dashboards` using `alertContext.labels` (or whatever labels
