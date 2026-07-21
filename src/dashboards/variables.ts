@@ -74,6 +74,11 @@ function formatValues(values: string[], format: string | undefined): string {
 }
 
 function escapeRegex(value: string): string {
+  // The `$&` here is the one deliberate pattern reference in this file: it
+  // re-emits the matched regex metacharacter with a backslash prefix, which is
+  // the whole point of escaping. Every actual value substitution above uses a
+  // replacement function precisely so no value can be reinterpreted this way
+  // (see #86 / #65).
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
@@ -118,16 +123,32 @@ export function substituteVariables(
 ): string {
   let result = query;
 
+  // Invariant: every substitution in this file supplies its replacement as a
+  // *function*, never a raw string. A string replacement reinterprets `$&`,
+  // `$'`, `` $` `` and `$1` in the value as match-pattern references (the class
+  // of bug fixed for user-variable values in #65). These built-in values are
+  // all `$`-free today — computeInterval/humanDuration return digits plus a
+  // unit letter, $__from/$__to are String() of a number, $timeFilter is built
+  // from those — so this is invariant-keeping, not a live fix. But "no
+  // substitution here uses a string replacement" is a rule the next reader can
+  // grep and trust, where re-checking each value's provenance by hand is
+  // exactly the step skipped before #65. The one deliberate `$&` is
+  // escapeRegex's, commented at its definition.
+  const interval = computeInterval(window, maxDataPoints);
+  const range = humanDuration(window.toMs - window.fromMs);
+  const from = String(window.fromMs);
+  const to = String(window.toMs);
+  const timeFilter = `time >= ${window.fromMs}ms and time <= ${window.toMs}ms`;
   result = result
-    .replaceAll('$__interval', computeInterval(window, maxDataPoints))
-    .replaceAll('${__interval}', computeInterval(window, maxDataPoints))
-    .replaceAll('$__range', humanDuration(window.toMs - window.fromMs))
-    .replaceAll('${__range}', humanDuration(window.toMs - window.fromMs))
-    .replaceAll('$__from', String(window.fromMs))
-    .replaceAll('${__from}', String(window.fromMs))
-    .replaceAll('$__to', String(window.toMs))
-    .replaceAll('${__to}', String(window.toMs))
-    .replaceAll('$timeFilter', `time >= ${window.fromMs}ms and time <= ${window.toMs}ms`);
+    .replaceAll('$__interval', () => interval)
+    .replaceAll('${__interval}', () => interval)
+    .replaceAll('$__range', () => range)
+    .replaceAll('${__range}', () => range)
+    .replaceAll('$__from', () => from)
+    .replaceAll('${__from}', () => from)
+    .replaceAll('$__to', () => to)
+    .replaceAll('${__to}', () => to)
+    .replaceAll('$timeFilter', () => timeFilter);
 
   // Longest names first so "$service_name" isn't partially matched by "$service".
   const sorted = [...variables].sort((a, b) => b.name.length - a.name.length);
