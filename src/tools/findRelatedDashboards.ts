@@ -154,7 +154,7 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
         'as a last resort in that specific situation.',
       inputSchema: {
         metricName: z.string().optional().describe('Exact Prometheus metric name or InfluxDB measurement name'),
-        labels: z.record(z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
+        labels: z.record(z.string(), z.string()).optional().describe('Label/tag key-value pairs to match against, e.g. from the alert'),
         query: z.string().optional().describe('Free-text, case-insensitive substring match against metric names and dashboard/panel titles - for a product/service name you don\'t have an exact metric or label for'),
         excludeDashboardUid: z.string().optional().describe('Skip the alert\'s own dashboard'),
         forceRefresh: z.boolean().optional().describe('Rebuild the index instead of using the cached copy'),

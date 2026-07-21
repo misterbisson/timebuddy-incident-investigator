@@ -95,7 +95,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time (e.g. the alert\'s startsAt, or "2026-06-08T00:00:00Z")'),
         endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601; defaults to now for still-firing alerts'),
         preWindowMs: z.number().optional().describe('Buffer before the incident start, ms; defaults to max(30min, incident duration)'),
-        variableOverrides: z.record(z.array(z.string())).optional(),
+        variableOverrides: z.record(z.string(), z.array(z.string())).optional(),
         includeControls: z.boolean().optional().default(true).describe('Include prior-hour/day/week baseline windows'),
         threshold: z.number().optional().describe('When set, each returned series gets a "runs" array of contiguous points crossing this value (start/end/duration/min/max) - e.g. 1 for an uptime metric. Each run\'s "durationMs" spans its first crossing sample to its last, so a single-sample crossing is 0 ms and every run understates the outage by up to one sample interval; read it with "pointCount" and the sample spacing, not as an exact length'),
         thresholdDirection: z.enum(['below', 'above']).optional().default('below').describe('Whether "threshold" means find runs below or above that value'),

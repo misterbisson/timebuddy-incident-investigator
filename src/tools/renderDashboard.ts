@@ -106,7 +106,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
         dashboardUid: z.string().optional().describe('Dashboard UID, when not passing url (requires fromMs/toMs or falls back to the dashboard\'s saved default range, and a resolvable connection)'),
         fromMs: z.number().optional().describe('Window start, epoch ms - overrides the url\'s own "from" when both are given'),
         toMs: z.number().optional().describe('Window end, epoch ms - overrides the url\'s own "to" when both are given'),
-        variableOverrides: z.record(z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
+        variableOverrides: z.record(z.string(), z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
         panelLimit: z.number().optional().default(DEFAULT_PANEL_LIMIT).describe('Max queryable panels to execute in one call; panels beyond this are listed with skipped: true, never silently dropped'),
         includePoints: z.boolean().optional().default(true).describe('Set false to omit each panel series\' raw "points" array - stats are still computed and returned either way. Use this for a wide-window/all-panel survey, where only shape (min/max/mean) matters, to avoid an oversized response spilling to disk'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),

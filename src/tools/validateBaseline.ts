@@ -48,7 +48,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
         panelTitle: z.string().optional().describe('Exact panel title — required only when panelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
         startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time'),
         endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601'),
-        variableOverrides: z.record(z.array(z.string())).optional(),
+        variableOverrides: z.record(z.string(), z.array(z.string())).optional(),
         zThreshold: z.number().optional().default(3),
         controlOffsets: z
           .array(z.object({ label: z.string(), offsetMs: z.number() }))

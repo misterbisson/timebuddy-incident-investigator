@@ -67,7 +67,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         primaryPanelTitle: z.string().optional().describe('Exact panel title — required only when primaryPanelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
         startsAtMs: epochMsSchema.describe('Incident start — epoch ms or an ISO 8601 date/time'),
         endsAtMs: epochMsSchema.optional().describe('Incident end — epoch ms or ISO 8601'),
-        primaryLabels: z.record(z.string()).optional().describe('Alert labels, used for relevance ranking'),
+        primaryLabels: z.record(z.string(), z.string()).optional().describe('Alert labels, used for relevance ranking'),
         candidates: z
           .array(z.object({ dashboardUid: z.string(), panelId: z.number(), connectionId: z.string().optional() }))
           .optional()
@@ -80,7 +80,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             'Which auto-discovery tier to check this call, narrowest first: "product" (default), "connection", ' +
               'then "all-connections". Ignored when "candidates" is given explicitly.',
           ),
-        variableOverrides: z.record(z.array(z.string())).optional(),
+        variableOverrides: z.record(z.string(), z.array(z.string())).optional(),
         limit: z.number().optional().default(10),
         connection: z.string().optional().describe('Connection id for the primary panel, when multiple Grafana connections are configured'),
       },

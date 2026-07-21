@@ -48,7 +48,7 @@ const correlationResultSchema = z.object({
   dashboardTitle: z.string(),
   panelId: z.number(),
   panelTitle: z.string().optional(),
-  labels: z.record(z.string()),
+  labels: z.record(z.string(), z.string()),
   zScore: z.number(),
   labelOverlapCount: z.number(),
   onsetLagMs: z.number().optional(),
@@ -82,7 +82,7 @@ export function registerSummarizeFindings(server: McpServer, { config }: ToolCon
         'to a specific dashboard/panel/query result.',
       inputSchema: {
         alertName: z.string().optional(),
-        labels: z.record(z.string()).default({}),
+        labels: z.record(z.string(), z.string()).default({}),
         baseline: baselineSchema.describe('The result of validate_baseline for the alert\'s primary series'),
         thresholdCrossed: z.boolean().optional().describe('Whether the incident window crossed the alert\'s own threshold, if known'),
         correlated: z.array(correlationResultSchema).optional().default([]).describe('The "correlated" array from detect_correlated_anomalies'),
