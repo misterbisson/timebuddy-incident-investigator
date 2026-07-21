@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, ipcMain, session, shell } = require('electron');
 const path = require('node:path');
+const { mkdir, writeFile } = require('node:fs/promises');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
@@ -9,6 +10,10 @@ const { attachAuthHeaders } = require('./authGuard.js');
 // null in the normal (non --mcp-server) GUI launch, since there's no
 // investigation activity to show there.
 let activityLog = null;
+// Same lifecycle as activityLog: the engine's in-process screenshot/CSV export
+// entry point (createPanelActions), backing the Activity window's "Capture
+// screenshot" / "Export CSV" buttons. Null outside --mcp-server mode.
+let panelActions = null;
 let activityWindow = null;
 let connectionsWindow = null;
 
@@ -134,7 +139,7 @@ async function runMcpServer() {
   const startupConnections = store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
-  const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection } = await import('timebuddy-incident-investigator');
+  const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection, createPanelActions } = await import('timebuddy-incident-investigator');
 
   activityLog = createActivityLog();
   activityLog.onEntry((entry) => {
@@ -142,32 +147,30 @@ async function runMcpServer() {
   });
   setupLiveViewSession(buildAuthHeader, originMatchesConnection);
 
+  // The engine's own default (DATA_DIR env var, else './.data') is relative to
+  // process.cwd() — but Claude Code/Desktop controls what cwd this process is
+  // spawned with, not us, and it isn't necessarily consistent. Confirmed in
+  // practice: the metric-index cache ended up split across two different .data
+  // folders depending on cwd, and the one Claude Code actually used kept
+  // serving stale (pre-bugfix) data that a fresh run elsewhere had already
+  // proven fixed. Anchoring to Electron's own per-OS userData dir (already
+  // used for connections.json/secrets.enc.json) makes the cache location the
+  // same every time, regardless of how this process gets launched.
+  const dataDir = path.join(app.getPath('userData'), 'data');
+  const connectionsSource = () => store.getConnectionsForEngine();
+  // Only the Electron app has a bundled Chromium to drive a headless capture
+  // with — this same screenshotter both gates screenshot_panel's registration
+  // and backs the Activity window's own export buttons via createPanelActions.
+  const screenshotter = createScreenshotter();
+  panelActions = createPanelActions(connectionsSource, { dataDir }, screenshotter);
+
   // Pass a thunk, not the snapshot above, so the engine re-reads
   // connections.json/secrets.enc.json on every tool call — a connection
   // added or edited in the GUI takes effect on the next tool call, with no
   // need to restart this MCP server process (restarting the GUI window
   // alone never did anything here anyway: it's a separate process from the
   // one Claude Code/Desktop is already talking to over stdio).
-  await startMcpServer(
-    () => store.getConnectionsForEngine(),
-    {
-      // The engine's own default (DATA_DIR env var, else './.data') is
-      // relative to process.cwd() — but Claude Code/Desktop controls what cwd
-      // this process is spawned with, not us, and it isn't necessarily
-      // consistent. Confirmed in practice: the metric-index cache ended up
-      // split across two different .data folders depending on cwd, and the
-      // one Claude Code actually used kept serving stale (pre-bugfix) data
-      // that a fresh run elsewhere had already proven fixed. Anchoring to
-      // Electron's own per-OS userData dir (already used for
-      // connections.json/secrets.enc.json) makes the cache location the same
-      // every time, regardless of how this process gets launched.
-      dataDir: path.join(app.getPath('userData'), 'data'),
-    },
-    // Only the Electron app has a bundled Chromium to drive a headless
-    // capture with — this is what gates screenshot_panel's registration.
-    createScreenshotter(),
-    activityLog,
-  );
+  await startMcpServer(connectionsSource, { dataDir }, screenshotter, activityLog);
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
   console.error(
@@ -212,6 +215,66 @@ ipcMain.handle('activity:openExternal', (_event, url) => {
     return;
   }
   if (parsed.protocol === 'http:' || parsed.protocol === 'https:') shell.openExternal(url);
+});
+
+// Writes `data` into the user's Downloads folder under `filename`, without ever
+// clobbering an existing file: on a name collision it appends " (2)", " (3)",
+// … until one is free. The `wx` flag makes each attempt fail rather than
+// overwrite if the name appeared between attempts, so this is race-free (no
+// check-then-write TOCTOU gap). Only the basename of `filename` is used, so a
+// engine-suggested name can never write outside Downloads.
+async function writeToDownloads(filename, data) {
+  const dir = app.getPath('downloads');
+  await mkdir(dir, { recursive: true });
+  const safe = path.basename(filename);
+  const ext = path.extname(safe);
+  const stem = path.basename(safe, ext);
+  for (let n = 1; ; n++) {
+    const name = n === 1 ? `${stem}${ext}` : `${stem} (${n})${ext}`;
+    const full = path.join(dir, name);
+    try {
+      await writeFile(full, data, { flag: 'wx' });
+      return full;
+    } catch (err) {
+      if (err && err.code === 'EEXIST') continue;
+      throw err;
+    }
+  }
+}
+
+// The Activity window's "Export CSV" / "Capture screenshot" buttons. Both take
+// { connection, url } straight off the selected activity entry — the entry's
+// connection id (authoritative) and its round-trippable dashboard/panel url
+// (which carries the panelId, window, and var-* overrides). The engine does the
+// same resolve → capture the MCP tools do, but hands back bytes; the file lands
+// in Downloads and its path goes back to the renderer for the "Reveal" button.
+ipcMain.handle('activity:exportCsv', async (_event, { connection, url }) => {
+  if (!panelActions) throw new Error('Export is only available while the MCP server is running.');
+  const result = await panelActions.exportCsv({ connection, url });
+  const files = [];
+  for (const file of result.files) {
+    const savedPath = await writeToDownloads(file.suggestedFilename, file.content);
+    files.push({ path: savedPath, name: path.basename(savedPath), rows: file.rows, columns: file.columns });
+  }
+  return { files, meta: result.meta };
+});
+
+ipcMain.handle('activity:screenshot', async (_event, { connection, url }) => {
+  if (!panelActions) throw new Error('Screenshot is only available while the MCP server is running.');
+  const result = await panelActions.screenshot({ connection, url });
+  const savedPath = await writeToDownloads(result.suggestedFilename, result.png);
+  return { path: savedPath, name: path.basename(savedPath), meta: result.meta };
+});
+
+ipcMain.handle('activity:revealInFolder', (_event, filePath) => {
+  // Only ever reveal a file we just wrote into Downloads — never an arbitrary
+  // renderer-supplied path. showItemInFolder opens a native file-manager window
+  // selecting the file, so scope it to the one directory these buttons write to.
+  const downloads = app.getPath('downloads');
+  const resolved = path.resolve(String(filePath));
+  if (resolved === downloads || resolved.startsWith(downloads + path.sep)) {
+    shell.showItemInFolder(resolved);
+  }
 });
 
 ipcMain.handle('connections:registrationInfo', () => ({

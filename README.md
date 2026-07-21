@@ -279,6 +279,14 @@ connection's `matchHosts` aliases (a load-balancer or vanity hostname) authentic
 too — but only over that connection's own scheme, so an `https` connection's credentials are
 never transmitted to the alias over plaintext `http`.
 
+Each panel entry also has two buttons — **Export CSV** and **Capture screenshot** — so you
+can grab a panel's data or picture yourself, without asking Claude to. They run the exact
+same export/capture the `export_panel_csv` and `screenshot_panel` tools do (same panel, same
+time window and variables the entry was recorded with; the CSV is neutralized against
+spreadsheet formula injection just like the tool's, and both are redacted the same way), and
+save the file straight to your **Downloads** folder — with a **Show in folder** button to
+reveal it in Finder/Explorer/your file manager afterward.
+
 The log is in-memory only, for as long as that server keeps running — closing or
 restarting your Claude client (which restarts the server) clears it, and nothing is ever
 written to disk.

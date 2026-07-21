@@ -74,4 +74,12 @@ export type { Screenshotter, CapturePanelRequest } from './screenshot/types.js';
 export { createActivityLog } from './activity/activityLog.js';
 export type { ActivityLog, ActivityEntry } from './activity/activityLog.js';
 export { buildAuthHeader } from './grafana/client.js';
+export { createPanelActions } from './actions/panelActions.js';
+export type {
+  PanelActions,
+  PanelActionInput,
+  PanelScreenshotResult,
+  PanelCsvResult,
+  PanelCsvFileResult,
+} from './actions/panelActions.js';
 export { originMatchesConnection } from './connections/resolve.js';
