@@ -333,6 +333,28 @@ dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
   has no generic escape hatch. A Viewer-scoped service-account token remains the more
   defense-in-depth choice for a shared/CI connection.
 
+## Local data and disk usage
+
+Everything this server writes lands under `DATA_DIR` (default `.data` for the CLI; the
+packaged app uses Electron's per-OS `userData` directory — a location most people never
+think to check for disk usage). Two paths grow with use and are bounded automatically by
+a best-effort sweep that runs **once when the MCP server starts** (it never blocks or
+fails startup):
+
+- **`screenshots/`** — one full-resolution PNG per `screenshot_panel` call, named so
+  nothing is ever overwritten. The highest-volume path, and of no value once the incident
+  it captured is over. Any PNG older than `SCREENSHOT_RETENTION_HOURS` (default `168`, i.e.
+  7 days) is deleted on startup. Set it to `0` to keep everything.
+- **`audit.jsonl`** — the record backing the read-only guarantee, so it is bounded by size
+  but **rotated, not truncated**. Once it passes `AUDIT_MAX_BYTES` (default ~5 MB) it is
+  rolled to `audit.jsonl.1`, keeping up to `AUDIT_KEEP_FILES` (default `5`) older
+  generations; history is preserved rather than deleted to reclaim disk. Set
+  `AUDIT_MAX_BYTES=0` to disable rotation.
+
+The metric-index cache (`metric-index.json`) is self-bounding — it's overwritten in place
+on each rebuild, not appended. The webhook alert store `alerts.jsonl` is deliberately
+**not** covered by this sweep; see the note under "Receiving alerts by webhook" below.
+
 ## Receiving alerts by webhook
 
 Optional. Point a Grafana webhook contact point at this listener and `get_alert_context`
@@ -360,8 +382,11 @@ port becomes the incident that `get_alert_context` hands to the investigating ag
 unauthenticated open port here is a way to feed that agent attacker-chosen content, not
 just a way to fill a disk.
 
-`alerts.jsonl` currently grows without bound; rotation is
-[tracked separately](https://github.com/misterbisson/timebuddy-incident-investigator/issues/71).
+`alerts.jsonl` is deliberately left out of the startup data-dir sweep (see "Local data and
+disk usage"): `get_alert_context` reads it tail-first, so its size doesn't affect a lookup,
+and when the listener is exposed its growth is attacker-driven — better bounded by keeping
+the port loopback-and-authenticated, as above, than by a blanket age/size sweep that would
+race the listener's own appends.
 
 ## Known limitations (MVP)
 
