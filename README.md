@@ -274,7 +274,10 @@ screenshot `screenshot_panel` saved for it, or a live, authenticated view of the
 Grafana panel in an embedded `<webview>` — authenticated the same way `screenshotter.js`'s
 one-shot captures are (a connection's own bearer/basic header injected via `webRequest`),
 just against a long-lived, persistent session instead of a destroy-after-one-shot window
-(see `setupLiveViewSession` in `electron/src/main.js`).
+(see `setupLiveViewSession` in `electron/src/main.js`). A panel served from one of a
+connection's `matchHosts` aliases (a load-balancer or vanity hostname) authenticates here
+too — but only over that connection's own scheme, so an `https` connection's credentials are
+never transmitted to the alias over plaintext `http`.
 
 The log is in-memory only, for as long as that server keeps running — closing or
 restarting your Claude client (which restarts the server) clears it, and nothing is ever
