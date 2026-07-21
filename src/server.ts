@@ -6,6 +6,7 @@ import { ConnectionRegistry, type ConnectionsSource } from './grafana/registry.j
 import type { Screenshotter } from './screenshot/types.js';
 import type { ActivityLog } from './activity/activityLog.js';
 import { registerAllTools } from './tools/registerAll.js';
+import { runStartupMaintenance } from './security/retention.js';
 
 /**
  * Builds the MCP server and registers every tool against the given
@@ -63,6 +64,15 @@ export async function startMcpServer(
   activityLog?: ActivityLog,
 ): Promise<McpServer> {
   const server = createServer(source, configOverrides, screenshotter, activityLog);
+
+  // Bound the local data dir's disk footprint once per process start. Kept off
+  // the createServer() construction path (which unit tests exercise heavily and
+  // shouldn't do filesystem cleanup as a side effect) and fired-and-forgotten
+  // here: it's best-effort and never throws, so it must not delay or block the
+  // server coming up on stdio.
+  const config: Config = { ...loadConfig(), ...configOverrides };
+  void runStartupMaintenance(config);
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;
