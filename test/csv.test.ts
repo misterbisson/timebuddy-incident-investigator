@@ -195,6 +195,27 @@ describe('formula neutralization edge cases the first pass missed', () => {
     }
   });
 
+  // Still neutralized when a whole *run* of stripped whitespace precedes the
+  // formula — the smuggling works the same whether it's one char or several.
+  it('neutralizes a run of stripped whitespace ahead of a formula character', () => {
+    expect(frameToCsv(cells(['\t\t=1+1']))).toContain("'\t\t=1+1");
+    expect(frameToCsv(cells(['\r\n@SUM(A1)']))).toContain("'\r\n@SUM(A1)");
+  });
+
+  // Issue #106: the previous trigger set matched *any* leading control-
+  // whitespace, so a cell that begins with a tab/newline and then ordinary
+  // text got a spurious apostrophe. Whitespace only smuggles when a formula
+  // character actually follows it; text behind it is just text.
+  it('leaves leading stripped whitespace alone when ordinary text follows, not a formula', () => {
+    // No RFC 4180 quoting needed (tab is not a delimiter), and crucially no
+    // leading apostrophe — the whole point of the fix.
+    expect(frameToCsv(cells(['\tHello']))).toBe('label\r\n\tHello\r\n');
+    // A bare LF still forces RFC 4180 quoting, but not neutralization.
+    expect(frameToCsv(cells(['\nfoo']))).toBe('label\r\n"\nfoo"\r\n');
+    // A multi-char whitespace run followed by text is equally untouched.
+    expect(frameToCsv(cells(['\t\tplain']))).toBe('label\r\n\t\tplain\r\n');
+  });
+
   // Not a bypass, and worth pinning so nobody "fixes" it: spreadsheets do NOT
   // strip a leading space before formula detection, so the space is itself the
   // neutralizer. Adding it would mangle legitimately space-padded labels.
