@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.4.0...v0.4.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* publish installer assets (incl. Mac .dmg) to GitHub releases ([#133](https://github.com/misterbisson/timebuddy-incident-investigator/issues/133)) ([70b8a3d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/70b8a3d2071387b0e804c398fd87a60fa37e5c65))
+
 ## [0.4.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.3.0...v0.4.0) (2026-07-22)
 
 
