@@ -19,6 +19,19 @@ To run in MCP-server mode directly (what Claude Code/Desktop will do):
 electron . --mcp-server
 ```
 
+### Registering a dev instance with Claude Code
+
+To exercise local changes as a real tool call from Claude Code (rather than via
+`test/mcpServerMode.mjs`'s scripted client), open the GUI (`npm run dev`) and use its
+"Register with Claude" section same as an end user would — but run it from this
+unpackaged checkout, not an installed build. The generated `claude mcp add`/Claude
+Desktop snippet detects that it's unpackaged (`isPackaged` is false) and automatically
+names the server `timebuddy-incident-investigator-dev` instead of
+`timebuddy-incident-investigator`, so it registers as a distinct entry alongside any real
+connection to a packaged build rather than colliding with (or overwriting) it. Both can
+be connected at once; make sure whichever client you're testing in is pointed at the
+`-dev` entry, since tool names are otherwise identical between the two.
+
 ## Testing
 
 `test/mcpServerMode.mjs` seeds a connection directly through `connectionStore.js` (bypassing
