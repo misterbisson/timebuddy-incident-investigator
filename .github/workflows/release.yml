@@ -5,6 +5,18 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Manual recovery path: rebuild and (re-)publish the installers for an
+  # already-tagged, already-published release whose assets are missing or need
+  # replacing — e.g. the 0.2.0–0.4.0 releases that shipped with no installers
+  # because electron-builder's default draft publish type was incompatible with
+  # release-please's published release (fixed by build.publish.releaseType in
+  # electron/package.json). See the `republish` job below.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to (re)build and publish assets for, e.g. v0.4.0'
+        required: true
+        type: string
 
 jobs:
   version:
@@ -138,6 +150,104 @@ jobs:
           # unset for now: scripts/afterSign.js no-ops the notarize step without them,
           # so the mac build is signed but not notarized until a real Apple Developer
           # ID is set up.
+
+  republish:
+    # Manual recovery job (workflow_dispatch, `tag` input). Rebuilds and uploads
+    # the installers for an existing, already-published release whose assets are
+    # missing. Mirrors the `release` job's signing + build steps, but checks out
+    # the requested tag and force-sets build.publish.releaseType=release before
+    # building — so it works even for tags cut BEFORE that fix landed in
+    # electron/package.json (0.2.0–0.4.0), which would otherwise hit the same
+    # draft-vs-published mismatch that skipped their uploads in the first place.
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Force the GitHub publish target to type `release` regardless of what this
+      # tag's committed config said. release-please publishes the release (not a
+      # draft), and electron-builder's default draft publish type is incompatible
+      # with that ("existing type not compatible with publishing type ...
+      # existingType=release publishingType=draft"), which silently skips every
+      # asset upload while the job still reports success. Tags cut before the
+      # electron/package.json fix don't carry releaseType, so set it here.
+      - name: Force release publish type
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "electron/package.json";
+            const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+            const entries = Array.isArray(pkg.build.publish) ? pkg.build.publish : [pkg.build.publish];
+            for (const e of entries) {
+              if (e && e.provider === "github") e.releaseType = "release";
+            }
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
+            console.log("Set github publish releaseType=release for", entries.length, "entry(ies)");
+          '
+
+      - name: Import signing certificate
+        if: matrix.os == 'macos-latest'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PWD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
+
+          IDENTITY_HASH=$(security find-identity "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
+          if [[ -z "$IDENTITY_HASH" ]]; then
+            echo "::error::No signing identity found in imported certificate"
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
+
+          rm certificate.p12
+
+      - name: Build and Publish
+        working-directory: electron
+        run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            npm run build-mac -- --publish always
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            npm run build-win -- --publish always
+          else
+            npm run build-linux -- --publish always
+          fi
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
   build-pr:
     if: github.event_name == 'pull_request'
