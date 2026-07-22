@@ -1,6 +1,6 @@
 {
   "name": "timebuddy-incident-investigator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Grafana Incident Review MCP server: read-only tools for AI-assisted incident investigation of dashboards, metrics, and logs.",
   "type": "module",
   "license": "AGPL-3.0-only",
