@@ -55,11 +55,16 @@ function tagValuesResponse(refId: string, tagKey: string, values: string[]): DsQ
   };
 }
 
+function errorResponse(refId: string, error: string): DsQueryResponse {
+  return { results: { [refId]: { error } } };
+}
+
 function fakeClient(opts: {
   datasources: DatasourceInfo[];
   measurements: string[];
   fieldKeys?: string[];
   tagKeys?: string[];
+  tagKeysError?: string;
   tagValues?: string[];
 }): GrafanaClient {
   return {
@@ -68,7 +73,7 @@ function fakeClient(opts: {
       const query = req.queries[0]!.query as string;
       if (query.startsWith('SHOW MEASUREMENTS')) return tableResponse('A', opts.measurements);
       if (query.startsWith('SHOW FIELD KEYS')) return tableResponse('A', opts.fieldKeys ?? []);
-      if (query.startsWith('SHOW TAG KEYS')) return tableResponse('A', opts.tagKeys ?? []);
+      if (query.startsWith('SHOW TAG KEYS')) return opts.tagKeysError ? errorResponse('A', opts.tagKeysError) : tableResponse('A', opts.tagKeys ?? []);
       const tagValuesMatch = query.match(/^SHOW TAG VALUES FROM "[^"]*" WITH KEY = "(.*)"$/);
       if (tagValuesMatch) return tagValuesResponse('A', tagValuesMatch[1]!, opts.tagValues ?? []);
       throw new Error(`unexpected query: ${query}`);
@@ -171,7 +176,26 @@ describe('discover_influxdb_schema tool', () => {
     };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain('matched 2 measurement(s)');
+    expect(result.content[0]!.text).toContain('matched 2 measurements');
+  });
+
+  it('surfaces a SHOW TAG KEYS failure as a query error, not as "not a tag / (none)"', async () => {
+    const client = fakeClient({
+      datasources: oneInfluxDatasource,
+      measurements: ['cpu_load'],
+      tagKeysError: 'read timeout',
+    });
+    const { server, call } = fakeServer();
+    registerDiscoverInfluxdbSchema(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('discover_influxdb_schema', { connection: 'test', searchTerm: 'cpu_load', tagKey: 'host' })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('SHOW TAG KEYS failed: read timeout');
+    expect(result.content[0]!.text).not.toContain('is not a tag');
   });
 
   it('errors when no InfluxDB datasource is configured on the connection', async () => {

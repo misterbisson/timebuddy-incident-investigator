@@ -120,14 +120,18 @@ async function runShowQuery(client: GrafanaClient, datasourceUid: string, query:
  * Runs a SHOW TAG VALUES query and parses its key/value frame with the same
  * extractTagValues() the live-variable resolver uses — parseNameListFrames is
  * wrong here because it would also collect the repeated tag-key column, not
- * just the values. Returns a sorted, deduped value list.
+ * just the values. Returns a sorted, deduped value list. The request is shaped
+ * exactly like materializeVariables' proven live-resolution call (rawQuery,
+ * no resultFormat) so extractTagValues sees the same "value"-named frame field
+ * it was written against, rather than a table-format frame that might name it
+ * differently.
  */
 async function runTagValuesQuery(client: GrafanaClient, datasourceUid: string, query: string): Promise<{ values: string[]; error?: string }> {
   const nowMs = Date.now();
   const request: DsQueryRequest = {
     from: String(nowMs - SCHEMA_QUERY_WINDOW_MS),
     to: String(nowMs),
-    queries: [{ refId: 'A', datasource: { uid: datasourceUid }, query, rawQuery: true, resultFormat: 'table' }],
+    queries: [{ refId: 'A', datasource: { uid: datasourceUid }, query, rawQuery: true }],
   };
   const response = await client.queryDs(request);
   return { values: extractTagValues(response).sort(), error: response.results.A?.error };
@@ -193,9 +197,12 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
           // than silently ignoring tagKey.
           if (tagKey && measurementsResult.names.length !== 1) {
             throw new Error(
-              `tagKey "${tagKey}" was given, but searchTerm "${searchTerm}" matched ${measurementsResult.names.length} measurement(s)` +
-                (measurementsResult.names.length > 1 ? `: ${measurementsResult.names.slice(0, limit).join(', ')}` : '') +
-                '. Narrow searchTerm to exactly one measurement to enumerate a tag key\'s values.',
+              measurementsResult.names.length === 0
+                ? `tagKey "${tagKey}" was given, but searchTerm "${searchTerm}" matched no measurements. ` +
+                    'Broaden or correct searchTerm so it resolves to exactly one measurement to enumerate a tag key\'s values.'
+                : `tagKey "${tagKey}" was given, but searchTerm "${searchTerm}" matched ${measurementsResult.names.length} measurements: ` +
+                    `${measurementsResult.names.slice(0, limit).join(', ')}. ` +
+                    'Narrow searchTerm to exactly one measurement to enumerate a tag key\'s values.',
             );
           }
 
@@ -211,6 +218,14 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
             schema = { measurement, fieldKeys: fieldKeysResult.names, tagKeys: tagKeysResult.names };
 
             if (tagKey) {
+              // A failed SHOW TAG KEYS returns names:[] plus an error; without
+              // this check the "not a tag" branch below would misreport an
+              // infrastructure failure as "Available tag keys: (none)". Surface
+              // it as the query failure it is, matching the SHOW MEASUREMENTS /
+              // SHOW TAG VALUES error handling.
+              if (tagKeysResult.error) {
+                throw new Error(`InfluxDB SHOW TAG KEYS failed: ${tagKeysResult.error}`);
+              }
               // Guard against a silently-empty result being read as "no hosts":
               // a key that isn't on this measurement is a caller error, not an
               // empty set. List the real keys so they can fix the call.
