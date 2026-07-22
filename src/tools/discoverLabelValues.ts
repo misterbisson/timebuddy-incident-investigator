@@ -94,7 +94,10 @@ export function registerDiscoverLabelValues(server: McpServer, { registry, confi
         'metric name or series selector / Loki stream selector) and "label" (the key whose values you want, e.g. ' +
         '"host" / "instance" / "pod"). For Prometheus/Loki, get candidate label names from a panel\'s series labels ' +
         'or its query; for InfluxDB, discover_influxdb_schema lists a measurement\'s tagKeys. A datasource-level ' +
-        'query failure is surfaced as a hard error rather than an empty list. Goes through the same connection ' +
+        'query failure (or an unrecognized response) is a hard error — but note that a mistyped label or metric name ' +
+        'is NOT an error to the datasource, it just matches nothing, so an empty "values" can mean either "no values ' +
+        'in scope" or "wrong label/metric name". Verify the names against the panel\'s own series labels / ' +
+        'discover_influxdb_schema tagKeys before concluding a set is truly empty. Goes through the same connection ' +
         'resolution, redaction, and audit logging as every other tool.',
       inputSchema: {
         metric: z

@@ -219,7 +219,14 @@ export class GrafanaClient {
     if (response.status && response.status !== 'success') {
       throw new Error(`Label-values query failed (${path}): status "${response.status}"${response.error ? `: ${response.error}` : ''}`);
     }
-    return (response.data ?? []).filter((v): v is string => typeof v === 'string');
+    // A valid label-values envelope always carries a data array (empty is
+    // fine). A 200 body without one isn't the label API's response at all —
+    // a Grafana error wrapper, or an unexpected datasource version — so
+    // surface it rather than silently reading a malformed body as "no values".
+    if (!Array.isArray(response.data)) {
+      throw new Error(`Unexpected label-values response (${path}): no "data" array${response.error ? ` (${response.error})` : ''}`);
+    }
+    return response.data.filter((v): v is string => typeof v === 'string');
   }
 
   async getFiringAlerts(): Promise<AlertmanagerAlert[]> {

@@ -96,4 +96,18 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
 
     await expect(client.getPrometheusLabelValues('prom1', 'instance', 'up')).rejects.toThrow(/status "error": bad label/);
   });
+
+  it('throws on a 200 body that has no data array (not the label-values envelope) instead of reading it as empty', async () => {
+    stubFetch({ message: 'Data source not found' }, 200);
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    await expect(client.getPrometheusLabelValues('prom1', 'instance', 'up')).rejects.toThrow(/no "data" array/);
+  });
+
+  it('returns an empty list for a legitimate empty success envelope', async () => {
+    stubFetch({ status: 'success', data: [] }, 200);
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    await expect(client.getPrometheusLabelValues('prom1', 'instance', 'up')).resolves.toEqual([]);
+  });
 });

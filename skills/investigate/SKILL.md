@@ -268,7 +268,10 @@ skill exists to handle for them.
          actual identifier list — the `label_values(metric, label)` equivalent.
        Either way it's a real, data-derived set you can legitimately scope a log search to (it just
        doesn't by itself say *which* host was hot). Same last-resort framing as step 4: only when
-       you'd otherwise have no identifier.
+       you'd otherwise have no identifier. If either call returns an *empty* list, don't read that
+       as "no hosts" straight away — a mistyped `label`/`tagKey`/`metric` isn't an error to the
+       datasource, it just matches nothing, so re-check the name against the panel's own series
+       labels (or `discover_influxdb_schema`'s `tagKeys`) before concluding the set is truly empty.
      - To find *which* of those hosts was actually hot (not just the candidate set), re-run the
        aggregating panel broken out per host: call `execute_query_window` with
        `tagBreakout: { key: "<host tag>" }` (the same tag key you enumerated above). It adds a
