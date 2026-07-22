@@ -313,17 +313,27 @@ async function loadRegistrationInfo() {
   // its own. See main.js's registrationInfo handler for why.
   const args = isPackaged ? ['--mcp-server'] : [appPath, '--mcp-server'];
 
+  // An unpackaged run (npm run dev / electron .) is a contributor pointing this
+  // at their own source checkout, not the installed app — suffix the server
+  // name so it registers as a distinct entry instead of colliding with (or
+  // overwriting) whatever real 'timebuddy-incident-investigator' registration
+  // already points at the packaged build. See electron/CONTRIBUTING.md's
+  // "Registering a dev instance with Claude Code" section.
+  const serverName = isPackaged
+    ? 'timebuddy-incident-investigator'
+    : 'timebuddy-incident-investigator-dev';
+
   // --scope user (not the "local" default) registers this once for the whole machine/user
   // instead of only the one project directory this command happens to be run from —
   // consistent with the skills' --scope user below, and what you want for a single desktop
   // app meant to be usable from any project.
-  const codeCommand = `claude mcp add --scope user timebuddy-incident-investigator -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
+  const codeCommand = `claude mcp add --scope user ${serverName} -- ${quote(execPath)} ${args.map(quote).join(' ')}`;
   $('claudeCodeCommand').textContent = codeCommand;
 
   const desktopSnippet = JSON.stringify(
     {
       mcpServers: {
-        'timebuddy-incident-investigator': {
+        [serverName]: {
           command: execPath,
           args,
         },
