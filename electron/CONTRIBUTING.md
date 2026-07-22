@@ -115,9 +115,16 @@ since a `.ts` file can't take a `jsonpath` entry), updates `CHANGELOG.md`, and t
 merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
 published, checked out at that new tag, and does the actual platform builds +
 `electron-builder --publish always` (so `electron-updater` — not yet wired into `main.js`
-— can eventually point at those release artifacts; release-please itself is configured
-with `skip-github-release: true` so it only tags, leaving the actual GitHub Release object
-and asset uploads to electron-builder, avoiding a double-release conflict). A `main` push
+— can eventually point at those release artifacts). release-please creates the `vX.Y.Z`
+tag *and* the GitHub Release object together (it is **not** run with `skip-github-release`
+— that would skip the tag too; see the note in `.github/workflows/release.yml`), so the
+release already exists as a *published* release by the time `electron-builder` runs. That
+is why the `github` publish entry in this package's `build` config sets
+`"releaseType": "release"`: electron-builder's default is to publish into a *draft*, and
+it refuses to upload to a release whose type doesn't match (`existing type not compatible
+with publishing type ... existingType=release publishingType=draft`) — silently skipping
+every asset while the job still reports success. `releaseType: "release"` makes it upload
+into the existing published release instead. A `main` push
 with no releasable commits merged (docs-only, non-dependency chores, etc.) skips the
 build/publish matrix entirely, same as before. Until you merge the accumulated PR, any
 number of unreleased commits can land on `main` without forcing a release — merge it

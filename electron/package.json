@@ -40,7 +40,8 @@
         "provider": "github",
         "owner": "misterbisson",
         "repo": "timebuddy-incident-investigator",
-        "publishAutoUpdate": true
+        "publishAutoUpdate": true,
+        "releaseType": "release"
       }
     ],
     "files": [
