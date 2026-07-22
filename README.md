@@ -1,375 +1,288 @@
 # Timebuddy Incident Investigator
 
-AI-powered investigation of dashboards, metrics, and logs during incidents.
+**Let an AI agent run the first 30 minutes of your incident investigation — read-only,
+across your Grafana dashboards, metrics, and Graylog logs.**
 
-A Grafana Incident Review MCP server: it gives an AI agent safe, read-only, structured
-access to a Grafana instance so it can do the first 30-60 minutes of an SRE's incident
-investigation — identify what fired, replay the underlying queries, compare against
-baseline periods, search for correlated signals elsewhere, and hand back an
-evidence-linked verdict for a human to act on.
+Timebuddy is an MCP server. You paste a paged alert into your Claude client; it identifies
+what fired, replays the dashboard's real queries over the incident window, compares against
+baselines, hunts for correlated signals elsewhere, corroborates with logs, and hands back
+an **evidence-linked verdict with clickable links** for a human to act on — not a paragraph
+of confident guesses.
 
-Most people never call the tools below by name — three bundled Claude Code skills (see
-["Skills"](#skills) below) chain them automatically. Using Claude Desktop, or another MCP
-client without skill/plugin support? The tools table below is the whole interface — the
-agent calls those directly instead.
+**Is it for you?** If you're on call with Grafana dashboards and use Claude Code, Claude
+Desktop, or any MCP client — yes. Everything it touches is read-only and redacted (see
+[Security](#security)), so it's safe to point at production during an incident.
 
-This page covers downloading, installing, configuring, and using the app. Developing or
-building it instead? See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+## What it does
+
+Give it an alert (a link, alert JSON, or webhook payload) and it will:
+
+- **Identify** — resolve the alert to its dashboard, panel, labels, threshold, and window.
+- **Replay** — re-run the panel's real queries over the incident window, a pre-incident
+  buffer, and historical baselines. No eyeballing raw graphs.
+- **Compare** — z-score the incident against prior-hour/day/week baselines, flagging
+  recurring patterns and likely false positives.
+- **Correlate** — rank other dashboards and panels by deviation, label overlap, and
+  anomaly timing to surface what else moved.
+- **Corroborate** — pull matching Graylog log evidence using identifiers already in hand
+  (host, IP, request/trace id).
+- **Report** — a verdict (`real-anomaly` / `likely-false-positive` / `inconclusive`) with
+  a clickable link to every piece of evidence.
 
 ## Skills
 
-Three Claude Code skills chain the tools below in the right order automatically, so
-nobody needs to know a tool name or the right call order — paste an alert link, ask what's
-connected, or ask to export a panel, and the right one takes it from there:
+Three bundled Claude Code skills chain the [tools](#mcp-tools) in the right order, so nobody
+memorizes tool names or call order — paste an alert link, ask what's connected, or ask to
+export a panel, and the right one takes it from there:
 
 | Skill | Use it when | What it does |
 | --- | --- | --- |
-| `/timebuddy:explore` | Checking that the Grafana MCP setup works, doing a health check, or just seeing what's connected — before an incident happens | Confirms the server is connected, surveys available connections/dashboards, and flags which are alert-backed (and therefore trustworthy) |
-| `/timebuddy:investigate` | Something's paged, someone pasted an alert/incident link, or you're asking "what's going on with X" | Ingests the alert, replays its queries over the incident window, checks baselines, looks for correlated signals elsewhere, and writes an evidence-linked verdict with clickable links |
-| `/timebuddy:export` | Someone asks to export, archive, or hand off a panel's data or chart — for a report, a postmortem, or a presentation | Resolves the exact panel from a URL and a panel name, writes its data to a CSV file, and optionally grabs a screenshot alongside it |
+| `/timebuddy:explore` | Before an incident — a health check, or "what's even connected?" | Confirms the server is connected, surveys connections/dashboards, and flags which are alert-backed (and therefore trustworthy) |
+| `/timebuddy:investigate` | Something paged, someone pasted an alert link, or "what's going on with X" | Ingests the alert, replays its queries, checks baselines, finds correlated signals, pulls log evidence, and writes an evidence-linked verdict |
+| `/timebuddy:export` | Handing off a panel's data or chart for a report, postmortem, or deck | Resolves the exact panel from a URL and name, writes its data to CSV, and optionally grabs a screenshot |
 
-See ["Claude Code skills"](#claude-code-skills) below for how to install them — they're
-bundled with the desktop app, so it's usually a couple of clicks, no separate download.
+Not using Claude Code? Any MCP client (Claude Desktop, etc.) calls the tools directly —
+same capability, you just drive it yourself. Install the skills from the app in a couple of
+clicks; see [Claude Code skills](#claude-code-skills).
+
+## Quick start
+
+One app to install. Each person adds their own Grafana connection (a personal token or
+login — no shared admin service account), then registers it with their Claude client. No
+separate server process, no env vars to hand-edit, no plaintext credential file anywhere.
+
+1. **Download & install** the latest build for your platform from
+   [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
+   On macOS the first launch hits a Gatekeeper block (the build isn't notarized yet) — see
+   the [one-time click-through](#installing-a-downloaded-build-macos) below.
+2. **Add a connection** for each Grafana or Graylog endpoint (one per region/tier) — Bearer
+   token or Basic auth for Grafana, API token or login for Graylog. Hit **Test connection**,
+   then **Save**. See [Configuring connections](#configuring-connections).
+3. **Register with Claude.** The app's "Register with Claude" section gives you a
+   ready-to-run command (Claude Code) or JSON snippet (Claude Desktop) with this app's path
+   already filled in — paste it into your client. An optional block installs the three
+   skills above.
+
+Connection changes take effect on the very next tool call — no restart. On macOS, the first
+time Claude starts the app as a server, expect a one-time keychain prompt; it's decrypting
+your saved credentials, so **Allow** it.
+
+> For local development or CI, the standalone CLI runs on its own with a single connection
+> from env vars — see [`CONTRIBUTING.md`](CONTRIBUTING.md#running-the-standalone-cli).
 
 ## MCP tools
 
-| Tool | Purpose |
+17 read-only tools, grouped by what they're for. You rarely call them by name — the skills
+above chain them. **See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.**
+
+| Group | Tools |
 | --- | --- |
-| `get_alert_context` | Ingest an alert (webhook payload, pasted JSON, or a dashboard/panel/alert-rule URL) and resolve it to dashboard UID, panel ID, labels, threshold, and time range. Also attaches a matching "Timebuddy knowledge" panel when one has been published (see below). |
-| `get_product_context` | Look up a "Timebuddy knowledge" panel directly by product key, without an alert in hand. |
-| `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables — from a dashboard/panel/alert-rule URL (connection auto-detected) or a `dashboardUid` directly. Useful for finding a panel's id/type from its title before calling another tool by name. |
-| `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
-| `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. `includePoints: false` drops each series' raw points (stats/runs are still returned) for a wide window that would otherwise overflow. |
-| `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. `includePoints: false` drops raw points from every panel's series for a compact, stats-only survey. A panel mirroring another via Grafana's built-in "-- Dashboard --" datasource (see below) is reported with `mirrorsPanelIds`, never executed or errored. |
-| `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. In the Electron app, first tries to capture the panel's real on-screen data by driving a hidden browser to Grafana's own Inspect > Data view with "Apply panel transformations" checked (`transformationsApplied: true` in the result) — so a join/reduce/rename configured on the panel comes back exactly as shown, not just the raw query result. Otherwise (no transformations configured, or no Electron/`screenshotter`) falls back to a direct export: table panels as-is (every raw column); timeseries/graph panels pivoted wide (one UTC-timestamp column plus one column per series). |
-| `screenshot_panel` | *Electron app only.* Captures a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed, on-screen content isn't visible in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). The one tool whose output is only **partly** covered by the redaction layer: its JSON payload is redacted like every other tool's, but the **image itself is not** — redaction only understands text, so anything legible on the panel (legend values, axis labels, annotation text) reaches the model as rendered. |
-| `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
-| `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. When auto-discovering, checks one `scope` tier per call — `product` (default; the primary dashboard plus its Timebuddy knowledge panel's declared ops/SLI dashboards and dependencies, or just the primary dashboard alone with no knowledge published), `connection`, then `all-connections` — so a caller can report each tier's result and only pay for a wider, more expensive search when the narrower one didn't answer it. |
-| `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
-| `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle — it does not generate prose; the calling agent writes the human-readable note from this bundle. |
-| `list_datasources` | List a connection's configured datasources (uid/name/type/default) and each connection's configured `tags` — cross-reference against `list_log_sources`' tags to pair a Grafana connection with the log connection covering the same environment. Mainly for checking whether a panel's literal-name datasource reference still exists under some other UID. |
-| `discover_influxdb_schema` | Queries an InfluxDB datasource directly for its own measurement/field/tag schema — not dashboarded data. A last-resort fallback for when `find_related_dashboards` finds nothing for a metric you have independent evidence should exist (index-builder only ever knows about metrics some panel already visualizes). Requires a `searchTerm`; there's no "list everything" mode by design. InfluxDB only, for now. |
-| `search_logs` | Searches a Graylog connection for log messages in a fixed time window, using Graylog's own query syntax. Use identifiers pulled from a metric investigation (hostname, IP, product string, request/trace id) to narrow the search. |
-| `list_log_sources` | List configured Graylog connections (id/name/tags/default stream) — the log-side counterpart to `list_datasources`. Pass `connection` to also list that connection's available streams. |
-| `correlate_logs` | Joins two (or more) Graylog searches on a shared field (e.g. a request id) using a PromQL-inspired join query — `and` (inner join), `or` (left join), `unless` (anti-join). Every stream in a query runs against the same fixed historical window, not a live tail. |
-
-## Setup
-
-There's one app to install: run it, add your Grafana connection(s) yourself (each person
-authenticates as themselves — a personal Bearer token or your own username/password —
-instead of everyone sharing one admin-provisioned service-account token), then register it
-with whichever Claude client you use. No separate MCP server process, no env vars to
-hand-edit, no plaintext credential file anywhere.
-
-1. Download the latest build for your platform from
-   [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases)
-   and install it. (On macOS, the first launch hits a Gatekeeper block since this build
-   isn't notarized yet — see
-   ["Installing a downloaded build (macOS)"](#installing-a-downloaded-build-macos) below
-   for the click-through.)
-2. Add a connection for each Grafana endpoint you use (one per region/tier, etc.) —
-   Bearer token or Basic auth, your choice. "Test connection" before saving. (See
-   ["Configuring connections"](#configuring-connections) below for a walkthrough with
-   screenshots.)
-3. In the app's "Register with Claude" section, copy the command (Claude Code) or JSON
-   snippet (Claude Desktop) shown there — it already has this app's own path filled in —
-   and add it to your Claude client. A third block, "Claude Code skills (optional)", gives
-   two `claude plugin` CLI commands that register the skills below — they're bundled with
-   the app itself (see ["Claude Code skills"](#claude-code-skills) below), so this needs no
-   GitHub access and no separate download, and it stays pinned to whichever app version you
-   have installed. On macOS, the first time Claude actually starts the app as an MCP
-   server, expect a keychain access prompt — see
-   ["Registering with Claude"](#registering-with-claude) below for what it looks like and
-   why it's expected.
-
-Adding, editing, or removing a connection later takes effect immediately for any MCP
-server that's already running — it's picked up on the very next tool call, no restart
-needed. (Restarting the connection-manager GUI window itself does nothing for this — it's
-a separate process from the one your Claude client is already talking to.)
-
-For local development or CI, where there's no interest in the desktop app, the standalone
-CLI still works on its own with a single connection from env vars — see
-[`CONTRIBUTING.md`](CONTRIBUTING.md#running-the-standalone-cli).
+| **Ingest & resolve** | `get_alert_context`, `get_product_context`, `fetch_dashboard`, `resolve_panel_queries` |
+| **Query & analyze** | `execute_query_window`, `render_dashboard`, `validate_baseline`, `summarize_findings` |
+| **Correlate & discover** | `find_related_dashboards`, `detect_correlated_anomalies`, `discover_influxdb_schema` |
+| **Export & capture** | `export_panel_csv`, `screenshot_panel` *(Electron app only)* |
+| **Logs** | `search_logs`, `list_log_sources`, `correlate_logs` |
+| **Utility** | `list_datasources` |
 
 ## Installing a downloaded build (macOS)
 
-Grab the latest build for your platform from
-[GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
+The macOS build is signed with a self-signed certificate, not a real Apple Developer ID
+(see [`electron/CONTRIBUTING.md`](electron/CONTRIBUTING.md#building-signing-and-releasing)),
+so Gatekeeper blocks it as unverified on first launch. On Sequoia and later the old
+"right-click → Open" bypass no longer works — it has to be allowed from System Settings.
+This is a one-time click-through per downloaded build.
 
-The macOS build is currently signed with a self-signed certificate, not a real Apple
-Developer ID (see [`electron/CONTRIBUTING.md`](electron/CONTRIBUTING.md#building-signing-and-releasing))
-— so Gatekeeper blocks it as an unverified app on first launch. On current macOS (Sequoia
-and later), the old "right-click the app → Open" bypass no longer clears this particular
-block; it has to be allowed from System Settings instead. This is the same click-through
-for every release until real Developer ID signing/notarization lands:
-
-1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
-
-   <img src="docs/images/macos-install-1-drag-to-applications.png" width="500" alt="Drag the app into the Applications folder">
-
-2. Double-click the app in **Applications**. macOS refuses to open it outright:
-
-   <img src="docs/images/macos-install-2-not-opened.png" width="380" alt="“Timebuddy Incident Investigator.app” Not Opened">
-
-   Click **Done** (not "Move to Trash").
-
-3. Open **System Settings → Privacy & Security**, scroll to the **Security** section at
-   the bottom, and click **Open Anyway** next to the app's entry.
-
-   <img src="docs/images/macos-install-3-privacy-security-open-anyway.png" width="360" alt="Privacy & Security showing the blocked app with an Open Anyway button">
-
-4. Confirm in the dialog that appears:
-
-   <img src="docs/images/macos-install-4-confirm-open-anyway.png" width="360" alt="Open “Timebuddy Incident Investigator.app”? confirmation dialog">
-
-   Click **Open Anyway** again.
-
-5. Authenticate with Touch ID or your admin password — macOS requires this before it'll
-   actually launch an app it blocked:
-
-   <img src="docs/images/macos-install-5-authenticate.png" width="360" alt="Touch ID / password prompt to authorize opening the app">
-
-The app opens normally after this and won't be re-blocked on subsequent launches. This
-whole flow is only needed once per downloaded build; a rebuilt/re-downloaded `.app` (a
-new version, or the same version re-signed) is quarantined again and needs it repeated.
-
-Prefer the command line? Skip steps 2-5 with:
+Fastest path — clear the quarantine flag from the terminal, then open the app normally:
 
 ```bash
 xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app"
 ```
 
+<details>
+<summary>Prefer clicking through the dialogs? Step-by-step with screenshots.</summary>
+
+1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
+
+   <img src="docs/images/macos-install-1-drag-to-applications.png" width="500" alt="Drag the app into the Applications folder">
+
+2. Double-click the app. macOS refuses to open it — click **Done** (not "Move to Trash").
+
+   <img src="docs/images/macos-install-2-not-opened.png" width="380" alt="“Timebuddy Incident Investigator.app” Not Opened">
+
+3. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open
+   Anyway** next to the app's entry.
+
+   <img src="docs/images/macos-install-3-privacy-security-open-anyway.png" width="360" alt="Privacy & Security showing the blocked app with an Open Anyway button">
+
+4. Confirm **Open Anyway** in the dialog, then authenticate with Touch ID or your password.
+
+   <img src="docs/images/macos-install-4-confirm-open-anyway.png" width="360" alt="Open “Timebuddy Incident Investigator.app”? confirmation dialog">
+
+</details>
+
+The app opens normally afterward and won't be re-blocked — until a rebuilt or re-downloaded
+`.app` is quarantined again and needs it repeated.
+
 ## Configuring connections
 
-Add a connection for each Grafana or Graylog endpoint you use (one per region/tier,
-etc.) — each person authenticates as themselves (their own token or username/password)
-rather than everyone sharing one admin-provisioned service-account credential.
+Add a connection for each Grafana or Graylog endpoint you use. Each person authenticates as
+themselves — their own token or login — rather than everyone sharing one admin-provisioned
+service-account credential.
 
-1. Click **Add connection**, pick a **Connection kind** (Grafana or Graylog), and fill
-   in a name, the URL, and credentials:
+1. Click **Add connection**, pick a **kind** (Grafana or Graylog), and fill in a name, URL,
+   and credentials. Grafana takes a Bearer token or Basic auth; Graylog takes an **API
+   token** or Basic auth — note the API token is sent as HTTP Basic with the token as the
+   *username*, per Graylog's own convention, not a Bearer header. Either kind can carry
+   optional **tags** (e.g. `prod`, `us-east`) that a skill uses to pair a Graylog connection
+   with the right Grafana one. `kind` is fixed once saved.
 
    <img src="docs/images/connections-1-add-modal.png" width="400" alt="Add connection form">
 
-   Grafana connections take a Bearer token or Basic-auth username/password, same as
-   always. Graylog connections take an **API token** or Basic-auth username/password —
-   note that "API token" is sent as HTTP Basic auth with the token as the username, per
-   Graylog's own convention, not a real Bearer header. Either kind can carry optional
-   **tags** (e.g. `prod`, `us-east`) — shared free-form labels a skill uses to pair a
-   Graylog connection with the right Grafana connection instead of guessing. `kind` is
-   fixed once a connection is saved; switch the kind by adding a new connection instead
-   of editing an existing one.
+2. Click **Test connection** before saving — it catches a wrong URL, bad credential, or
+   unreachable instance now instead of partway through an investigation later.
 
-2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
-   URL, a bad credential, or an instance that isn't reachable from this machine
-   immediately, instead of partway through an actual investigation later.
-
-3. Click **Save**. Repeat for every endpoint you use — they all show up in one list,
-   each editable/duplicable/deletable at any time:
+3. Click **Save**. Repeat for every endpoint; they all show up in one list, each
+   editable/duplicable/deletable at any time.
 
    <img src="docs/images/connections-2-list-redacted.png" width="700" alt="Configured connections list">
 
-   (Name/URL columns are blurred above — those are real connection details from a live
-   setup; yours will show your own endpoints.)
+Adding, editing, or removing a connection takes effect on the very next tool call — no
+restart. (Restarting the GUI window does nothing here; it's a separate process from the one
+your Claude client is talking to.)
 
 ### How connections are stored
 
-Connections live under Electron's per-OS `userData` directory, in two files:
+Connections live under Electron's per-OS `userData` directory, in two files written
+atomically (temp file + rename, so an interrupted write can't truncate either):
 
-- `connections.json` — non-secret metadata (name, URL, auth type, kind, tags, etc.),
-  plaintext (it holds nothing sensitive).
-- `secrets.enc.json` — every token/password, `safeStorage`-encrypted (backed by the OS
-  keychain: macOS Keychain, Windows DPAPI, or libsecret on Linux). Decrypted only
-  in-memory, only inside this same process, when `--mcp-server` mode needs to build a
-  client for one of these connections — the decrypted form is never written back to
-  disk.
+- `connections.json` — non-secret metadata (name, URL, auth type, kind, tags), plaintext.
+- `secrets.enc.json` — every token/password, `safeStorage`-encrypted via the OS keychain
+  (macOS Keychain, Windows DPAPI, libsecret on Linux). Decrypted only in-memory, only inside
+  the `--mcp-server` process, only when building a client — never written back to disk.
 
-Both files are written atomically (temp file plus rename), so an interrupted write or a
-crash can't leave either one truncated.
-
-If a connection's row shows **"Can't decrypt secret"**, its stored credential is still
-there but this machine's keychain can no longer open it — most often after an OS
-reinstall, a keychain reset, or migrating to a new machine. Edit that connection and
-re-enter its token/password to fix it. Only that one connection is affected; the others
-keep working normally, and tool calls that don't use it are unaffected.
+If a row shows **"Can't decrypt secret"**, the credential is still there but this machine's
+keychain can no longer open it — usually after an OS reinstall, keychain reset, or machine
+migration. Edit that connection and re-enter its token/password to fix it; only that one
+connection is affected.
 
 ## Registering with Claude
 
-Once you've added your connections, the app's "Register with Claude" section shows a
-ready-to-run `claude mcp add --scope user` command (Claude Code) and a ready-to-paste
-`mcpServers` JSON snippet (Claude Desktop), both pointing at this app's own executable
-path with `--mcp-server`. `--scope user` (not the "local" default) registers it once for
-the whole machine/user rather than only the one project directory you happen to run the
-command from — since this is one desktop app meant to be usable from any project:
+The app's "Register with Claude" section shows a ready-to-run
+`claude mcp add --scope user` command (Claude Code) and a ready-to-paste `mcpServers` JSON
+snippet (Claude Desktop), both pointing at this app's executable with `--mcp-server`.
+`--scope user` registers it once for the whole machine rather than a single project
+directory, since this is one desktop app usable from anywhere.
 
 <img src="docs/images/connections-3-register-with-claude-redacted.png" width="700" alt="Register with Claude section">
 
-(The redacted rows at the top are leftover connection entries visible from scrolling; the
-`claude mcp add` command shown predates the `--scope user` addition — this section itself
-has nothing connection-specific to redact.)
-
-A third, optional block (not pictured above — its exact commands changed after this
-screenshot was taken) registers the bundled Claude Code skills. It's two `claude plugin`
-CLI commands rather than a settings.json paste:
+A third optional block installs the bundled Claude Code skills — two `claude plugin`
+commands (the app fills in the first command's path for you):
 
 ```bash
 claude plugin marketplace add "/Applications/Timebuddy Incident Investigator.app/Contents/Resources/plugin" --scope user
 claude plugin install timebuddy@timebuddy-incident-investigator --scope user
 ```
 
-(the app's own UI fills in the first command's path for you — this is just the shape).
-The marketplace/plugin ids aren't arbitrary: they're read from that bundle's own
-`.claude-plugin/marketplace.json`/`plugin.json` `name` fields, so the second command is
-fixed as long as those files don't change. `--scope user` writes both to
-`~/.claude/settings.json` (`extraKnownMarketplaces` + `enabledPlugins`) for this
-machine/user. Skills show up immediately, no restart needed — only the MCP server itself
-needs a client restart to reconnect.
+Skills show up immediately, no restart; only the MCP server itself needs a client restart to
+reconnect.
 
-**macOS only:** the *first* time Claude actually starts this app as an MCP server (which
-can be a while after you registered it above — not until your Claude client's next
-session, or the next time it decides to spawn the server), macOS will prompt for keychain
-access to decrypt your saved connection credentials:
+**macOS keychain prompt:** the *first* time Claude actually starts the app as an MCP server
+(which can be well after you register it — not until your client's next session), macOS
+prompts for keychain access to decrypt your saved credentials. This is expected — **Allow**
+(or **Always Allow**). It's this app's own `safeStorage` secrets being decrypted (see [How
+connections are stored](#how-connections-are-stored)), nothing else.
 
 <img src="docs/images/macos-keychain-access.png" width="480" alt="macOS keychain access prompt">
 
-This is expected — **Allow** (or **Always Allow**, to skip the prompt on future
-launches) it. If you don't recognize this prompt when it appears, it's this app's own
-`safeStorage`-encrypted connection secrets being decrypted (see
-["How connections are stored"](#how-connections-are-stored) above), not anything else
-asking for your keychain.
-
 ## Claude Code skills
 
-This repo also ships as a Claude Code plugin (`.claude-plugin/plugin.json`) with three skills
-that drive the tools above so nobody needs to know the tool names or the right call order.
+The three skills ship as a Claude Code plugin (`.claude-plugin/plugin.json`) bundled with
+the app, so the easiest install is the "Claude Code skills (optional)" block in [Registering
+with Claude](#registering-with-claude) above — no GitHub access, pinned to your installed app
+version.
 
-The Electron app bundles this same plugin, so the easiest way to install it is the
-"Claude Code skills (optional)" block in the app's own "Register with Claude" section —
-see ["Registering with Claude"](#registering-with-claude) above for the exact commands and
-what they do.
-
-Prefer installing from GitHub instead (e.g. no desktop app, or want plugin updates
-independent of the app's release cadence)? The same plugin is installable as a normal
-Claude Code marketplace:
+Prefer installing from GitHub instead (no desktop app, or you want plugin updates independent
+of the app's release cadence)? The same plugin is a normal Claude Code marketplace:
 
 ```
 /plugin marketplace add misterbisson/timebuddy-incident-investigator
 /plugin install timebuddy@timebuddy-incident-investigator
 ```
 
-Either way, skills show up under the `/timebuddy:` namespace:
-
-- `/timebuddy:explore` — a low-stakes health check: confirms the MCP server is connected,
-  surveys what Grafana/Graylog connections and dashboards exist, and highlights which
-  dashboards are actually alert-backed (and therefore trustworthy) before an incident happens.
-- `/timebuddy:investigate` — the reactive path: ingests an alert (a pasted URL, alert JSON,
-  or webhook payload), replays it, checks baselines, looks for correlated signals, pulls
-  corroborating Graylog log evidence when a log connection is configured, and writes an
-  evidence-linked incident note.
-- `/timebuddy:export` — given a dashboard/panel URL and a panel name (or a direct panel link),
-  resolves the exact panel, writes its data to a CSV file, and optionally grabs a screenshot
-  alongside it — for archiving, reporting, or a presentation.
-
-See [`skills/explore/SKILL.md`](skills/explore/SKILL.md),
-[`skills/investigate/SKILL.md`](skills/investigate/SKILL.md), and
-[`skills/export/SKILL.md`](skills/export/SKILL.md) for the exact pipeline each one follows.
+Either way, skills appear under the `/timebuddy:` namespace — `explore`, `investigate`, and
+`export`, described in [Skills](#skills) above. See the runbooks each one follows:
+[`explore`](skills/explore/SKILL.md), [`investigate`](skills/investigate/SKILL.md),
+[`export`](skills/export/SKILL.md).
 
 ## Activity window
 
-Once your Claude client has started this app as your MCP server (it does this on its own
-whenever it needs the server — see ["Registering with Claude"](#registering-with-claude)
-above), a companion "Timebuddy Activity" window appears the moment Claude actually queries
-its first dashboard/panel or runs its first log search — not as soon as Claude starts, so
-nothing pops up before an investigation begins. It's a live, clickable log of what's being
-inspected: each entry is one Grafana panel Claude actually pulled data from or screenshotted,
-or one Graylog search (`search_logs`/`correlate_logs`) it ran — not every dashboard/panel
-link or log query that happens to be mentioned in a response (see `src/tools/shared.ts`'s
-`recordActivity`/`recordLogActivity` for exactly which tool calls log an entry and why).
-Entries are tagged **panel** or **logs** so the two kinds read distinctly in the list.
-Clicking a **panel** entry shows either the
-screenshot `screenshot_panel` saved for it, or a live, authenticated view of the real
-Grafana panel in an embedded `<webview>` — authenticated the same way `screenshotter.js`'s
-one-shot captures are (a connection's own bearer/basic header injected via `webRequest`),
-just against a long-lived, persistent session instead of a destroy-after-one-shot window
-(see `setupLiveViewSession` in `electron/src/main.js`). A panel served from one of a
-connection's `matchHosts` aliases (a load-balancer or vanity hostname) authenticates here
-too — but only over that connection's own scheme, so an `https` connection's credentials are
-never transmitted to the alias over plaintext `http`.
+Once Claude has started the app as your MCP server, a companion **Timebuddy Activity**
+window appears the moment Claude pulls data from its first panel or runs its first log
+search — a live, clickable log of what's being inspected. Each entry is one Grafana panel
+Claude actually queried or screenshotted, or one Graylog search (`search_logs`/
+`correlate_logs`) it ran, tagged **panel** or **logs** so the two read distinctly. Clicking a
+**panel** entry shows either the saved screenshot or a live, authenticated view of the real
+Grafana panel embedded in the window. A panel served from a connection's `matchHosts` alias
+authenticates here too, but only over that connection's own scheme — an `https` connection's
+credentials are never sent to the alias over plaintext `http`.
 
-Each panel entry also has two buttons — **Export CSV** and **Capture screenshot** — so you
-can grab a panel's data or picture yourself, without asking Claude to. They run the exact
-same export/capture the `export_panel_csv` and `screenshot_panel` tools do (same panel, same
-time window and variables the entry was recorded with; the CSV is neutralized against
-spreadsheet formula injection just like the tool's, and both are redacted the same way), and
-save the file straight to your **Downloads** folder — with a **Show in folder** button to
-reveal it in Finder/Explorer/your file manager afterward.
+Each **panel** entry also has **Export CSV** and **Capture screenshot** buttons — the same
+export/capture the `export_panel_csv` and `screenshot_panel` tools do (same window,
+variables, formula-injection neutralization, and redaction), saved straight to your
+**Downloads** folder. A **logs** entry instead shows a short text summary of the search —
+query, stream, result count, and tool — plus an **Open in Graylog** button that opens the
+recorded search in your browser; it doesn't embed the Graylog UI (a log search isn't a single
+visual), and the panel-only export/screenshot buttons stay hidden. The log is in-memory only
+and clears when the server restarts; nothing is written to disk.
 
-A **logs** entry instead shows a short text summary of the search — query, stream, result
-count, and which tool ran it — plus an **Open in Graylog** button that opens the recorded
-search (query + absolute time window) in your browser. It deliberately doesn't embed the
-Graylog UI in a `<webview>` the way a panel does: a log search isn't a single visual, and
-the export/screenshot buttons (which act on one Grafana panel) don't apply, so they stay
-hidden for log entries.
+## Multiple connections
 
-The log is in-memory only, for as long as that server keeps running — closing or
-restarting your Claude client (which restarts the server) clears it, and nothing is ever
-written to disk.
+Every tool takes an optional `connection` parameter (a connection id). When it's omitted:
 
-## Multiple Grafana connections
+- **`get_alert_context`** auto-detects the connection by matching the alert's URL against
+  each configured connection's `url` (or its `matchHosts` aliases), and returns
+  `resolvedConnectionId` to pass into every subsequent call for that incident.
+- **Single-target tools** (`resolve_panel_queries`, `execute_query_window`,
+  `validate_baseline`, `get_product_context`, and the primary panel of
+  `detect_correlated_anomalies`) fall back to the sole configured connection, otherwise error
+  out listing the available ids — they never guess. `fetch_dashboard`, `render_dashboard`,
+  `export_panel_csv`, and `screenshot_panel` additionally auto-detect from a URL's host first.
+- **Fan-out tools** (`find_related_dashboards`, `list_datasources`, and
+  `detect_correlated_anomalies` when auto-discovering) query every connection and merge
+  results, each tagged with its `connectionId`. Passing `connection` narrows them to one.
 
-Every tool takes an optional `connection` parameter (a connection id). When it's
-omitted:
+The single-connection fallback only applies when nothing contradicts it: a URL whose host
+matches no configured connection is an error listing the available ids — even with exactly
+one connection configured — rather than silently investigating a different Grafana than the
+link points at. Add the host to that connection's `matchHosts` if it's an alias.
 
-- `get_alert_context` auto-detects the right connection by matching the alert's own
-  URL (panel/dashboard/generator link) against each configured connection's `url` (or its
-  `matchHosts`, for cases like a load balancer alias) — and returns `resolvedConnectionId`
-  for you to pass into every subsequent call for that incident.
-- Single-target tools (`resolve_panel_queries`, `execute_query_window`, `validate_baseline`,
-  `get_product_context`, and the primary panel in `detect_correlated_anomalies`)
-  fall back to the one configured connection if there's only one, otherwise error out listing the
-  available connection ids — they never guess. `fetch_dashboard`, `render_dashboard`,
-  `export_panel_csv`, and `screenshot_panel` additionally auto-detect the connection from a `url`'s
-  host (before the same fallback), the same way `get_alert_context` does.
-- The fan-out tools (`find_related_dashboards`, `list_datasources`, and
-  `detect_correlated_anomalies` when auto-discovering candidates) query every configured
-  connection and merge results, each tagged with its `connectionId`. Passing `connection`
-  explicitly narrows any of them back to that one.
+See [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md) for a few Grafana edge cases: the
+product-knowledge-dashboard convention for publishing institutional knowledge (what a panel
+means, known false positives, runbook links), live resolution of "all" dashboard variables,
+and Grafana's "-- Dashboard --" pseudo-datasource panels.
 
-The single-connection fallback only applies when nothing contradicts it. If you pass a URL
-whose host matches no configured connection, that's an error listing the available ids —
-even with exactly one connection configured — rather than a silent fall back to it, which
-would investigate a different Grafana than the one the link points at. Add the host to that
-connection's `matchHosts` if it's an alias for one of them.
+## Searching logs
 
-See [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md) for how this project handles a few Grafana edge
-cases: the product-knowledge-dashboard convention for publishing institutional knowledge
-(what a panel means, known false positives, runbook links), live resolution of "all"
-dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
+Add a Graylog connection (see [Configuring connections](#configuring-connections)) and
+`/timebuddy:investigate` pulls corroborating log evidence automatically — it pairs the right
+log source to the dashboard by shared `tags`, builds a query from identifiers already in hand
+(hostname, IP, product string, request/trace id), and folds what it finds into the verdict.
 
-## Searching logs during an investigation
+To drive the log tools directly (Claude Desktop, or an ad-hoc question):
 
-If you've added a Graylog connection (see ["Configuring connections"](#configuring-connections)
-above), `/timebuddy:investigate` pulls corroborating log evidence automatically — it pairs
-the right log source to the dashboard by shared `tags`, builds a query from the identifiers
-already in hand (hostname, IP, product string, request/trace id), and folds what it finds
-into the verdict. You don't have to call anything by hand.
-
-When you do want to drive the log tools directly (Claude Desktop, or an ad-hoc question),
-here's the shape:
-
-- **`search_logs`** takes a Graylog query and a time window. Use the identifiers a metric
-  investigation surfaced, not a bare wildcard — a targeted query is what makes the result
-  usable as evidence:
+- **`search_logs`** takes a Graylog query and a time window. Use identifiers a metric
+  investigation surfaced, not a bare wildcard:
 
   ```
   search_logs(query: "source:api-gw-* AND level:ERROR", startsAtMs: <incident start>)
   ```
 
-  It returns each matching message plus a clickable Graylog search URL, and defaults the
-  window end to now. A search that hits the per-stream line cap (`MAX_LOG_LINES`, default
-  500) is flagged so you know you're looking at a partial view.
+  It returns each matching message plus a clickable Graylog URL, and defaults the window end
+  to now. A search that hits the per-stream line cap (`MAX_LOG_LINES`, default 500) is flagged
+  so you know you're seeing a partial view.
 
-- **`correlate_logs`** joins two or more streams on a shared field, using a PromQL-inspired
-  query. The classic use is tracing one request across services by a shared id:
+- **`correlate_logs`** joins two or more streams on a shared field. The classic use is
+  tracing one request across services by a shared id:
 
   ```
   correlate_logs(
@@ -378,156 +291,108 @@ here's the shape:
   )
   ```
 
-  `and` is an inner join (only matched pairs), `or` a union, and `unless` a left-anti-join
-  ("which frontend requests never reached the backend"). The `[5m]` window the query
-  grammar allows has no effect — every stream uses the one `startsAtMs`/`endsAtMs` window
-  you pass. Note the safety behavior: an `unless` whose subtracted side got truncated at the
-  line cap **errors out** rather than return a possibly-inverted answer; narrow the window or
-  raise the cap and retry.
+  `and` is an inner join, `or` a union, `unless` a left-anti-join ("which frontend requests
+  never reached the backend"). Every stream uses the one window you pass — the `[5m]` the
+  grammar allows has no effect. Safety behavior: an `unless` whose subtracted side got
+  truncated at the line cap **errors out** rather than return a possibly-inverted answer.
 
 - **`list_log_sources`** lists your Graylog connections (and, given a `connection`, its
-  streams) — the log-side counterpart to `list_datasources`. Cross-reference the two tools'
-  `tags` to see which log source covers the same environment as a given Grafana connection.
+  streams) — cross-reference its `tags` against `list_datasources` to see which log source
+  covers the same environment as a Grafana connection.
 
-Only Graylog's legacy (2.x–5.x) search API is supported — see
-["Known limitations"](#known-limitations-mvp) below. Contributors: the design rationale for
-this subsystem is in [`docs/LOGS.md`](docs/LOGS.md).
+Only Graylog's legacy (2.x–5.x) search API is supported — see [Known
+limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LOGS.md).
 
-## Security model
+## Security
 
-- The Grafana client (`src/grafana/client.ts`) is a fixed allowlist of read-only endpoints.
-  There is no "make an arbitrary Grafana request" tool — nothing built on top of it can
-  reach a mutating endpoint, even if asked to.
-- `security/limits.ts` caps query time-range span and max data points, and caps
-  concurrent outgoing Grafana requests.
-- `security/redact.ts` masks secret-shaped fields and any configured
-  customer-identifier patterns before data is returned to the model.
+- The Grafana and Graylog clients are **fixed allowlists of read-only endpoints**. There is
+  no "make an arbitrary request" tool — nothing built on top can reach a mutating endpoint,
+  even if asked to.
+- `security/limits.ts` caps query time-range span, max data points, and concurrent outgoing
+  requests.
+- `security/redact.ts` masks secret-shaped fields and configured customer-identifier
+  patterns before any data returns to the model. (The one gap: `screenshot_panel`'s rendered
+  image — see [`docs/TOOLS.md`](docs/TOOLS.md#screenshot-redaction-exception).)
 - `security/audit.ts` appends every tool invocation to a local JSONL audit log.
-- The optional webhook listener (`npm run webhook`) binds `127.0.0.1` and accepts only
-  `POST /`. See "Receiving alerts by webhook" below before exposing it more widely.
-- A per-user Bearer token or Basic-auth login (via the connection manager) no longer
-  carries the "Viewer-role service account" defense-in-depth layer that a shared token
-  gave you — whatever role that person actually has in Grafana applies. The read-only
-  guarantee then rests entirely on the client allowlist above, which is why that allowlist
-  has no generic escape hatch. A Viewer-scoped service-account token remains the more
-  defense-in-depth choice for a shared/CI connection.
+- A per-user token or login carries whatever Grafana role that person actually has — it drops
+  the "Viewer-role service account" defense-in-depth a shared token gave you, so the read-only
+  guarantee then rests entirely on the client allowlist. A Viewer-scoped service-account token
+  is still the safer choice for a shared/CI connection.
 
 ## Local data and disk usage
 
-Everything this server writes lands under `DATA_DIR` (default `.data` for the CLI; the
-packaged app uses Electron's per-OS `userData` directory — a location most people never
-think to check for disk usage). Two paths grow with use and are bounded automatically by
-a best-effort sweep that runs **once when the MCP server starts** (it never blocks or
-fails startup):
+Everything this server writes lands under `DATA_DIR` (default `.data` for the CLI; the packaged
+app uses Electron's per-OS `userData` directory). Two paths grow with use and are bounded
+automatically by a best-effort sweep that runs once at server startup (never blocking startup):
 
-- **`screenshots/`** — one full-resolution PNG per `screenshot_panel` call, named so
-  nothing is ever overwritten. The highest-volume path, and of no value once the incident
-  it captured is over. Any PNG older than `SCREENSHOT_RETENTION_HOURS` (default `168`, i.e.
-  7 days) is deleted on startup. Set it to `0` to keep everything.
-- **`audit.jsonl`** — the record backing the read-only guarantee, so it is bounded by size
-  but **rotated, not truncated**. Once it passes `AUDIT_MAX_BYTES` (default ~5 MB) it is
-  rolled to `audit.jsonl.1`, keeping up to `AUDIT_KEEP_FILES` (default `5`) older
-  generations; history is preserved rather than deleted to reclaim disk. Set
-  `AUDIT_MAX_BYTES=0` to disable rotation.
+- **`screenshots/`** — one PNG per `screenshot_panel` call. The highest-volume path. Any PNG
+  older than `SCREENSHOT_RETENTION_HOURS` (default `168` / 7 days) is deleted on startup; set
+  `0` to keep everything.
+- **`audit.jsonl`** — the record backing the read-only guarantee, so it's **rotated, not
+  truncated**. Past `AUDIT_MAX_BYTES` (default ~5 MB) it rolls to `audit.jsonl.1`, keeping up
+  to `AUDIT_KEEP_FILES` (default `5`) generations. Set `AUDIT_MAX_BYTES=0` to disable rotation.
 
-The metric-index cache (`metric-index.json`) is self-bounding — it's overwritten in place
-on each rebuild, not appended. The webhook alert store `alerts.jsonl` is deliberately
-**not** covered by this sweep; see the note under "Receiving alerts by webhook" below.
+The metric-index cache (`metric-index.json`) is overwritten in place, not appended. The webhook
+alert store `alerts.jsonl` is deliberately **not** swept (see below).
 
 ## Receiving alerts by webhook
 
-Optional. Point a Grafana webhook contact point at this listener and `get_alert_context`
-with no arguments will pick up the most recent alert it received:
+Optional. Point a Grafana webhook contact point at this listener, and `get_alert_context` with
+no arguments picks up the most recent alert it received:
 
 ```bash
 npm run webhook     # listens on 127.0.0.1:4318, appends to $DATA_DIR/alerts.jsonl
 ```
 
-It accepts only `POST /` with a Grafana Alertmanager body, never contacts Grafana, and
-has no other routes.
-
-**It binds loopback by default, which assumes Grafana runs on the same host.** If yours
-doesn't, you need a wider bind — and you should set a shared secret at the same time:
+It accepts only `POST /` with a Grafana Alertmanager body, never contacts Grafana, and has no
+other routes. **It binds loopback by default, which assumes Grafana runs on the same host.** If
+it doesn't, widen the bind *and set a shared secret at the same time*:
 
 ```bash
 WEBHOOK_BIND_ADDRESS=0.0.0.0
 WEBHOOK_TOKEN=<a long random string>
 ```
 
-With `WEBHOOK_TOKEN` set, every request must carry `Authorization: Bearer <token>`;
-configure the same value as the Authorization header on the Grafana contact point.
-Binding wide *without* a token logs a startup warning, because anything posted to this
-port becomes the incident that `get_alert_context` hands to the investigating agent — an
-unauthenticated open port here is a way to feed that agent attacker-chosen content, not
-just a way to fill a disk.
-
-`alerts.jsonl` is deliberately left out of the startup data-dir sweep (see "Local data and
-disk usage"): `get_alert_context` reads it tail-first, so its size doesn't affect a lookup,
-and when the listener is exposed its growth is attacker-driven — better bounded by keeping
-the port loopback-and-authenticated, as above, than by a blanket age/size sweep that would
-race the listener's own appends.
+With `WEBHOOK_TOKEN` set, every request must carry `Authorization: Bearer <token>` — configure
+the same value on the Grafana contact point. Binding wide *without* a token logs a startup
+warning: anything posted to this port becomes the incident `get_alert_context` hands to the
+agent, so an unauthenticated open port is a way to feed the agent attacker-chosen content, not
+just a way to fill a disk. That's also why `alerts.jsonl` is left out of the startup sweep —
+better bounded by keeping the port loopback-and-authenticated than by a blanket sweep that
+would race the listener's own appends.
 
 ## Known limitations (MVP)
 
-- InfluxQL support covers raw-query-mode targets and does a best-effort reconstruction
-  for structured query-builder targets; it doesn't replicate Grafana's full InfluxQL
-  query builder.
-- The metric index doesn't detect *unused* metrics (ones that exist in a datasource but
-  appear in no dashboard) — only the reverse lookup (metric -> dashboards) and dashboards
-  pointing at a datasource UID that no longer exists.
-- `detect_correlated_anomalies` ranks candidates with a heuristic (z-score magnitude ×
+- **InfluxQL:** covers raw-query-mode targets and a best-effort reconstruction of structured
+  query-builder targets; it doesn't replicate Grafana's full InfluxQL query builder.
+- **Metric index:** doesn't detect *unused* metrics (ones in a datasource but on no dashboard)
+  — only the reverse lookup (metric → dashboards) and dashboards pointing at a now-missing
+  datasource UID. Extraction is a best-effort regex scan, not a full parser.
+- **`detect_correlated_anomalies`** ranks candidates with a heuristic (z-score magnitude ×
   label overlap × onset-timing proximity), not a statistical correlation/causation test.
-- The Electron app isn't notarized yet (macOS signing is currently a self-signed
-  certificate, not a real Apple Developer ID — see `electron/SELF_SIGNED_SETUP.md`).
-  Downloaded builds hit a Gatekeeper block on macOS (see
-  ["Installing a downloaded build (macOS)"](#installing-a-downloaded-build-macos) above
-  for the click-through) or SmartScreen warnings on Windows, until it's signed/notarized
-  with a real developer identity — a prerequisite for wider rollout, not something fixable
-  in code.
-- `export_panel_csv`'s Grafana-side transformation capture (see the tools table above) is
-  Electron-only, and depends on the exact visible text/DOM structure of Grafana's Inspect
-  drawer rather than a published API — it's expected to be more version-sensitive than the
-  rest of this project's Grafana integration. When it's unavailable (standalone CLI) or a
-  panel has no transformations configured, or the capture attempt itself fails, the tool
-  falls back to its own direct export: a table panel backed by more than one query/frame is
-  then written to one CSV file per frame, not a merged table.
-- `search_logs`/`list_log_sources`/`correlate_logs` only support Graylog's **legacy**
-  (2.x-5.x) Universal Search API; Graylog 6.x's Views API returns CSV and needs materially
-  different parsing, so it isn't implemented. `correlate_logs`' join query language covers
-  `and`/`or`/`unless` with a single join key and multi-stream (3+) queries; label-mapping
-  joins across differently-named fields on each side and `group_left()`/`group_right()`
-  many-to-one grouping are implemented in the underlying library but aren't exercised by
-  this project's own tests yet.
-- **A Graylog token that can list streams isn't guaranteed to be able to search across all of
-  them.** `search_logs`/`correlate_logs` always call the same `/api/search/universal/absolute`
-  endpoint, scoping to one stream by adding a `filter=streams:<id>` query param whenever a
-  `streamId` is available (from the call itself, or a connection's configured default) — some
-  Graylog roles grant search permission scoped to individual streams but not the
-  unscoped/"universal" search across all of them, so a connection with no default stream
-  configured can 403 on any call that omits an explicit `streamId`, even though `/api/system`
-  and `/api/streams` both succeed for that same token. The connection-manager app's "Test
-  connection" button now probes this directly (scoped to the connection's default stream if it
-  has one, unscoped if it doesn't) rather than stopping at stream-listing permission; if it
-  reports this, either configure a default stream on the connection or make sure every call
-  against it passes an explicit `streamId`.
-- **Every CSV `export_panel_csv` writes is neutralized against spreadsheet formula
-  injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula when the
-  file is opened in Excel, LibreOffice, or Google Sheets, so every such cell is prefixed with
-  an apostrophe (it then displays instead of executing). The direct exports neutralize at the
-  cell level; the Grafana-captured path neutralizes by re-parsing and re-serializing Grafana's
-  output (a full RFC 4180 round-trip, since a quoted field can span lines). That makes the
-  captured file *semantically* identical to Grafana's Download CSV rather than byte-for-byte —
-  quoting is minimized, line endings normalized to CRLF, a leading BOM preserved — reported as
-  `formulaNeutralized: true` with a `formulaNeutralizationNote` explaining the re-serialization.
+- **Not notarized yet:** downloaded builds hit a Gatekeeper block on macOS (see
+  [above](#installing-a-downloaded-build-macos)) or SmartScreen warnings on Windows until
+  signed with a real developer identity — a prerequisite for wider rollout, not a code fix.
+- **`export_panel_csv`'s Grafana-side transformation capture** is Electron-only and depends on
+  Grafana's Inspect-drawer DOM rather than a published API, so it's more version-sensitive than
+  the rest of the integration. See [`docs/TOOLS.md`](docs/TOOLS.md#csv-export-behavior).
+- **Logs:** only Graylog's legacy (2.x–5.x) Universal Search API — 6.x's Views API returns CSV
+  and isn't implemented. `correlate_logs` covers `and`/`or`/`unless` with a single join key
+  across 3+ streams; cross-field label-mapping joins and `group_left()`/`group_right()` grouping
+  exist in the underlying library but aren't exercised by this project's tests yet.
+- **Graylog search permissions:** a token that can *list* streams can't necessarily *search*
+  across all of them. `search_logs`/`correlate_logs` scope to one stream (via
+  `filter=streams:<id>`) whenever a `streamId` is available — from the call or a connection's
+  default — but a connection with no default stream can 403 on any call that omits an explicit
+  `streamId`, even though `/api/streams` succeeds for the same token. The app's "Test
+  connection" button probes this directly; if it flags it, set a default stream or always pass
+  `streamId`.
 
 ## Acknowledgments
 
 The `electron/` connection-manager app's UI and auth model are adapted from
 [Time Buddy](https://github.com/Liquescent-Development/time-buddy) by Richard Kiene /
-Liquescent Development (AGPL-3.0-only, the same license this repository uses). See
-[`NOTICE.md`](NOTICE.md) for exactly what was adapted and what was deliberately changed
-(credential storage, most notably).
-
-`correlate_logs` is built on `@liquescent/log-correlator-core`/`-query-parser`, also by
-Richard Kiene / Liquescent Development (AGPL-3.0-only). See [`NOTICE.md`](NOTICE.md) for
-what's used from it and what's deliberately not.
+Liquescent Development (AGPL-3.0-only, the same license this repo uses). `correlate_logs` is
+built on `@liquescent/log-correlator-core`/`-query-parser`, also by Richard Kiene / Liquescent
+Development (AGPL-3.0-only). See [`NOTICE.md`](NOTICE.md) for exactly what was adapted or used
+and what was deliberately changed (credential storage, most notably).
