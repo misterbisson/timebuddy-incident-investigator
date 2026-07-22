@@ -151,10 +151,14 @@ export function recordLogActivity(
   // configured default — that's the only stream we have a name for. An explicit
   // streamId that isn't the default has no name on this side, so leave it to the
   // id (the renderer falls back to showing the id, then "all streams").
+  // A search with no explicit streamId still runs against the connection's own
+  // default stream (the client falls back to it), so record that as the
+  // effective stream — otherwise the window shows "all streams" for a scoped
+  // search. The name only comes along when that effective stream is the default.
   const effectiveStreamId = entry.streamId ?? connection?.streamId;
   const streamName =
     effectiveStreamId && effectiveStreamId === connection?.streamId ? connection?.streamName : undefined;
-  activityLog.record({ kind: 'log', ...entry, connectionName: connection?.name, streamName });
+  activityLog.record({ kind: 'log', ...entry, streamId: effectiveStreamId, connectionName: connection?.name, streamName });
 }
 
 /**

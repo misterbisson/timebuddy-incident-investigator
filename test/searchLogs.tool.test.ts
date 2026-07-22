@@ -176,6 +176,9 @@ describe('search_logs tool', () => {
       connectionId: 'log1',
       connectionName: 'Prod Graylog',
       query: 'host:web-03',
+      // No explicit streamId was passed, so the connection's own default stream
+      // (id + name) is recorded — the search actually ran against it.
+      streamId: 'stream-default',
       streamName: 'All prod',
       resultCount: 1,
     });
