@@ -278,11 +278,14 @@ See [`skills/explore/SKILL.md`](skills/explore/SKILL.md),
 Once your Claude client has started this app as your MCP server (it does this on its own
 whenever it needs the server — see ["Registering with Claude"](#registering-with-claude)
 above), a companion "Timebuddy Activity" window appears the moment Claude actually queries
-its first dashboard/panel — not as soon as Claude starts, so nothing pops up before an
-investigation begins. It's a live, clickable log of what's being inspected: each entry is
-one panel Claude actually pulled data from or screenshotted (not every dashboard/panel link
-that happens to be mentioned in a response — see `src/tools/shared.ts`'s `recordActivity`
-for exactly which tool calls log an entry and why). Clicking an entry shows either the
+its first dashboard/panel or runs its first log search — not as soon as Claude starts, so
+nothing pops up before an investigation begins. It's a live, clickable log of what's being
+inspected: each entry is one Grafana panel Claude actually pulled data from or screenshotted,
+or one Graylog search (`search_logs`/`correlate_logs`) it ran — not every dashboard/panel
+link or log query that happens to be mentioned in a response (see `src/tools/shared.ts`'s
+`recordActivity`/`recordLogActivity` for exactly which tool calls log an entry and why).
+Entries are tagged **panel** or **logs** so the two kinds read distinctly in the list.
+Clicking a **panel** entry shows either the
 screenshot `screenshot_panel` saved for it, or a live, authenticated view of the real
 Grafana panel in an embedded `<webview>` — authenticated the same way `screenshotter.js`'s
 one-shot captures are (a connection's own bearer/basic header injected via `webRequest`),
@@ -299,6 +302,13 @@ time window and variables the entry was recorded with; the CSV is neutralized ag
 spreadsheet formula injection just like the tool's, and both are redacted the same way), and
 save the file straight to your **Downloads** folder — with a **Show in folder** button to
 reveal it in Finder/Explorer/your file manager afterward.
+
+A **logs** entry instead shows a short text summary of the search — query, stream, result
+count, and which tool ran it — plus an **Open in Graylog** button that opens the recorded
+search (query + absolute time window) in your browser. It deliberately doesn't embed the
+Graylog UI in a `<webview>` the way a panel does: a log search isn't a single visual, and
+the export/screenshot buttons (which act on one Grafana panel) don't apply, so they stay
+hidden for log entries.
 
 The log is in-memory only, for as long as that server keeps running — closing or
 restarting your Claude client (which restarts the server) clears it, and nothing is ever

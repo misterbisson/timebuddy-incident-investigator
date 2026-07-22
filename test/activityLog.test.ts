@@ -3,10 +3,21 @@ import { createActivityLog } from '../src/activity/activityLog.js';
 
 function baseEntry() {
   return {
+    kind: 'panel' as const,
     toolName: 'render_dashboard',
     connectionId: 'conn1',
     dashboardUid: 'dash1',
     panelId: 1,
+  };
+}
+
+function logEntry() {
+  return {
+    kind: 'log' as const,
+    toolName: 'search_logs',
+    connectionId: 'log1',
+    query: 'host:web-03 AND level:ERROR',
+    resultCount: 12,
   };
 }
 
@@ -52,6 +63,17 @@ describe('createActivityLog', () => {
     unsubscribe();
     log.record(baseEntry());
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a log-kind entry alongside panel entries, preserving each kind', () => {
+    const log = createActivityLog();
+    log.record(baseEntry());
+    log.record(logEntry());
+    const [panel, logs] = log.list();
+    expect(panel!.kind).toBe('panel');
+    expect(logs!.kind).toBe('log');
+    expect(logs).toMatchObject({ query: 'host:web-03 AND level:ERROR', resultCount: 12 });
+    expect(logs!.id).toBe('2');
   });
 
   it('supports multiple independent listeners', () => {

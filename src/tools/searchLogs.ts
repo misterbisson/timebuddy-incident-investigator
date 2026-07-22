@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { epochMsSchema, logSearchUrlFor, resolveLogToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
+import { epochMsSchema, logSearchUrlFor, recordLogActivity, resolveLogToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
 import { clampLogLimit, enforceWindowLimit } from '../security/limits.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
-export function registerSearchLogs(server: McpServer, { logRegistry, config }: ToolContext): void {
+export function registerSearchLogs(server: McpServer, { logRegistry, config, activityLog }: ToolContext): void {
   server.registerTool(
     'search_logs',
     {
@@ -63,6 +63,14 @@ export function registerSearchLogs(server: McpServer, { logRegistry, config }: T
             url,
             ...(warning ? { warning } : {}),
           };
+          recordLogActivity(logRegistry, activityLog, {
+            toolName: 'search_logs',
+            connectionId,
+            query,
+            streamId,
+            resultCount: response.total_results,
+            url,
+          });
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {

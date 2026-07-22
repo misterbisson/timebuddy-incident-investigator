@@ -13,6 +13,7 @@ const exportStatusTextEl = document.getElementById('exportStatusText');
 const revealBtn = document.getElementById('revealBtn');
 const screenshotEl = document.getElementById('detailScreenshot');
 const webviewEl = document.getElementById('detailWebview');
+const logSummaryEl = document.getElementById('detailLogSummary');
 
 // Newest first; keyed by id so a live-pushed entry can't be double-rendered
 // if it somehow arrives both in the initial list() and as a push event.
@@ -27,8 +28,17 @@ function formatTime(iso) {
   }
 }
 
+function isLog(entry) {
+  return entry.kind === 'log';
+}
+
 function entryLabel(entry) {
+  if (isLog(entry)) return entry.query;
   return entry.panelTitle || entry.dashboardTitle || entry.dashboardUid;
+}
+
+function streamLabel(entry) {
+  return entry.streamName || entry.streamId || 'all streams';
 }
 
 function renderList() {
@@ -41,9 +51,10 @@ function renderList() {
     const li = document.createElement('li');
     li.className = 'activity-item' + (entry.id === selectedId ? ' selected' : '');
     li.dataset.id = entry.id;
+    const kindTag = `<span class="activity-kind activity-kind-${isLog(entry) ? 'log' : 'panel'}">${isLog(entry) ? 'logs' : 'panel'}</span>`;
     li.innerHTML = `
       <div class="activity-item-time">${formatTime(entry.timestamp)}</div>
-      <div class="activity-item-title">${escapeHtml(entryLabel(entry))}</div>
+      <div class="activity-item-title">${kindTag}${escapeHtml(entryLabel(entry))}</div>
       <div class="activity-item-meta">${escapeHtml(entry.toolName)}${entry.connectionName ? ' &middot; ' + escapeHtml(entry.connectionName) : ''}</div>
     `;
     li.addEventListener('click', () => selectEntry(entry.id));
@@ -63,19 +74,28 @@ function selectEntry(id) {
   renderList();
   if (!entry) return;
 
+  const log = isLog(entry);
   emptyStateEl.classList.add('hidden');
   detailEl.classList.remove('hidden');
   detailTitleEl.textContent = entryLabel(entry);
-  detailSubtitleEl.textContent = [entry.connectionName, entry.dashboardTitle, entry.toolName, formatTime(entry.timestamp)]
+  // The middle field is the entry's most identifying secondary detail: a
+  // dashboard title for a panel, the searched stream for a log.
+  detailSubtitleEl.textContent = [entry.connectionName, log ? streamLabel(entry) : entry.dashboardTitle, entry.toolName, formatTime(entry.timestamp)]
     .filter(Boolean)
     .join(' · ');
 
-  showScreenshotBtn.classList.toggle('hidden', !entry.screenshotPath);
+  // A log entry has no screenshot and no single panel to view live / export —
+  // its only affordance is opening the Graylog search in the browser. The
+  // panel-only buttons stay hidden for it (they'd otherwise drive the Grafana
+  // screenshotter/CSV exporter against a Graylog URL).
+  showScreenshotBtn.classList.toggle('hidden', log || !entry.screenshotPath);
+  showLiveBtn.classList.toggle('hidden', log);
   openBrowserBtn.classList.toggle('hidden', !entry.url);
+  openBrowserBtn.textContent = log ? 'Open in Graylog' : 'Open in browser';
   // Export/capture need a specific panel over a specific window — both of which
   // the entry's url carries (viewPanel + from/to + var-*). Dashboard-level
-  // entries (no panelId) have nothing single-panel to export.
-  const canExport = Boolean(entry.url) && entry.panelId != null;
+  // entries (no panelId) and log entries have nothing single-panel to export.
+  const canExport = !log && Boolean(entry.url) && entry.panelId != null;
   exportCsvBtn.classList.toggle('hidden', !canExport);
   captureScreenshotBtn.classList.toggle('hidden', !canExport);
   // The busy/disabled state is global to the two buttons, but a run only
@@ -88,8 +108,11 @@ function selectEntry(id) {
   webviewEl.src = 'about:blank';
   screenshotEl.classList.add('hidden');
   screenshotEl.src = '';
+  logSummaryEl.classList.add('hidden');
 
-  if (entry.screenshotPath) {
+  if (log) {
+    showLogSummary(entry);
+  } else if (entry.screenshotPath) {
     showScreenshot(entry);
   } else if (entry.url) {
     showLive(entry);
@@ -169,6 +192,7 @@ function errorMessage(err) {
 
 function showScreenshot(entry) {
   if (!entry.screenshotPath) return;
+  logSummaryEl.classList.add('hidden');
   webviewEl.classList.add('hidden');
   screenshotEl.classList.remove('hidden');
   screenshotEl.src = `file://${entry.screenshotPath}`;
@@ -176,9 +200,28 @@ function showScreenshot(entry) {
 
 function showLive(entry) {
   if (!entry.url) return;
+  logSummaryEl.classList.add('hidden');
   screenshotEl.classList.add('hidden');
   webviewEl.classList.remove('hidden');
   webviewEl.src = entry.url;
+}
+
+// A log search isn't a single visual the way a panel screenshot is, and
+// embedding the Graylog UI would drag in the live-view auth guard — so a log
+// entry gets a plain text summary here plus the "Open in Graylog" button.
+function showLogSummary(entry) {
+  webviewEl.classList.add('hidden');
+  screenshotEl.classList.add('hidden');
+  const rows = [
+    ['Query', entry.query],
+    ['Stream', streamLabel(entry)],
+    ['Results', entry.resultCount != null ? String(entry.resultCount) : '—'],
+    ['Tool', entry.toolName],
+  ];
+  logSummaryEl.innerHTML = rows
+    .map(([term, value]) => `<div class="log-summary-row"><dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+    .join('');
+  logSummaryEl.classList.remove('hidden');
 }
 
 function addEntry(entry) {

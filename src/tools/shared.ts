@@ -123,7 +123,38 @@ export function recordActivity(
 ): void {
   if (!activityLog) return;
   const connectionName = registry.list().find((c) => c.id === entry.connectionId)?.name;
-  activityLog.record({ ...entry, connectionName });
+  activityLog.record({ kind: 'panel', ...entry, connectionName });
+}
+
+/**
+ * Log-tool counterpart to recordActivity — records a search_logs/correlate_logs
+ * call in the Activity log so a log-heavy investigation shows up in the Electron
+ * window alongside the Grafana panels it queried. Resolves the display name (and
+ * default stream name) from the *log* registry, since a log connection lives in
+ * LogConnectionRegistry, not the Grafana one recordActivity reads.
+ */
+export function recordLogActivity(
+  logRegistry: LogConnectionRegistry,
+  activityLog: ActivityLog | undefined,
+  entry: {
+    toolName: string;
+    connectionId: string;
+    query: string;
+    streamId?: string;
+    resultCount?: number;
+    url?: string;
+  },
+): void {
+  if (!activityLog) return;
+  const connection = logRegistry.list().find((c) => c.id === entry.connectionId);
+  // Only attach a stream *name* when the effective stream is the connection's
+  // configured default — that's the only stream we have a name for. An explicit
+  // streamId that isn't the default has no name on this side, so leave it to the
+  // id (the renderer falls back to showing the id, then "all streams").
+  const effectiveStreamId = entry.streamId ?? connection?.streamId;
+  const streamName =
+    effectiveStreamId && effectiveStreamId === connection?.streamId ? connection?.streamName : undefined;
+  activityLog.record({ kind: 'log', ...entry, connectionName: connection?.name, streamName });
 }
 
 /**

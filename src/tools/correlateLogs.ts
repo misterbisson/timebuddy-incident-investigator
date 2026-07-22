@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { epochMsSchema, logSearchUrlFor, resolveLogToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
+import { epochMsSchema, logSearchUrlFor, recordLogActivity, resolveLogToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
 import { correlateLogs } from '../logs/correlate.js';
 import { joinShape } from '../logs/joinShape.js';
 import { clampLogLimit, enforceWindowLimit } from '../security/limits.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
-export function registerCorrelateLogs(server: McpServer, { logRegistry, config }: ToolContext): void {
+export function registerCorrelateLogs(server: McpServer, { logRegistry, config, activityLog }: ToolContext): void {
   server.registerTool(
     'correlate_logs',
     {
@@ -101,6 +101,14 @@ export function registerCorrelateLogs(server: McpServer, { logRegistry, config }
             url,
             ...(warning ? { warning } : {}),
           };
+          recordLogActivity(logRegistry, activityLog, {
+            toolName: 'correlate_logs',
+            connectionId,
+            query,
+            streamId,
+            resultCount: correlated.length,
+            url,
+          });
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
