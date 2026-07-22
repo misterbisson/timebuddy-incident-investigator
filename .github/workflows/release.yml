@@ -34,13 +34,20 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          skip-github-release: true
 
   release:
-    # electron-builder is what actually creates the GitHub release + uploads
-    # installers, same as before — this only runs once `version` has bumped and
-    # tagged a real release, and builds against that tag rather than the commit
-    # that triggered the workflow (which is one behind it after the version bump).
+    # release-please (above) creates the vX.Y.Z tag AND the GitHub release when
+    # the "chore(release)" PR merges; electron-builder here uploads the installers
+    # to that existing release. This only runs once `version` has bumped and
+    # tagged a real release (release_created == true), and builds against that tag
+    # rather than the commit that triggered the workflow (which is one behind it
+    # after the version bump).
+    #
+    # NOTE: the tag and the GitHub release are created together by release-please;
+    # do NOT set skip-github-release on the version job — it skips the tag too,
+    # leaving release_created empty (so this job never runs) and the merged
+    # release PR untagged (which makes every later release-please run abort with
+    # "untagged, merged release PRs outstanding").
     needs: version
     if: needs.version.outputs.published == 'true'
     permissions:
