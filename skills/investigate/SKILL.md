@@ -262,6 +262,14 @@ skill exists to handle for them.
      knowable in advance from this side — if a specific query comes back empty, try a broader one
      (fewer fields, or a bare `*` scoped to the time window) before concluding there's nothing
      there, and say so plainly if it's still empty rather than treating silence as a finding.
+   - If that call (or `correlate_logs`, below) fails with a permission error mentioning "no stream
+     filter applied" or similar, the connection's Graylog role can search within a stream but not
+     across all of them unscoped, and it has no default stream configured — this is a real, common
+     lockdown, not a broken connection. Call `list_log_sources` again with
+     `connection: <resolvedConnectionId>` to list that connection's streams, pick the one most
+     relevant to what you're investigating (or `Default Stream`/`All events`/`All messages` if
+     nothing more specific fits), and retry the same call with `streamId` set explicitly rather than
+     reporting the connection as broken.
    - If you have a specific join key connecting two log streams (e.g. a `request_id` tying a
      frontend log line to the backend call it triggered), use `correlate_logs` instead of two
      separate `search_logs` calls — one query, one already-joined result set. Its `and`/`or`/
@@ -272,6 +280,19 @@ skill exists to handle for them.
        a floor, not a complete count, and narrow the window/query if the count matters. A truncated
        `unless` right side errors out rather than returning a possibly-inverted answer; narrow and
        retry rather than working around it.
+   - **If the log evidence stands on its own — a service, host, or error type that showed up in the
+     logs but that you never reached from a Grafana panel** (no primary panel in step 3, or the log
+     finding names something the panel you did have doesn't cover) — pivot back to
+     `find_related_dashboards` before summarizing, with the identifier pulled from the log line as
+     its `query` param (a service/host/error keyword — the same free-text substring match against
+     metric names and dashboard/panel titles it does in step 4, just seeded from a log finding
+     instead of an alert). A hit gives you a metrics panel that corroborates (or contradicts) the
+     log finding, which is stronger evidence than the logs alone and belongs in the verdict the same
+     way any other panel would; baseline or blast-radius-check it as in steps 3–5 if the window
+     warrants. **Report the empty result explicitly** when nothing matches — "no Grafana dashboard
+     visualizes <identifier>" is a real finding (the log signal isn't dashboarded, an observability
+     gap worth naming, same as the empty-`find_related_dashboards` case in step 4), and stating it
+     keeps a log-only verdict from reading as if you simply forgot to check the metrics side.
    - Whatever `search_logs`/`correlate_logs` returns is one more piece of evidence for step 7's
      verdict, not a separate report — its `url` belongs in `evidence[]` the same way every other
      tool's URL does, and a specific log line or correlated pair worth citing belongs in the

@@ -375,6 +375,13 @@ would race the listener's own appends.
   and isn't implemented. `correlate_logs` covers `and`/`or`/`unless` with a single join key
   across 3+ streams; cross-field label-mapping joins and `group_left()`/`group_right()` grouping
   exist in the underlying library but aren't exercised by this project's tests yet.
+- **Graylog search permissions:** a token that can *list* streams can't necessarily *search*
+  across all of them. `search_logs`/`correlate_logs` scope to one stream (via
+  `filter=streams:<id>`) whenever a `streamId` is available — from the call or a connection's
+  default — but a connection with no default stream can 403 on any call that omits an explicit
+  `streamId`, even though `/api/streams` succeeds for the same token. The app's "Test
+  connection" button probes this directly; if it flags it, set a default stream or always pass
+  `streamId`.
 
 ## Acknowledgments
 

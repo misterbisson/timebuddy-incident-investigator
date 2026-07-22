@@ -147,7 +147,25 @@ export class GraylogClient {
     });
     const streamId = params.streamId ?? this.connection.streamId;
     if (streamId) qs.set('filter', `streams:${streamId}`);
-    return this.request<GraylogSearchResponse>(`/api/search/universal/absolute?${qs.toString()}`);
+    try {
+      return await this.request<GraylogSearchResponse>(`/api/search/universal/absolute?${qs.toString()}`);
+    } catch (err) {
+      // Some Graylog roles grant search permission scoped to individual streams but not
+      // the unscoped/"universal" search across all of them — a token can list streams fine
+      // and still 403 here specifically when no stream filter was applied. Point at the fix
+      // instead of surfacing Graylog's generic "Not authorized" body.
+      if (!streamId && err instanceof GraylogApiError && err.status === 403) {
+        throw new GraylogApiError(
+          `${err.message} — this search had no stream filter applied: neither the call nor connection ` +
+            `"${this.connection.id}" specified a streamId. If this connection's Graylog role can only search ` +
+            `within a stream, list its streams (listStreams(), or the list_log_sources tool with "connection" ` +
+            `set) and retry with "streamId" set, or configure a default streamId on this connection.`,
+          err.status,
+          err.path,
+        );
+      }
+      throw err;
+    }
   }
 
   async listStreams(): Promise<GraylogStream[]> {
