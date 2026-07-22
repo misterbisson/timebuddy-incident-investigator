@@ -262,11 +262,17 @@ skill exists to handle for them.
    Every tool above
    (`get_alert_context`'s `dashboardUrl`, `execute_query_window`/`validate_baseline`'s `url`,
    `detect_correlated_anomalies`'s `primaryUrl` and each correlated result's `url`,
-   `find_related_dashboards`'s per-match `url`) already returns a ready-to-click Grafana link at
-   the exact panel and time window — use those directly as `evidence[].url`. **Never construct a
-   dashboard URL yourself** (e.g. by guessing at `/d/{uid}` or copying a base URL from somewhere
-   else) — the tools already know the right connection's base URL and the right query params;
-   hand-building one risks pointing at the wrong Grafana instance or a broken link.
+   `find_related_dashboards`'s per-match `url`, `search_logs`/`correlate_logs`'s `url`) already
+   returns a ready-to-click link at the exact panel/query and time window — use those directly as
+   `evidence[].url`. **Never construct or paraphrase a URL yourself**, for a Grafana dashboard or a
+   Graylog search alike (e.g. by guessing at `/d/{uid}`, copying a base URL from somewhere else, or
+   combining the query text from two different `search_logs` calls into what looks like a single
+   representative link) — the tools already know the right connection's base URL and the right
+   query params; hand-building or merging one risks pointing at the wrong instance, a broken query
+   string, or a link missing required params (e.g. Graylog's absolute time range) that only the
+   tool's own URL builder fills in correctly. If you want to cite more than one `search_logs` call
+   in the verdict, include each call's own `url` as a separate `evidence[]` entry rather than
+   folding them into one.
    `summarize_findings` returns **structured data only — no prose**. Reading its `reasons` and
    `evidence` fields, write the actual human-readable incident note yourself: what fired, whether
    it's real, why (cite the specific baseline/correlation numbers), and the links you collected so
