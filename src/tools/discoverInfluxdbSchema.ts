@@ -126,7 +126,7 @@ async function runShowQuery(client: GrafanaClient, datasourceUid: string, query:
  * it was written against, rather than a table-format frame that might name it
  * differently.
  */
-async function runTagValuesQuery(client: GrafanaClient, datasourceUid: string, query: string): Promise<{ values: string[]; error?: string }> {
+export async function runTagValuesQuery(client: GrafanaClient, datasourceUid: string, query: string): Promise<{ values: string[]; error?: string }> {
   const nowMs = Date.now();
   const request: DsQueryRequest = {
     from: String(nowMs - SCHEMA_QUERY_WINDOW_MS),

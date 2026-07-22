@@ -7,6 +7,7 @@ import type {
   DsQueryResponse,
   FolderInfo,
   GrafanaAnnotation,
+  LabelValuesResponse,
   RulerAlertRule,
   RulerRuleGroup,
   SearchResultItem,
@@ -181,6 +182,44 @@ export class GrafanaClient {
   /** Executes queries through Grafana's unified data-query endpoint (read-only). */
   async queryDs(req: DsQueryRequest): Promise<DsQueryResponse> {
     return this.request<DsQueryResponse>('POST', '/api/ds/query', req);
+  }
+
+  /**
+   * Enumerates a Prometheus label's values, optionally scoped to one metric
+   * (`match`), via Grafana's read-only datasource "resources" proxy — the same
+   * endpoint Grafana's own `label_values(metric, label)` template variable
+   * uses. This is a fixed path to exactly the label-values resource, not a
+   * generic resources proxy, so the read-only allowlist stays real (see the
+   * class doc): a caller can read a label's values and nothing else.
+   */
+  async getPrometheusLabelValues(uid: string, label: string, match?: string): Promise<string[]> {
+    const qs = new URLSearchParams();
+    if (match) qs.append('match[]', match);
+    const query = qs.toString();
+    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/api/v1/label/${encodeURIComponent(label)}/values${query ? `?${query}` : ''}`;
+    return this.parseLabelValues(await this.request<LabelValuesResponse>('GET', path), path);
+  }
+
+  /**
+   * Loki counterpart of getPrometheusLabelValues, scoped by an optional stream
+   * selector (`selector`). Same fixed-path, read-only rationale.
+   */
+  async getLokiLabelValues(uid: string, label: string, selector?: string): Promise<string[]> {
+    const qs = new URLSearchParams();
+    if (selector) qs.set('query', selector);
+    const query = qs.toString();
+    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/loki/api/v1/label/${encodeURIComponent(label)}/values${query ? `?${query}` : ''}`;
+    return this.parseLabelValues(await this.request<LabelValuesResponse>('GET', path), path);
+  }
+
+  private parseLabelValues(response: LabelValuesResponse, path: string): string[] {
+    // The proxy passes the datasource's native body through with HTTP 200 even
+    // for a datasource-level error, so a non-"success" status has to be caught
+    // here rather than by request()'s !response.ok check.
+    if (response.status && response.status !== 'success') {
+      throw new Error(`Label-values query failed (${path}): status "${response.status}"${response.error ? `: ${response.error}` : ''}`);
+    }
+    return (response.data ?? []).filter((v): v is string => typeof v === 'string');
   }
 
   async getFiringAlerts(): Promise<AlertmanagerAlert[]> {

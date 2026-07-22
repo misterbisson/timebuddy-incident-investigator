@@ -18,6 +18,7 @@ import { registerValidateBaseline } from './validateBaseline.js';
 import { registerSummarizeFindings } from './summarizeFindings.js';
 import { registerListDatasources } from './listDatasources.js';
 import { registerDiscoverInfluxdbSchema } from './discoverInfluxdbSchema.js';
+import { registerDiscoverLabelValues } from './discoverLabelValues.js';
 import { registerSearchLogs } from './searchLogs.js';
 import { registerListLogSources } from './listLogSources.js';
 import { registerCorrelateLogs } from './correlateLogs.js';
@@ -46,6 +47,7 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerSummarizeFindings(server, ctx);
   registerListDatasources(server, ctx);
   registerDiscoverInfluxdbSchema(server, ctx);
+  registerDiscoverLabelValues(server, ctx);
   registerSearchLogs(server, ctx);
   registerListLogSources(server, ctx);
   registerCorrelateLogs(server, ctx);
