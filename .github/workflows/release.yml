@@ -155,10 +155,13 @@ jobs:
     # Manual recovery job (workflow_dispatch, `tag` input). Rebuilds and uploads
     # the installers for an existing, already-published release whose assets are
     # missing. Mirrors the `release` job's signing + build steps, but checks out
-    # the requested tag and force-sets build.publish.releaseType=release before
-    # building — so it works even for tags cut BEFORE that fix landed in
-    # electron/package.json (0.2.0–0.4.0), which would otherwise hit the same
-    # draft-vs-published mismatch that skipped their uploads in the first place.
+    # the requested tag, builds with `--publish never`, and uploads the artifacts
+    # with `gh release upload`. It deliberately does NOT use electron-builder's
+    # own publisher: for an old release, electron-builder refuses to publish
+    # ("existing release published more than 2 hours ago") as a guard against
+    # clobbering a shipped release — exactly the case when backfilling. `gh
+    # release upload` has no such guard, so it works for any tag (0.2.0–0.4.0)
+    # regardless of age or how the release was created.
     if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -183,28 +186,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      # Force the GitHub publish target to type `release` regardless of what this
-      # tag's committed config said. release-please publishes the release (not a
-      # draft), and electron-builder's default draft publish type is incompatible
-      # with that ("existing type not compatible with publishing type ...
-      # existingType=release publishingType=draft"), which silently skips every
-      # asset upload while the job still reports success. Tags cut before the
-      # electron/package.json fix don't carry releaseType, so set it here.
-      - name: Force release publish type
-        shell: bash
-        run: |
-          node -e '
-            const fs = require("fs");
-            const p = "electron/package.json";
-            const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
-            const entries = Array.isArray(pkg.build.publish) ? pkg.build.publish : [pkg.build.publish];
-            for (const e of entries) {
-              if (e && e.provider === "github") e.releaseType = "release";
-            }
-            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
-            console.log("Set github publish releaseType=release for", entries.length, "entry(ies)");
-          '
 
       - name: Import signing certificate
         if: matrix.os == 'macos-latest'
@@ -234,20 +215,47 @@ jobs:
 
           rm certificate.p12
 
-      - name: Build and Publish
+      - name: Build (no publish)
         working-directory: electron
         run: |
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            npm run build-mac -- --publish always
+            npm run build-mac -- --publish never
           elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            npm run build-win -- --publish always
+            npm run build-win -- --publish never
           else
-            npm run build-linux -- --publish always
+            npm run build-linux -- --publish never
           fi
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # Upload the built installers (+ blockmaps + electron-updater metadata) to
+      # the existing release via the gh CLI, which — unlike electron-builder's
+      # publisher — has no draft/age guard. The three platforms write distinct
+      # metadata files (latest.yml / latest-mac.yml / latest-linux.yml), so
+      # parallel matrix uploads to the same release don't collide. --clobber makes
+      # re-runs idempotent.
+      - name: Upload assets to release
+        working-directory: electron/dist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            files=(*.dmg *.dmg.blockmap latest-mac.yml)
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            files=(*.exe *.exe.blockmap latest.yml)
+          else
+            files=(*.AppImage latest-linux.yml)
+          fi
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::No build artifacts found to upload for ${{ matrix.os }}"
+            exit 1
+          fi
+          echo "Uploading to ${{ inputs.tag }}: ${files[*]}"
+          gh release upload "${{ inputs.tag }}" "${files[@]}" \
+            --repo "${{ github.repository }}" --clobber
 
   build-pr:
     if: github.event_name == 'pull_request'
