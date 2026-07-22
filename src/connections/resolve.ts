@@ -5,8 +5,19 @@ export interface ResolveConnectionInput {
   hintUrl?: string;
 }
 
-export interface ResolvedConnection {
-  connection: GrafanaConnection;
+/**
+ * The subset of GrafanaConnection/LogConnection this resolution logic
+ * actually needs — kept generic so both share one implementation instead of
+ * duplicating "explicit id wins, else the sole connection, else error".
+ */
+export interface ResolvableConnection {
+  id: string;
+  url: string;
+  matchHosts?: string[];
+}
+
+export interface ResolvedConnection<T extends ResolvableConnection> {
+  connection: T;
   matchedBy: 'explicit' | 'host' | 'single';
 }
 
@@ -25,13 +36,16 @@ function safeHostname(rawUrl: string): string | undefined {
  * engine can then issue its own request against that connection's own `url`, so
  * the alias never dictates the scheme the token goes out over.
  *
+ * Generic over ResolvableConnection so both GrafanaConnection and LogConnection
+ * share this logic via resolveConnection below.
+ *
  * This is intentionally NOT the check the Electron live-view auth guard uses:
  * that one injects a connection's Authorization header into a browser session's
  * requests, so it must pin the scheme (see originMatchesConnection). The two
  * live side by side here so the alias set they consult can't drift apart the
  * way it did when the live-view guard ignored `matchHosts` entirely (#85).
  */
-export function hostMatchesConnection(host: string, connection: GrafanaConnection): boolean {
+export function hostMatchesConnection(host: string, connection: ResolvableConnection): boolean {
   const h = host.toLowerCase();
   if (safeHostname(connection.url) === h) return true;
   return (connection.matchHosts ?? []).some((entry) => entry.toLowerCase() === h);
@@ -54,6 +68,9 @@ export function hostMatchesConnection(host: string, connection: GrafanaConnectio
  * hostnames with no port, and a deployment that needs a non-default-port alias
  * wants full origins in `matchHosts`, which is tracked separately, not inferred
  * here. A connection whose own `url` doesn't parse matches nothing.
+ *
+ * Grafana-only (not generic over ResolvableConnection): this guards the
+ * Electron live-view webview session, which only ever renders Grafana panels.
  */
 export function originMatchesConnection(origin: string, connection: GrafanaConnection): boolean {
   let connUrl: URL;
@@ -83,29 +100,37 @@ export function originMatchesConnection(origin: string, connection: GrafanaConne
   });
 }
 
-function describeAvailable(connections: GrafanaConnection[]): string {
+function describeAvailable(connections: ResolvableConnection[]): string {
   return connections.map((c) => `${c.id} (${c.url})`).join(', ');
 }
 
 /**
- * Picks which Grafana connection a tool call should use: an explicit id
- * always wins; otherwise infer from the alert/dashboard link's hostname;
- * otherwise fall back to the only configured connection. Ambiguous or
- * unresolvable is a hard error — guessing which Grafana to hit is the wrong
- * failure mode for a read-only investigation tool.
+ * Picks which connection a tool call should use: an explicit id always wins;
+ * otherwise infer from the alert/dashboard link's hostname (Grafana
+ * connections only in practice — log connections have no comparable
+ * inbound link, so callers simply omit hintUrl for those); otherwise fall
+ * back to the only configured connection. Ambiguous or unresolvable is a
+ * hard error — guessing which connection to hit is the wrong failure mode
+ * for a read-only investigation tool.
  *
  * The single-connection fallback applies only when nothing contradicted it: a
  * hint URL naming a host that matches no connection is unresolvable and errors,
  * even when there's exactly one connection to fall back to.
+ *
+ * Generic over GrafanaConnection/LogConnection so both connection kinds
+ * share this logic; `kind` only changes the wording of error messages
+ * (default "Grafana" so every pre-existing call site's error text is
+ * unchanged) and callers resolving a log connection pass kind="Graylog".
  */
-export function resolveConnection(
+export function resolveConnection<T extends ResolvableConnection>(
   input: ResolveConnectionInput,
-  connections: GrafanaConnection[],
-): ResolvedConnection {
+  connections: T[],
+  kind = 'Grafana',
+): ResolvedConnection<T> {
   if (connections.length === 0) {
     throw new Error(
-      'No Grafana connections configured. Set GRAFANA_URL/GRAFANA_TOKEN, or add connections in the ' +
-        'connection manager app (see README).',
+      `No ${kind} connections configured. Set GRAFANA_URL/GRAFANA_TOKEN (or GRAYLOG_URL/GRAYLOG_TOKEN for log ` +
+        'connections), or add connections in the connection manager app (see README).',
     );
   }
 
@@ -150,7 +175,7 @@ export function resolveConnection(
   }
 
   throw new Error(
-    `Could not determine which Grafana connection to use. Available: ${describeAvailable(connections)}. ` +
+    `Could not determine which ${kind} connection to use. Available: ${describeAvailable(connections)}. ` +
       'Pass "connection" explicitly.',
   );
 }

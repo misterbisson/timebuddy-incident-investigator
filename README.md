@@ -47,8 +47,11 @@ bundled with the desktop app, so it's usually a couple of clicks, no separate do
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. When auto-discovering, checks one `scope` tier per call — `product` (default; the primary dashboard plus its Timebuddy knowledge panel's declared ops/SLI dashboards and dependencies, or just the primary dashboard alone with no knowledge published), `connection`, then `all-connections` — so a caller can report each tier's result and only pay for a wider, more expensive search when the narrower one didn't answer it. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
 | `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle — it does not generate prose; the calling agent writes the human-readable note from this bundle. |
-| `list_datasources` | List a connection's configured datasources (uid/name/type/default) — mainly for checking whether a panel's literal-name datasource reference still exists under some other UID. |
+| `list_datasources` | List a connection's configured datasources (uid/name/type/default) and each connection's configured `tags` — cross-reference against `list_log_sources`' tags to pair a Grafana connection with the log connection covering the same environment. Mainly for checking whether a panel's literal-name datasource reference still exists under some other UID. |
 | `discover_influxdb_schema` | Queries an InfluxDB datasource directly for its own measurement/field/tag schema — not dashboarded data. A last-resort fallback for when `find_related_dashboards` finds nothing for a metric you have independent evidence should exist (index-builder only ever knows about metrics some panel already visualizes). Requires a `searchTerm`; there's no "list everything" mode by design. InfluxDB only, for now. |
+| `search_logs` | Searches a Graylog connection for log messages in a fixed time window, using Graylog's own query syntax. Use identifiers pulled from a metric investigation (hostname, IP, product string, request/trace id) to narrow the search. |
+| `list_log_sources` | List configured Graylog connections (id/name/tags/default stream) — the log-side counterpart to `list_datasources`. Pass `connection` to also list that connection's available streams. |
+| `correlate_logs` | Joins two (or more) Graylog searches on a shared field (e.g. a request id) using a PromQL-inspired join query — `and` (inner join), `or` (left join), `unless` (anti-join). Every stream in a query runs against the same fixed historical window, not a live tail. |
 
 ## Setup
 
@@ -138,38 +141,47 @@ xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app
 
 ## Configuring connections
 
-Add a connection for each Grafana endpoint you use (one per region/tier, etc.) — each
-person authenticates as themselves (their own Bearer token or Basic-auth
-username/password) rather than everyone sharing one admin-provisioned service-account
-credential.
+Add a connection for each Grafana or Graylog endpoint you use (one per region/tier,
+etc.) — each person authenticates as themselves (their own token or username/password)
+rather than everyone sharing one admin-provisioned service-account credential.
 
-1. Click **Add connection** and fill in a name, the Grafana URL, and either a Bearer
-   token or Basic auth username/password:
+1. Click **Add connection**, pick a **Connection kind** (Grafana or Graylog), and fill
+   in a name, the URL, and credentials:
 
    <img src="docs/images/connections-1-add-modal.png" width="400" alt="Add connection form">
 
+   Grafana connections take a Bearer token or Basic-auth username/password, same as
+   always. Graylog connections take an **API token** or Basic-auth username/password —
+   note that "API token" is sent as HTTP Basic auth with the token as the username, per
+   Graylog's own convention, not a real Bearer header. Either kind can carry optional
+   **tags** (e.g. `prod`, `us-east`) — shared free-form labels a skill uses to pair a
+   Graylog connection with the right Grafana connection instead of guessing. `kind` is
+   fixed once a connection is saved; switch the kind by adding a new connection instead
+   of editing an existing one.
+
 2. Click **Test connection** before saving. It's cheap to do now, and catches a wrong
-   URL, a bad credential, or a Grafana instance that isn't reachable from this machine
+   URL, a bad credential, or an instance that isn't reachable from this machine
    immediately, instead of partway through an actual investigation later.
 
-3. Click **Save**. Repeat for every Grafana endpoint you use — they all show up in one
-   list, each editable/duplicable/deletable at any time:
+3. Click **Save**. Repeat for every endpoint you use — they all show up in one list,
+   each editable/duplicable/deletable at any time:
 
    <img src="docs/images/connections-2-list-redacted.png" width="700" alt="Configured connections list">
 
    (Name/URL columns are blurred above — those are real connection details from a live
-   setup; yours will show your own Grafana endpoints.)
+   setup; yours will show your own endpoints.)
 
 ### How connections are stored
 
 Connections live under Electron's per-OS `userData` directory, in two files:
 
-- `connections.json` — non-secret metadata (name, URL, auth type, etc.), plaintext (it
-  holds nothing sensitive).
+- `connections.json` — non-secret metadata (name, URL, auth type, kind, tags, etc.),
+  plaintext (it holds nothing sensitive).
 - `secrets.enc.json` — every token/password, `safeStorage`-encrypted (backed by the OS
   keychain: macOS Keychain, Windows DPAPI, or libsecret on Linux). Decrypted only
   in-memory, only inside this same process, when `--mcp-server` mode needs to build a
-  Grafana client — the decrypted form is never written back to disk.
+  client for one of these connections — the decrypted form is never written back to
+  disk.
 
 Both files are written atomically (temp file plus rename), so an interrupted write or a
 crash can't leave either one truncated.
@@ -247,11 +259,12 @@ Claude Code marketplace:
 Either way, skills show up under the `/timebuddy:` namespace:
 
 - `/timebuddy:explore` — a low-stakes health check: confirms the MCP server is connected,
-  surveys what connections/dashboards exist, and highlights which dashboards are actually
-  alert-backed (and therefore trustworthy) before an incident happens.
+  surveys what Grafana/Graylog connections and dashboards exist, and highlights which
+  dashboards are actually alert-backed (and therefore trustworthy) before an incident happens.
 - `/timebuddy:investigate` — the reactive path: ingests an alert (a pasted URL, alert JSON,
-  or webhook payload), replays it, checks baselines, looks for correlated signals, and
-  writes an evidence-linked incident note.
+  or webhook payload), replays it, checks baselines, looks for correlated signals, pulls
+  corroborating Graylog log evidence when a log connection is configured, and writes an
+  evidence-linked incident note.
 - `/timebuddy:export` — given a dashboard/panel URL and a panel name (or a direct panel link),
   resolves the exact panel, writes its data to a CSV file, and optionally grabs a screenshot
   alongside it — for archiving, reporting, or a presentation.
@@ -420,6 +433,13 @@ race the listener's own appends.
   panel has no transformations configured, or the capture attempt itself fails, the tool
   falls back to its own direct export: a table panel backed by more than one query/frame is
   then written to one CSV file per frame, not a merged table.
+- `search_logs`/`list_log_sources`/`correlate_logs` only support Graylog's **legacy**
+  (2.x-5.x) Universal Search API; Graylog 6.x's Views API returns CSV and needs materially
+  different parsing, so it isn't implemented. `correlate_logs`' join query language covers
+  `and`/`or`/`unless` with a single join key and multi-stream (3+) queries; label-mapping
+  joins across differently-named fields on each side and `group_left()`/`group_right()`
+  many-to-one grouping are implemented in the underlying library but aren't exercised by
+  this project's own tests yet.
 - **Every CSV `export_panel_csv` writes is neutralized against spreadsheet formula
   injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula when the
   file is opened in Excel, LibreOffice, or Google Sheets, so every such cell is prefixed with
@@ -437,3 +457,7 @@ The `electron/` connection-manager app's UI and auth model are adapted from
 Liquescent Development (AGPL-3.0-only, the same license this repository uses). See
 [`NOTICE.md`](NOTICE.md) for exactly what was adapted and what was deliberately changed
 (credential storage, most notably).
+
+`correlate_logs` is built on `@liquescent/log-correlator-core`/`-query-parser`, also by
+Richard Kiene / Liquescent Development (AGPL-3.0-only). See [`NOTICE.md`](NOTICE.md) for
+what's used from it and what's deliberately not.

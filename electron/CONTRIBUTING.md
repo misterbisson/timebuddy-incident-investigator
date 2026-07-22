@@ -56,6 +56,20 @@ anything that changes the tool set, connection storage, or `--mcp-server` startu
 CI says nothing about any of them. Tracked in
 [#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
 
+`test/connectionStore.test.js` covers `connectionStore.js` directly (same
+bypass-the-renderer approach as `seedConnection.js`): both the `grafana` and `graylog`
+connection `kind`s round-trip through `listConnectionsForDisplay()`, each kind's
+engine-facing getter (`getConnectionsForEngine()`/`getLogConnectionsForEngine()`) only
+returns its own kind with the right shape (decrypted secret, `matchHosts` vs
+`streamId`/`streamName`, shared `tags`), and editing a connection with a blank
+secret field keeps the previously stored one. **Always pass `--user-data-dir`** (same as
+`seedConnection.js`) — without it, this writes into your real `connections.json`/
+`secrets.enc.json` instead of a scratch directory:
+
+```bash
+electron test/connectionStore.test.js --user-data-dir=/tmp/timebuddy-connection-store-test
+```
+
 ## Building, signing, and releasing
 
 Packaging is `electron-builder`, configured in this package's `build` field in

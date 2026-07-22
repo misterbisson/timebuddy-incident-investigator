@@ -200,7 +200,49 @@ function buildEngineConnections(connections, secrets, decrypt) {
       authType: meta.authType,
       matchHosts: meta.matchHosts,
       tlsVerify: meta.tlsVerify,
+      tags: meta.tags,
       token: secret?.authType === 'bearer' ? secret.token : undefined,
+      username: secret?.authType === 'basic' ? secret.username : meta.username,
+      password: secret?.authType === 'basic' ? secret.password : undefined,
+    };
+  });
+  return { connections: built, failures };
+}
+
+/**
+ * Log-connection counterpart to buildEngineConnections() — same
+ * isolate-each-decrypt contract (see that function's doc comment for why),
+ * mapped to Graylog's LogConnection shape instead of GrafanaConnection's.
+ *
+ * Graylog authType is 'token' | 'basic', not Grafana's 'bearer' | 'basic':
+ * Graylog's REST API doesn't accept a real `Authorization: Bearer` header for
+ * API-token auth — its documented convention is HTTP Basic with the token as
+ * the username and the literal string "token" as the password. 'basic' here
+ * is a real username/password login, same as Grafana's 'basic'.
+ */
+function buildLogEngineConnections(connections, secrets, decrypt) {
+  const failures = [];
+  const built = connections.map((meta) => {
+    let secret;
+    const encoded = secrets[meta.id];
+    if (encoded) {
+      try {
+        secret = decrypt(encoded);
+      } catch (err) {
+        failures.push({ id: meta.id, name: meta.name, reason: describeSecretFailure(err) });
+      }
+    }
+    return {
+      id: meta.id,
+      name: meta.name,
+      sourceType: 'graylog',
+      url: meta.url,
+      authType: meta.authType,
+      streamId: meta.streamId,
+      streamName: meta.streamName,
+      tlsVerify: meta.tlsVerify,
+      tags: meta.tags,
+      token: secret?.authType === 'token' ? secret.token : undefined,
       username: secret?.authType === 'basic' ? secret.username : meta.username,
       password: secret?.authType === 'basic' ? secret.password : undefined,
     };
@@ -217,4 +259,5 @@ module.exports = {
   readJsonFile,
   writeJsonFileAtomic,
   buildEngineConnections,
+  buildLogEngineConnections,
 };

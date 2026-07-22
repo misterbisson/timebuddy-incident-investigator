@@ -2,16 +2,17 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Grafana Connection Manager</title>
+    <title>Timebuddy Connections</title>
     <link rel="icon" href="assets/favicon.png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <header>
-      <h1>Grafana Connections</h1>
+      <h1>Timebuddy Connections</h1>
       <p class="subtitle">
-        Connections saved here are used by the timebuddy-incident-investigator MCP server. Auth model and UI
-        adapted from <a href="https://github.com/Liquescent-Development/time-buddy" target="_blank" rel="noopener">Time Buddy</a>
+        Grafana and Graylog connections saved here are used by the timebuddy-incident-investigator MCP server.
+        Auth model and UI adapted from
+        <a href="https://github.com/Liquescent-Development/time-buddy" target="_blank" rel="noopener">Time Buddy</a>
         &mdash; see <a href="../NOTICE.md" target="_blank" rel="noopener">NOTICE.md</a>.
       </p>
     </header>
@@ -24,6 +25,7 @@
       <thead>
         <tr>
           <th>Name</th>
+          <th>Kind</th>
           <th>URL</th>
           <th>Auth</th>
           <th>Status</th>
@@ -31,7 +33,7 @@
         </tr>
       </thead>
       <tbody id="connectionsTableBody">
-        <tr class="empty-row"><td colspan="5">No connections yet. Click "Add connection" to create one.</td></tr>
+        <tr class="empty-row"><td colspan="6">No connections yet. Click "Add connection" to create one.</td></tr>
       </tbody>
     </table>
 
@@ -70,32 +72,77 @@
       <div class="modal-content">
         <h2 id="connectionFormTitle">Add connection</h2>
 
+        <fieldset id="kindFieldset" class="auth-type">
+          <legend>Connection kind</legend>
+          <label><input type="radio" name="kind" value="grafana" checked /> Grafana</label>
+          <label><input type="radio" name="kind" value="graylog" /> Graylog</label>
+        </fieldset>
+
         <label for="connectionName">Name</label>
         <input id="connectionName" type="text" placeholder="e.g. prod-us-east" />
 
         <label for="connectionUrl">URL</label>
         <input id="connectionUrl" type="text" placeholder="https://grafana.example.com" />
 
-        <fieldset class="auth-type">
-          <legend>Auth type</legend>
-          <label><input type="radio" name="authType" value="bearer" checked /> Bearer token</label>
-          <label><input type="radio" name="authType" value="basic" /> Basic auth (username/password)</label>
-        </fieldset>
+        <div id="grafanaFields">
+          <fieldset class="auth-type">
+            <legend>Auth type</legend>
+            <label><input type="radio" name="authType" value="bearer" checked /> Bearer token</label>
+            <label><input type="radio" name="authType" value="basic" /> Basic auth (username/password)</label>
+          </fieldset>
 
-        <div id="bearerFields" class="auth-fields">
-          <label for="connectionToken">Token</label>
-          <input id="connectionToken" type="password" placeholder="Leave blank to keep the current token" />
+          <div id="bearerFields" class="auth-fields">
+            <label for="connectionToken">Token</label>
+            <input id="connectionToken" type="password" placeholder="Leave blank to keep the current token" />
+          </div>
+
+          <div id="basicFields" class="auth-fields hidden">
+            <label for="connectionUsername">Username</label>
+            <input id="connectionUsername" type="text" />
+            <label for="connectionPassword">Password</label>
+            <input id="connectionPassword" type="password" placeholder="Leave blank to keep the current password" />
+          </div>
+
+          <label for="connectionMatchHosts">Extra match hosts (optional)</label>
+          <input id="connectionMatchHosts" type="text" placeholder="comma-separated, e.g. grafana-lb.internal" />
         </div>
 
-        <div id="basicFields" class="auth-fields hidden">
-          <label for="connectionUsername">Username</label>
-          <input id="connectionUsername" type="text" />
-          <label for="connectionPassword">Password</label>
-          <input id="connectionPassword" type="password" placeholder="Leave blank to keep the current password" />
+        <div id="graylogFields" class="hidden">
+          <fieldset class="auth-type">
+            <legend>Auth type</legend>
+            <label><input type="radio" name="graylogAuthType" value="token" checked /> API token</label>
+            <label><input type="radio" name="graylogAuthType" value="basic" /> Basic auth (username/password)</label>
+          </fieldset>
+
+          <div id="graylogTokenFields" class="auth-fields">
+            <label for="connectionGraylogToken">API token</label>
+            <input id="connectionGraylogToken" type="password" placeholder="Leave blank to keep the current token" />
+            <p class="field-hint">
+              Sent as HTTP Basic auth with the token as the username &mdash; Graylog's own convention for API
+              tokens, not a Bearer header.
+            </p>
+          </div>
+
+          <div id="graylogBasicFields" class="auth-fields hidden">
+            <label for="connectionGraylogUsername">Username</label>
+            <input id="connectionGraylogUsername" type="text" />
+            <label for="connectionGraylogPassword">Password</label>
+            <input id="connectionGraylogPassword" type="password" placeholder="Leave blank to keep the current password" />
+          </div>
+
+          <label for="connectionStreamId">Stream ID (optional)</label>
+          <input id="connectionStreamId" type="text" placeholder="Restrict searches to one stream" />
+
+          <label for="connectionStreamName">Stream name (optional, display only)</label>
+          <input id="connectionStreamName" type="text" placeholder="e.g. APIGW 5xx" />
         </div>
 
-        <label for="connectionMatchHosts">Extra match hosts (optional)</label>
-        <input id="connectionMatchHosts" type="text" placeholder="comma-separated, e.g. grafana-lb.internal" />
+        <label for="connectionTags">Tags (optional)</label>
+        <input id="connectionTags" type="text" placeholder="comma-separated, e.g. prod, us-east" />
+        <p class="field-hint">
+          Shared labels between a Grafana and a Graylog connection so a skill can pair the two instead of
+          guessing which log source corresponds to which dashboard.
+        </p>
 
         <label class="checkbox-row"><input id="connectionTlsVerify" type="checkbox" checked /> Verify TLS certificate</label>
 

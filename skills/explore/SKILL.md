@@ -1,5 +1,5 @@
 ---
-description: Confirms the timebuddy-incident-investigator MCP server is connected and surveys what Grafana connections and dashboards are available, so someone can get comfortable with it before an incident happens. Use when checking that the Grafana MCP setup works, doing a health check, saying hello, or asking what's available/connected.
+description: Confirms the timebuddy-incident-investigator MCP server is connected and surveys what Grafana and Graylog connections and dashboards are available, so someone can get comfortable with it before an incident happens. Use when checking that the Grafana/Graylog MCP setup works, doing a health check, saying hello, or asking what's available/connected.
 ---
 
 # Explore
@@ -98,3 +98,14 @@ that's a sign to ask for a narrower query (a `metricName`/`labels`/`query` filte
 If multiple connections are configured, mention which ones responded by name/id — this is also a
 good moment for someone to notice if a connection they expected isn't there or isn't working, well
 before they'd need it during a real incident.
+
+9. **Survey log connections too.** Call `list_log_sources` with no arguments — it lists every
+   configured Graylog connection (id, name, tags, default stream) the same way `find_related_dashboards`
+   surveys Grafana connections above. An empty `sources` array just means no Graylog connection has
+   been configured yet, not an error — mention it's optional and where to add one (the same
+   connection-manager app, a Grafana/Graylog kind toggle on the same "Add connection" form) rather
+   than treating it as a problem. When there are entries, mention each one's `tags` — those are what
+   let `/timebuddy:investigate` pair a log connection to the right Grafana connection automatically
+   during a real incident, so it's worth confirming now that connections meant to cover the same
+   environment actually share a tag (e.g. both tagged `prod`), rather than discovering a mismatch
+   mid-incident.

@@ -3,6 +3,7 @@ const path = require('node:path');
 const { writeToDir, isWithinDirectory } = require('./downloads.js');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
+const { testGraylogConnection } = require('./graylogTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
 const { attachAuthHeaders } = require('./authGuard.js');
 
@@ -47,7 +48,7 @@ function openOrFocusConnectionsWindow() {
   connectionsWindow = new BrowserWindow({
     width: 760,
     height: 640,
-    title: 'Grafana Connection Manager',
+    title: 'Timebuddy Connection Manager',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -170,11 +171,23 @@ async function runMcpServer() {
   // need to restart this MCP server process (restarting the GUI window
   // alone never did anything here anyway: it's a separate process from the
   // one Claude Code/Desktop is already talking to over stdio).
-  await startMcpServer(connectionsSource, { dataDir }, screenshotter, activityLog);
+  await startMcpServer(
+    connectionsSource,
+    { dataDir },
+    screenshotter,
+    activityLog,
+    // Same re-read-on-every-call thunk as the Grafana source above, backed
+    // by the same connections.json/secrets.enc.json (see
+    // connectionStore.js's kind split) — a Graylog connection added/edited
+    // in the GUI takes effect on the next tool call with no restart either.
+    () => store.getLogConnectionsForEngine(),
+  );
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
+  const startupLogConnections = store.getLogConnectionsForEngine();
   console.error(
-    `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')})`,
+    `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')}` +
+      `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})`,
   );
 }
 
@@ -202,7 +215,9 @@ app.on('window-all-closed', () => {
 ipcMain.handle('connections:list', () => store.listConnectionsForDisplay());
 ipcMain.handle('connections:upsert', (_event, connection) => store.upsertConnection(connection));
 ipcMain.handle('connections:delete', (_event, id) => store.deleteConnection(id));
-ipcMain.handle('connections:test', (_event, draft) => testConnection(draft));
+ipcMain.handle('connections:test', (_event, draft) =>
+  draft.kind === 'graylog' ? testGraylogConnection(draft) : testConnection(draft),
+);
 ipcMain.handle('activity:list', () => (activityLog ? activityLog.list() : []));
 ipcMain.handle('activity:openExternal', (_event, url) => {
   // Every activity entry's url is built by this app's own buildDashboardUrl()

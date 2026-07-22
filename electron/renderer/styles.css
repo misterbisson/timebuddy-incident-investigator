@@ -211,6 +211,17 @@ td button + button {
   display: none;
 }
 
+.field-hint {
+  color: #9c9c9c;
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+#grafanaFields.hidden,
+#graylogFields.hidden {
+  display: none;
+}
+
 .test-result {
   font-size: 12px;
   margin-top: 12px;

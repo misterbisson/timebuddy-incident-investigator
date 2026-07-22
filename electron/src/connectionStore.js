@@ -6,6 +6,7 @@ const {
   readJsonFile,
   writeJsonFileAtomic,
   buildEngineConnections,
+  buildLogEngineConnections,
   describeSecretFailure,
   SecretDecryptError,
   SecretFormatError,
@@ -84,18 +85,7 @@ function decryptSecret(encoded) {
   }
 }
 
-/**
- * Builds the fully-populated GrafanaConnection[] the MCP engine needs
- * (secrets included), decrypting via safeStorage entirely in memory. This
- * is only ever called from this same Electron process's headless
- * --mcp-server mode (see main.js) — the return value is never written back
- * to disk in any form, so no plaintext secret exists anywhere, ever.
- */
-function getConnectionsForEngine() {
-  const { connections } = readConnectionsFile();
-  const { secrets } = readSecretsFile();
-  const { connections: built, failures } = buildEngineConnections(connections, secrets, decryptSecret);
-
+function reportSecretFailures(failures) {
   for (const failure of failures) {
     // console.error, not console.log — in --mcp-server mode stdout is the
     // JSON-RPC channel. This is the only place the *reason* is visible; the
@@ -106,6 +96,51 @@ function getConnectionsForEngine() {
         `Cause: ${failure.reason}`,
     );
   }
+}
+
+/**
+ * Builds the fully-populated GrafanaConnection[] the MCP engine needs
+ * (secrets included), decrypting via safeStorage entirely in memory. This
+ * is only ever called from this same Electron process's headless
+ * --mcp-server mode (see main.js) — the return value is never written back
+ * to disk in any form, so no plaintext secret exists anywhere, ever.
+ *
+ * Connections predating the `kind` field have no `kind` at all — they're all
+ * Grafana connections from before Graylog support existed, so a missing
+ * `kind` is treated as 'grafana' rather than excluded.
+ *
+ * Each connection's decrypt is isolated (see buildEngineConnections's doc
+ * comment) — this is the ConnectionsSource thunk, re-invoked on every tool
+ * call, so one undecryptable secret must not fail every tool call, including
+ * ones that never touch it.
+ */
+function getConnectionsForEngine() {
+  const { connections } = readConnectionsFile();
+  const { secrets } = readSecretsFile();
+  const grafanaConnections = connections.filter((meta) => (meta.kind ?? 'grafana') === 'grafana');
+  const { connections: built, failures } = buildEngineConnections(grafanaConnections, secrets, decryptSecret);
+  reportSecretFailures(failures);
+  return built;
+}
+
+/**
+ * Log-connection counterpart to getConnectionsForEngine() — same
+ * isolate-each-decrypt contract, filtered to kind === 'graylog'.
+ *
+ * Graylog authType is 'token' | 'basic', not Grafana's 'bearer' | 'basic':
+ * Graylog's REST API doesn't accept a real `Authorization: Bearer` header for
+ * API-token auth — its documented convention is HTTP Basic with the token as
+ * the username and the literal string "token" as the password (confirmed
+ * against github.com/lcaliani/graylog-mcp's implementation). 'basic' here is
+ * a real username/password login (e.g. an LDAP-backed account), same as
+ * Grafana's 'basic'.
+ */
+function getLogConnectionsForEngine() {
+  const { connections } = readConnectionsFile();
+  const { secrets } = readSecretsFile();
+  const logConnections = connections.filter((meta) => meta.kind === 'graylog');
+  const { connections: built, failures } = buildLogEngineConnections(logConnections, secrets, decryptSecret);
+  reportSecretFailures(failures);
   return built;
 }
 
@@ -136,14 +171,22 @@ function listConnectionsForDisplay() {
         secretError = describeSecretFailure(err);
       }
     }
-    return { ...c, hasSecret: Boolean(encoded), ...(secretError ? { secretError } : {}) };
+    return {
+      ...c,
+      kind: c.kind ?? 'grafana',
+      hasSecret: Boolean(encoded),
+      ...(secretError ? { secretError } : {}),
+    };
   });
 }
 
 /**
  * Creates or updates a connection. Leaving `password`/`token` blank on an
  * edit keeps the existing stored secret (same behavior as Time Buddy's
- * connection form) — only a non-empty value overwrites it.
+ * connection form) — only a non-empty value overwrites it. `kind` is fixed
+ * at creation (the renderer doesn't offer to change it on edit/duplicate);
+ * defaults to 'grafana' so existing callers/tests that never set it keep
+ * working unchanged.
  */
 function upsertConnection(draft) {
   const connectionsFile = readConnectionsFile();
@@ -155,18 +198,37 @@ function upsertConnection(draft) {
   const existingIndex = draft.id ? connectionsFile.connections.findIndex((c) => c.id === draft.id) : -1;
   const id = draft.id ?? crypto.randomUUID();
   const existing = existingIndex >= 0 ? connectionsFile.connections[existingIndex] : undefined;
+  const kind = existing?.kind ?? draft.kind ?? 'grafana';
 
-  const meta = {
-    id,
-    name: draft.name,
-    url: draft.url.replace(/\/+$/, ''),
-    authType: draft.authType,
-    username: draft.authType === 'basic' ? draft.username : undefined,
-    matchHosts: draft.matchHosts,
-    tlsVerify: draft.tlsVerify,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  };
+  const meta =
+    kind === 'graylog'
+      ? {
+          id,
+          kind,
+          name: draft.name,
+          url: draft.url.replace(/\/+$/, ''),
+          authType: draft.authType,
+          username: draft.authType === 'basic' ? draft.username : undefined,
+          streamId: draft.streamId || undefined,
+          streamName: draft.streamName || undefined,
+          tags: draft.tags,
+          tlsVerify: draft.tlsVerify,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        }
+      : {
+          id,
+          kind,
+          name: draft.name,
+          url: draft.url.replace(/\/+$/, ''),
+          authType: draft.authType,
+          username: draft.authType === 'basic' ? draft.username : undefined,
+          matchHosts: draft.matchHosts,
+          tags: draft.tags,
+          tlsVerify: draft.tlsVerify,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        };
 
   if (existingIndex >= 0) {
     connectionsFile.connections[existingIndex] = meta;
@@ -180,7 +242,7 @@ function upsertConnection(draft) {
     const payload =
       draft.authType === 'basic'
         ? { authType: 'basic', username: draft.username, password: draft.password }
-        : { authType: 'bearer', token: draft.token };
+        : { authType: kind === 'graylog' ? 'token' : 'bearer', token: draft.token };
     secretsFile.secrets[id] = encryptSecret(payload);
   }
 
@@ -204,4 +266,5 @@ module.exports = {
   upsertConnection,
   deleteConnection,
   getConnectionsForEngine,
+  getLogConnectionsForEngine,
 };

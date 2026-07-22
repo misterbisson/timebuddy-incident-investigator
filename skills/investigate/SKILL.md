@@ -1,5 +1,5 @@
 ---
-description: Investigates a live or recent Grafana incident using the timebuddy-incident-investigator MCP tools - ingests alert details (a pasted Grafana URL, alert JSON, webhook payload, or just a description), replays the underlying queries over the incident window, checks against baselines, looks for correlated signals, and produces an evidence-linked verdict. Use whenever someone pastes alert/incident details, mentions being paged or on-call, or asks what's going on with a service.
+description: Investigates a live or recent Grafana incident using the timebuddy-incident-investigator MCP tools - ingests alert details (a pasted Grafana URL, alert JSON, webhook payload, or just a description), replays the underlying queries over the incident window, checks against baselines, looks for correlated signals, pulls corroborating Graylog log evidence when a log connection is configured, and produces an evidence-linked verdict. Use whenever someone pastes alert/incident details, mentions being paged or on-call, or asks what's going on with a service.
 ---
 
 # Investigate
@@ -31,7 +31,7 @@ skill exists to handle for them.
      (e.g. they're describing the incident from memory, or pasted a screenshot's text by hand).
    - If the response includes a `knowledge` field, a "Timebuddy knowledge" dashboard published
      product-specific context for this alert (owner, known false positives, runbook links) —
-     fold it into your verdict in step 6. Absent means nothing's been published for this alert's
+     fold it into your verdict in step 7. Absent means nothing's been published for this alert's
      product, not an error; don't go looking for it yourself (`get_product_context` exists for
      that, but `get_alert_context` already tried).
 
@@ -236,7 +236,48 @@ skill exists to handle for them.
    end. If nothing close shows up, say so plainly rather than retrying — that dashboard needs a
    Grafana-side fix, not something any tool call here can resolve.
 
-6. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
+6. **Pull corroborating log evidence**, once you have a primary panel and/or some identifiers —
+   this step is optional and skips itself cleanly when there's nothing configured for it.
+   - Call `list_log_sources` with no arguments. If `sources` is empty, no Graylog connections are
+     configured — skip the rest of this step silently; that's a normal, common state, not
+     something to flag as missing unless asked.
+   - **Pick which log connection to use.** If `sources` has exactly one entry, use its `id` as
+     `connection` on the calls below — no further resolution needed. If there's more than one,
+     pair by tags instead of asking outright: call `list_datasources` with
+     `connection: <resolvedConnectionId>` (the Grafana connection from step 2) to get
+     `connectionTags[<resolvedConnectionId>]`, then find the log source(s) in `sources` whose own
+     `tags` array shares at least one value with it. Exactly one match: use it. Zero or more than
+     one match (or no `resolvedConnectionId` to pair from): ask the person which log connection
+     covers this environment, listing the candidate names — same "ambiguous is a hard stop, don't
+     guess" approach every connection resolution in this server already follows.
+   - **Gather identifiers to search on** from what you already have: `alertContext.labels`, the
+     `labels` field on any series you pulled in step 3 (`execute_query_window`/`render_dashboard`/
+     `detect_correlated_anomalies` all return per-series `labels` — hostnames, instance ids,
+     whatever the underlying datasource query tagged each series with), and the labels on any
+     correlated result from step 5. Only use identifier values that are actually present in this
+     data — don't invent a hostname or guess at one from a naming convention.
+   - Call `search_logs` with those identifiers built into Graylog query syntax (e.g.
+     `host:web-03 AND level:ERROR`), the same `startsAtMs`/`endsAtMs` as the incident window, and
+     the resolved log `connection`. Graylog's own field names for a given identifier aren't
+     knowable in advance from this side — if a specific query comes back empty, try a broader one
+     (fewer fields, or a bare `*` scoped to the time window) before concluding there's nothing
+     there, and say so plainly if it's still empty rather than treating silence as a finding.
+   - If you have a specific join key connecting two log streams (e.g. a `request_id` tying a
+     frontend log line to the backend call it triggered), use `correlate_logs` instead of two
+     separate `search_logs` calls — one query, one already-joined result set. Its `and`/`or`/
+     `unless` operators are documented in the tool description; `unless` is the one worth
+     remembering for "which requests on one side never showed up on the other."
+     - A `truncated: true` in the result (or any `streams[]` entry with `truncated: true`) means a
+       stream hit the per-stream line cap, so the join ran on a partial view — treat the result as
+       a floor, not a complete count, and narrow the window/query if the count matters. A truncated
+       `unless` right side errors out rather than returning a possibly-inverted answer; narrow and
+       retry rather than working around it.
+   - Whatever `search_logs`/`correlate_logs` returns is one more piece of evidence for step 7's
+     verdict, not a separate report — its `url` belongs in `evidence[]` the same way every other
+     tool's URL does, and a specific log line or correlated pair worth citing belongs in the
+     verdict's prose the same way a baseline number would.
+
+7. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
    and an `evidence` array of dashboard/panel links you gathered along the way. Pass
    `validate_baseline`'s `briefExcursions` through in `baseline` unchanged, not just the top-level
    `classification` — `summarize_findings` now folds that in itself, so it never returns
@@ -247,11 +288,17 @@ skill exists to handle for them.
    Every tool above
    (`get_alert_context`'s `dashboardUrl`, `execute_query_window`/`validate_baseline`'s `url`,
    `detect_correlated_anomalies`'s `primaryUrl` and each correlated result's `url`,
-   `find_related_dashboards`'s per-match `url`) already returns a ready-to-click Grafana link at
-   the exact panel and time window — use those directly as `evidence[].url`. **Never construct a
-   dashboard URL yourself** (e.g. by guessing at `/d/{uid}` or copying a base URL from somewhere
-   else) — the tools already know the right connection's base URL and the right query params;
-   hand-building one risks pointing at the wrong Grafana instance or a broken link.
+   `find_related_dashboards`'s per-match `url`, `search_logs`/`correlate_logs`'s `url`) already
+   returns a ready-to-click link at the exact panel/query and time window — use those directly as
+   `evidence[].url`. **Never construct or paraphrase a URL yourself**, for a Grafana dashboard or a
+   Graylog search alike (e.g. by guessing at `/d/{uid}`, copying a base URL from somewhere else, or
+   combining the query text from two different `search_logs` calls into what looks like a single
+   representative link) — the tools already know the right connection's base URL and the right
+   query params; hand-building or merging one risks pointing at the wrong instance, a broken query
+   string, or a link missing required params (e.g. Graylog's absolute time range) that only the
+   tool's own URL builder fills in correctly. If you want to cite more than one `search_logs` call
+   in the verdict, include each call's own `url` as a separate `evidence[]` entry rather than
+   folding them into one.
    `summarize_findings` returns **structured data only — no prose**. Reading its `reasons` and
    `evidence` fields, write the actual human-readable incident note yourself: what fired, whether
    it's real, why (cite the specific baseline/correlation numbers), and the links you collected so
