@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.2.0...v0.3.0) (2026-07-22)
+
+
+### Features
+
+* Graylog integration (MVP) ([#38](https://github.com/misterbisson/timebuddy-incident-investigator/issues/38)) ([75ce542](https://github.com/misterbisson/timebuddy-incident-investigator/commit/75ce54253b89ce75d1c6f9da6d681cc25115694c))
+* show Graylog log searches in the Electron Activity window ([#124](https://github.com/misterbisson/timebuddy-incident-investigator/issues/124)) ([fac028d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/fac028da021f4de4c73f68f3ce74bbf17022a2a6))
+
+
+### Bug Fixes
+
+* **deps:** bump fast-uri from 3.1.3 to 3.1.4 ([#114](https://github.com/misterbisson/timebuddy-incident-investigator/issues/114)) ([db04616](https://github.com/misterbisson/timebuddy-incident-investigator/commit/db04616c963e90ad1405f9162cfd85bff1b298fe))
+* name dev MCP registration distinctly from packaged app ([#119](https://github.com/misterbisson/timebuddy-incident-investigator/issues/119)) ([a34d487](https://github.com/misterbisson/timebuddy-incident-investigator/commit/a34d48718f963476ddaec2a417dca88ac7b77777))
+* pivot log-only findings back to find_related_dashboards in the investigate skill ([#122](https://github.com/misterbisson/timebuddy-incident-investigator/issues/122)) ([d368fb5](https://github.com/misterbisson/timebuddy-incident-investigator/commit/d368fb5578df6bb707d71e64cfc236489d2ff2ea))
+* **release:** stop skipping release creation so v0.2.0 (and future) tags are cut ([#115](https://github.com/misterbisson/timebuddy-incident-investigator/issues/115)) ([1c8b228](https://github.com/misterbisson/timebuddy-incident-investigator/commit/1c8b228984b9dcd15ae9e4cb6ef31b07e13d9294))
+* surface Graylog's unscoped-search permission gap, not just stream-listing ([#120](https://github.com/misterbisson/timebuddy-incident-investigator/issues/120)) ([706c90c](https://github.com/misterbisson/timebuddy-incident-investigator/commit/706c90cf4e90780d37796bdbe9714466d84b9a3e))
+
 ## [0.2.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.1.0...v0.2.0) (2026-07-21)
 
 
