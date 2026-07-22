@@ -109,3 +109,11 @@ before they'd need it during a real incident.
    during a real incident, so it's worth confirming now that connections meant to cover the same
    environment actually share a tag (e.g. both tagged `prod`), rather than discovering a mismatch
    mid-incident.
+   - Flag plainly any entry with no `streamId`/`streamName` (no default stream configured). Some
+     Graylog roles grant search permission scoped to individual streams but not the
+     unscoped/"universal" search across all of them — a connection with no default stream will send
+     every `search_logs`/`correlate_logs` call that omits an explicit `streamId` out unscoped, which
+     can then 403 partway through a real incident even though this survey's own calls (which only
+     list streams, never search) succeeded. Worth testing with a real `search_logs` call now (a bare
+     `*` over a short recent window) rather than waiting to find out mid-incident, and if it fails,
+     suggesting a default stream be set on that connection (pick one from its `streams` list).

@@ -488,6 +488,18 @@ race the listener's own appends.
   joins across differently-named fields on each side and `group_left()`/`group_right()`
   many-to-one grouping are implemented in the underlying library but aren't exercised by
   this project's own tests yet.
+- **A Graylog token that can list streams isn't guaranteed to be able to search across all of
+  them.** `search_logs`/`correlate_logs` always call the same `/api/search/universal/absolute`
+  endpoint, scoping to one stream by adding a `filter=streams:<id>` query param whenever a
+  `streamId` is available (from the call itself, or a connection's configured default) — some
+  Graylog roles grant search permission scoped to individual streams but not the
+  unscoped/"universal" search across all of them, so a connection with no default stream
+  configured can 403 on any call that omits an explicit `streamId`, even though `/api/system`
+  and `/api/streams` both succeed for that same token. The connection-manager app's "Test
+  connection" button now probes this directly (scoped to the connection's default stream if it
+  has one, unscoped if it doesn't) rather than stopping at stream-listing permission; if it
+  reports this, either configure a default stream on the connection or make sure every call
+  against it passes an explicit `streamId`.
 - **Every CSV `export_panel_csv` writes is neutralized against spreadsheet formula
   injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula when the
   file is opened in Excel, LibreOffice, or Google Sheets, so every such cell is prefixed with

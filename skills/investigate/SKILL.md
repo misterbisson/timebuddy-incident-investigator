@@ -262,6 +262,14 @@ skill exists to handle for them.
      knowable in advance from this side — if a specific query comes back empty, try a broader one
      (fewer fields, or a bare `*` scoped to the time window) before concluding there's nothing
      there, and say so plainly if it's still empty rather than treating silence as a finding.
+   - If that call (or `correlate_logs`, below) fails with a permission error mentioning "no stream
+     filter applied" or similar, the connection's Graylog role can search within a stream but not
+     across all of them unscoped, and it has no default stream configured — this is a real, common
+     lockdown, not a broken connection. Call `list_log_sources` again with
+     `connection: <resolvedConnectionId>` to list that connection's streams, pick the one most
+     relevant to what you're investigating (or `Default Stream`/`All events`/`All messages` if
+     nothing more specific fits), and retry the same call with `streamId` set explicitly rather than
+     reporting the connection as broken.
    - If you have a specific join key connecting two log streams (e.g. a `request_id` tying a
      frontend log line to the backend call it triggered), use `correlate_logs` instead of two
      separate `search_logs` calls — one query, one already-joined result set. Its `and`/`or`/
