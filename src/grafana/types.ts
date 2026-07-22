@@ -128,6 +128,19 @@ export interface DatasourceInfo {
   isDefault?: boolean;
 }
 
+/**
+ * Prometheus/Loki label-values API response, as passed through Grafana's
+ * datasource "resources" proxy (GET .../resources/api/v1/label/<name>/values).
+ * The wrapped body is the datasource's own native JSON: a status plus a flat
+ * string array of values, or an error.
+ */
+export interface LabelValuesResponse {
+  status?: string;
+  data?: string[];
+  error?: string;
+  errorType?: string;
+}
+
 export interface DsQueryTarget {
   refId: string;
   datasource: DatasourceRef;

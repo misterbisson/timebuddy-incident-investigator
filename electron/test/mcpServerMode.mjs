@@ -65,6 +65,7 @@ try {
     'summarize_findings',
     'list_datasources',
     'discover_influxdb_schema',
+    'discover_label_values',
     'search_logs',
     'list_log_sources',
     'correlate_logs',

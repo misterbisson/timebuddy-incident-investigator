@@ -257,12 +257,21 @@ skill exists to handle for them.
      correlated result from step 5. Only use identifier values that are actually present in this
      data — don't invent a hostname or guess at one from a naming convention.
      - If your primary panel *aggregates across* hosts (its series carry no host/instance label,
-       so nothing above yields one) and the environment is InfluxDB-backed, you can enumerate the
-       real candidate values rather than inventing one: call `discover_influxdb_schema` with the
-       measurement as `searchTerm` and the host/instance tag as `tagKey`. Its `schema.tagValues`
-       is the actual host/IP list for that measurement — a set you can legitimately scope a log
-       search to (still a real, data-derived set; it just doesn't by itself say *which* host was
-       hot). Same last-resort framing as step 4: only when you'd otherwise have no identifier.
+       so nothing above yields one), you can enumerate the real candidate values rather than
+       inventing one — how depends on the datasource:
+       - **InfluxDB:** call `discover_influxdb_schema` with the measurement as `searchTerm` and the
+         host/instance tag as `tagKey`. Its `schema.tagValues` is the actual host/IP list for that
+         measurement.
+       - **Prometheus or Loki (or InfluxDB too):** call `discover_label_values` with the `metric`
+         (the Prometheus metric name / series selector, Loki stream selector, or InfluxDB
+         measurement) and the `label` key (e.g. `instance`/`pod`/`host`). Its `values` is the
+         actual identifier list — the `label_values(metric, label)` equivalent.
+       Either way it's a real, data-derived set you can legitimately scope a log search to (it just
+       doesn't by itself say *which* host was hot). Same last-resort framing as step 4: only when
+       you'd otherwise have no identifier. If either call returns an *empty* list, don't read that
+       as "no hosts" straight away — a mistyped `label`/`tagKey`/`metric` isn't an error to the
+       datasource, it just matches nothing, so re-check the name against the panel's own series
+       labels (or `discover_influxdb_schema`'s `tagKeys`) before concluding the set is truly empty.
      - To find *which* of those hosts was actually hot (not just the candidate set), re-run the
        aggregating panel broken out per host: call `execute_query_window` with
        `tagBreakout: { key: "<host tag>" }` (the same tag key you enumerated above). It adds a

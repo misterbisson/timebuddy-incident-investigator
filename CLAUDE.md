@@ -65,10 +65,15 @@ Three things shape almost every module here and are easy to miss from a partial 
 
 1. **The Grafana client is a closed allowlist, not a passthrough.** `src/grafana/client.ts`
    exposes exactly the read-only endpoints the tools need (search, dashboard-by-uid,
-   datasources, `/api/ds/query`, alertmanager alerts, ruler rules, annotations) and
-   nothing else. There is deliberately no "make an arbitrary Grafana request" escape
-   hatch anywhere in the tool layer — that boundary is what makes the read-only guarantee
-   real rather than just a description. Don't add a generic proxy method to this client.
+   datasources, `/api/ds/query`, alertmanager alerts, ruler rules, annotations, and the
+   Prometheus/Loki label-values *resources* proxy) and nothing else. Note the last one:
+   `getPrometheusLabelValues`/`getLokiLabelValues` hit `/api/datasources/uid/:uid/resources/...`,
+   which *could* be a generic datasource-proxy escape hatch — they deliberately aren't. Each
+   builds a fixed path to exactly the label-values resource and nothing else, so the boundary
+   stays real. There is deliberately no "make an arbitrary Grafana request" (or "reach an
+   arbitrary datasource resource path") escape hatch anywhere in the tool layer — that boundary
+   is what makes the read-only guarantee real rather than just a description. Don't add a generic
+   proxy method to this client.
 
 2. **Every tool's structured output is redacted before it reaches the model.** `security/redact.ts`
    masks secret-shaped keys and configured customer-identifier patterns; tools call it on
