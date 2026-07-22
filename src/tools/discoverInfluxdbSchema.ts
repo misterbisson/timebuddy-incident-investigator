@@ -4,6 +4,7 @@ import type { ToolContext } from './registerAll.js';
 import type { DsQueryRequest, DsQueryResponse } from '../grafana/types.js';
 import type { GrafanaClient } from '../grafana/client.js';
 import { resolveToolClient, toolErrorResult } from './shared.js';
+import { extractTagValues } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -37,6 +38,11 @@ export function buildShowFieldKeysQuery(measurement: string): string {
 
 export function buildShowTagKeysQuery(measurement: string): string {
   return `SHOW TAG KEYS FROM "${escapeInfluxIdentifier(measurement)}"`;
+}
+
+/** Enumerates the actual values (e.g. the concrete hosts/IPs) of one tag key on one measurement — both identifiers double-quoted so neither can break out of the statement. */
+export function buildShowTagValuesQuery(measurement: string, tagKey: string): string {
+  return `SHOW TAG VALUES FROM "${escapeInfluxIdentifier(measurement)}" WITH KEY = "${escapeInfluxIdentifier(tagKey)}"`;
 }
 
 /** Flattens every non-time field's string values across every frame into a deduped, sorted name list. */
@@ -110,6 +116,23 @@ async function runShowQuery(client: GrafanaClient, datasourceUid: string, query:
   return { names, error: errors.A };
 }
 
+/**
+ * Runs a SHOW TAG VALUES query and parses its key/value frame with the same
+ * extractTagValues() the live-variable resolver uses — parseNameListFrames is
+ * wrong here because it would also collect the repeated tag-key column, not
+ * just the values. Returns a sorted, deduped value list.
+ */
+async function runTagValuesQuery(client: GrafanaClient, datasourceUid: string, query: string): Promise<{ values: string[]; error?: string }> {
+  const nowMs = Date.now();
+  const request: DsQueryRequest = {
+    from: String(nowMs - SCHEMA_QUERY_WINDOW_MS),
+    to: String(nowMs),
+    queries: [{ refId: 'A', datasource: { uid: datasourceUid }, query, rawQuery: true, resultFormat: 'table' }],
+  };
+  const response = await client.queryDs(request);
+  return { values: extractTagValues(response).sort(), error: response.results.A?.error };
+}
+
 export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
     'discover_influxdb_schema',
@@ -125,7 +148,12 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
         'measurement" mode, to keep this from being reached for casually. When searchTerm matches exactly one ' +
         'measurement, the result also includes that measurement\'s fieldKeys and tagKeys (its schema) so you ' +
         'can tell what could be visualized or grouped by; when it matches more than one, only names come back ' +
-        '— narrow searchTerm and call again for one measurement\'s schema. Currently supports InfluxDB only ' +
+        '— narrow searchTerm and call again for one measurement\'s schema. When searchTerm resolves to exactly ' +
+        'one measurement, also pass "tagKey" (one of that measurement\'s tagKeys) to enumerate that tag\'s actual ' +
+        'values via SHOW TAG VALUES — the concrete hosts/IPs/instances that panels aggregate across and never ' +
+        'reveal on their own. That is how you obtain a real hostname or IP to feed a log search (search_logs) ' +
+        'instead of inventing one; only values actually returned here are safe to search on. Currently supports ' +
+        'InfluxDB only ' +
         '(other datasource types are out of scope for now). Goes through the same connection resolution, ' +
         'redaction, and audit logging as every other tool.',
       inputSchema: {
@@ -135,15 +163,22 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
           .min(1)
           .max(200)
           .describe('Case-insensitive substring match against InfluxDB measurement names — required, no wildcard/list-all mode'),
+        tagKey: z
+          .string()
+          .trim()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('Enumerate this tag key\'s actual values (e.g. host/instance) — requires searchTerm to match exactly one measurement, and the key to be one of its tagKeys'),
         datasourceUid: z.string().optional().describe('Which InfluxDB datasource to query; omit when the connection has exactly one'),
-        limit: z.number().optional().default(50).describe('Max measurement names to return; see measurementsTotal for the untruncated count'),
+        limit: z.number().optional().default(50).describe('Max measurement names — and tag values — to return; see measurementsTotal / schema.tagValues.valuesTotal for the untruncated counts'),
         connection: z.string().optional().describe('Which Grafana connection to use; omit when only one is configured'),
       },
       annotations: { readOnlyHint: true, title: 'Discover InfluxDB schema' },
     },
-    async ({ searchTerm, datasourceUid, limit, connection }) => {
+    async ({ searchTerm, tagKey, datasourceUid, limit, connection }) => {
       try {
-        return await withAudit('discover_influxdb_schema', { searchTerm, datasourceUid, connection }, config, async () => {
+        return await withAudit('discover_influxdb_schema', { searchTerm, tagKey, datasourceUid, connection }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
           const resolvedUid = await resolveInfluxDbDatasourceUid(client, datasourceUid);
 
@@ -152,7 +187,21 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
             throw new Error(`InfluxDB SHOW MEASUREMENTS failed: ${measurementsResult.error}`);
           }
 
-          let schema: { measurement: string; fieldKeys: string[]; tagKeys: string[] } | undefined;
+          // Enumerating tag values only makes sense for a single measurement — a
+          // key can differ per measurement, and there's no schema block to hang
+          // the result off when the search is still ambiguous. Fail loudly rather
+          // than silently ignoring tagKey.
+          if (tagKey && measurementsResult.names.length !== 1) {
+            throw new Error(
+              `tagKey "${tagKey}" was given, but searchTerm "${searchTerm}" matched ${measurementsResult.names.length} measurement(s)` +
+                (measurementsResult.names.length > 1 ? `: ${measurementsResult.names.slice(0, limit).join(', ')}` : '') +
+                '. Narrow searchTerm to exactly one measurement to enumerate a tag key\'s values.',
+            );
+          }
+
+          let schema:
+            | { measurement: string; fieldKeys: string[]; tagKeys: string[]; tagValues?: { key: string; values: string[]; valuesTotal: number } }
+            | undefined;
           if (measurementsResult.names.length === 1) {
             const measurement = measurementsResult.names[0]!;
             const [fieldKeysResult, tagKeysResult] = await Promise.all([
@@ -160,6 +209,23 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
               runShowQuery(client, resolvedUid, buildShowTagKeysQuery(measurement)),
             ]);
             schema = { measurement, fieldKeys: fieldKeysResult.names, tagKeys: tagKeysResult.names };
+
+            if (tagKey) {
+              // Guard against a silently-empty result being read as "no hosts":
+              // a key that isn't on this measurement is a caller error, not an
+              // empty set. List the real keys so they can fix the call.
+              if (!tagKeysResult.names.includes(tagKey)) {
+                throw new Error(
+                  `Tag key "${tagKey}" is not a tag on measurement "${measurement}". ` +
+                    `Available tag keys: ${tagKeysResult.names.join(', ') || '(none)'}.`,
+                );
+              }
+              const tagValuesResult = await runTagValuesQuery(client, resolvedUid, buildShowTagValuesQuery(measurement, tagKey));
+              if (tagValuesResult.error) {
+                throw new Error(`InfluxDB SHOW TAG VALUES failed: ${tagValuesResult.error}`);
+              }
+              schema.tagValues = { key: tagKey, values: tagValuesResult.values.slice(0, limit), valuesTotal: tagValuesResult.values.length };
+            }
           }
 
           const result = {

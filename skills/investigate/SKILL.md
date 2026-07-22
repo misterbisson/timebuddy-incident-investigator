@@ -256,6 +256,13 @@ skill exists to handle for them.
      whatever the underlying datasource query tagged each series with), and the labels on any
      correlated result from step 5. Only use identifier values that are actually present in this
      data — don't invent a hostname or guess at one from a naming convention.
+     - If your primary panel *aggregates across* hosts (its series carry no host/instance label,
+       so nothing above yields one) and the environment is InfluxDB-backed, you can enumerate the
+       real candidate values rather than inventing one: call `discover_influxdb_schema` with the
+       measurement as `searchTerm` and the host/instance tag as `tagKey`. Its `schema.tagValues`
+       is the actual host/IP list for that measurement — a set you can legitimately scope a log
+       search to (still a real, data-derived set; it just doesn't by itself say *which* host was
+       hot). Same last-resort framing as step 4: only when you'd otherwise have no identifier.
    - Call `search_logs` with those identifiers built into Graylog query syntax (e.g.
      `host:web-03 AND level:ERROR`), the same `startsAtMs`/`endsAtMs` as the incident window, and
      the resolved log `connection`. Graylog's own field names for a given identifier aren't
