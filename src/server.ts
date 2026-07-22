@@ -7,6 +7,7 @@ import { LogConnectionRegistry, type LogConnectionsSource } from './graylog/regi
 import type { Screenshotter } from './screenshot/types.js';
 import type { ActivityLog } from './activity/activityLog.js';
 import { registerAllTools } from './tools/registerAll.js';
+import { runStartupMaintenance } from './security/retention.js';
 
 /**
  * Builds the MCP server and registers every tool against the given
@@ -50,7 +51,13 @@ export function createServer(
 
   const server = new McpServer({
     name: 'timebuddy-incident-investigator',
-    version: '0.1.0',
+    // Kept in step with package.json by release-please. The trailing comment
+    // is load-bearing, not decoration: it's the marker release-please's
+    // generic updater looks for, and a .ts file can't take the `jsonpath`
+    // entry the JSON artifacts use. This string is what the server reports to
+    // Claude Code/Desktop in the initialize handshake, so if it stops being
+    // updated it misreports the running version to every client, forever.
+    version: '0.2.0', // x-release-please-version
   });
 
   registerAllTools(server, { registry, logRegistry, config, screenshotter, activityLog });
@@ -71,6 +78,15 @@ export async function startMcpServer(
   logSource: LogConnectionsSource = [],
 ): Promise<McpServer> {
   const server = createServer(source, configOverrides, screenshotter, activityLog, logSource);
+
+  // Bound the local data dir's disk footprint once per process start. Kept off
+  // the createServer() construction path (which unit tests exercise heavily and
+  // shouldn't do filesystem cleanup as a side effect) and fired-and-forgotten
+  // here: it's best-effort and never throws, so it must not delay or block the
+  // server coming up on stdio.
+  const config: Config = { ...loadConfig(), ...configOverrides };
+  void runStartupMaintenance(config);
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;
@@ -84,3 +100,12 @@ export { createActivityLog } from './activity/activityLog.js';
 export type { ActivityLog, ActivityEntry } from './activity/activityLog.js';
 export { buildAuthHeader } from './grafana/client.js';
 export { buildGraylogAuthHeader } from './graylog/client.js';
+export { createPanelActions } from './actions/panelActions.js';
+export type {
+  PanelActions,
+  PanelActionInput,
+  PanelScreenshotResult,
+  PanelCsvResult,
+  PanelCsvFileResult,
+} from './actions/panelActions.js';
+export { originMatchesConnection } from './connections/resolve.js';

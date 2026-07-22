@@ -276,7 +276,7 @@ describe('export_panel_csv tool', () => {
 });
 
 describe('export_panel_csv tool with a screenshotter', () => {
-  it('uses the browser-captured, transformed CSV as-is and skips the direct query entirely', async () => {
+  it('re-serializes the browser-captured, transformed CSV and skips the direct query entirely', async () => {
     const queryDs = vi.fn(timeseriesQueryDsResponse);
     const client = fakeClient(timeseriesDashboard(), queryDs);
     const exportPanelCsv = vi.fn(async (req: Parameters<Screenshotter['exportPanelCsv']>[0]) => {
@@ -304,8 +304,10 @@ describe('export_panel_csv tool with a screenshotter', () => {
     expect(parsed.files[0].rows).toBe(1);
     expect(parsed.files[0].columns).toEqual(['Field', 'Mean']);
 
+    // Re-serialized (not byte-for-byte): these fields needed no quoting, so the
+    // round-trip drops Grafana's quotes. Semantically identical to the input.
     const csv = await readFile(parsed.files[0].path, 'utf8');
-    expect(csv).toBe('"Field","Mean"\r\nweb1,1\r\n');
+    expect(csv).toBe('Field,Mean\r\nweb1,1\r\n');
   });
 
   it('falls back to the direct export when the panel has no transformations configured', async () => {
@@ -348,5 +350,49 @@ describe('export_panel_csv tool with a screenshotter', () => {
     expect(parsed.transformationsApplied).toBe(false);
     expect(parsed.transformCaptureNote).toMatch(/Timed out waiting for the CSV download/);
     expect(parsed.files[0].columns).toEqual(['timestamp', 'host=web1']);
+  });
+});
+
+describe('export_panel_csv formula-injection disclosure', () => {
+  it('reports formulaNeutralized: true for this server\'s own export, and writes a neutralized cell', async () => {
+    const queryDs = vi.fn(timeseriesQueryDsResponse);
+    const client = fakeClient(timeseriesDashboard(), queryDs);
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.formulaNeutralized).toBe(true);
+    expect(parsed.formulaNeutralizationNote).toBeUndefined();
+  });
+
+  // Issue #91: the browser-captured path is now neutralized too, by parsing and
+  // re-serializing Grafana's output rather than at cell level. Pinned so the
+  // formula-leading cell can never again reach the file executable.
+  it('neutralizes a formula-leading cell in a Grafana-captured file by re-serializing it', async () => {
+    const client = fakeClient(timeseriesDashboard(), vi.fn(timeseriesQueryDsResponse));
+    const exportPanelCsv = vi.fn(async () => ({ csv: Buffer.from('Field,Mean\r\n=cmd|\' /C calc\'!A0,1\r\n') }));
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.transformationsApplied).toBe(true);
+    expect(parsed.formulaNeutralized).toBe(true);
+    expect(parsed.formulaNeutralizationNote).toContain('not byte-for-byte');
+
+    const csv = await readFile(parsed.files[0].path, 'utf8');
+    // The cell now leads with an apostrophe, so a spreadsheet displays it
+    // instead of executing it — and no cell starts a bare "=cmd".
+    expect(csv).toBe('Field,Mean\r\n\'=cmd|\' /C calc\'!A0,1\r\n');
+    expect(csv).not.toMatch(/(^|\r\n)=cmd/);
   });
 });

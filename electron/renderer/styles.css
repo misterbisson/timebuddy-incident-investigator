@@ -100,6 +100,13 @@ th {
   color: #ff9f00;
 }
 
+/* A stored-but-undecryptable secret: this connection is broken now, unlike
+   "Missing secret", which is just an unfinished setup step. */
+.status-err {
+  color: #ff5555;
+  cursor: help;
+}
+
 button {
   background-color: #3c3c3c;
   color: #d4d4d4;

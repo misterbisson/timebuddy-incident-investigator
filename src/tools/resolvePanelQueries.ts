@@ -39,7 +39,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
         panelId: z.number().optional().describe('Limit to one panel; omit to resolve every queryable panel'),
         panelTitle: z.string().optional().describe('Exact panel title — required only when panelId is ambiguous (multiple panels sharing one id, seen on some provisioned dashboards); the error message lists the candidates when this happens'),
         variableOverrides: z
-          .record(z.array(z.string()))
+          .record(z.string(), z.array(z.string()))
           .optional()
           .describe('Variable name -> value(s), e.g. from a panel URL\'s var-* query params'),
         windowFromMs: epochMsSchema.optional().describe('Epoch ms or ISO 8601 date/time used to evaluate $__interval/$__range/$timeFilter; defaults to 1h ago'),

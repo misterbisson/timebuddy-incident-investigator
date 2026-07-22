@@ -36,6 +36,13 @@ No live Grafana instance is required; the seeded connection points at a placehol
 specifically so the test can assert the call got *past* connection resolution, not that it
 succeeded against a real Grafana.
 
+**This test is manual-only — no CI job runs it.** `ci.yml` deliberately installs with
+`--workspaces=false`, so there's no Electron binary there, and `release.yml`'s build jobs
+run `electron-builder` but never invoke this script. Run it yourself before merging
+anything that changes the tool set, connection storage, or `--mcp-server` startup; a green
+CI says nothing about any of them. Tracked in
+[#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
+
 `test/connectionStore.test.js` covers `connectionStore.js` directly (same
 bypass-the-renderer approach as `seedConnection.js`): both the `grafana` and `graylog`
 connection `kind`s round-trip through `listConnectionsForDisplay()`, each kind's
@@ -66,7 +73,8 @@ Each of those first runs the root package's `tsc` build (`npm run build --prefix
 the engine's `dist/` is current, then invokes `electron-builder` for that platform. Output
 lands in `electron/dist/`.
 
-`.github/workflows/release.yml` builds all three platforms on every push/PR to `main`.
+`.github/workflows/release.yml` builds all three platforms on every PR to `main`, and on a
+push to `main` only when that push actually cuts a release (see below).
 
 Pushes to `main` first run a `version` job: [`release-please`](https://github.com/googleapis/release-please)
 (`release-please-config.json`/`.release-please-manifest.json`, repo root) analyzes commits
@@ -83,10 +91,15 @@ picks them up — without that, a merged Dependabot PR, including a security fix
 silently produce no release at all.
 
 Merging the accumulated release PR (through the same required status checks as any other
-PR) is what actually cuts the release: release-please bumps `package.json` and
-`electron/package.json` in lockstep (an `extra-files` entry in
-`release-please-config.json` keeps the latter in sync), updates `CHANGELOG.md`, and tags
-the merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
+PR) is what actually cuts the release: release-please bumps `package.json`,
+`electron/package.json`, and `.claude-plugin/plugin.json` in lockstep (`extra-files`
+entries in `release-please-config.json` keep the latter two in sync — the plugin one
+matters because `electron/package.json` ships that directory as `extraResources`, so a
+stale version there would be visible to anyone who installed the bundled plugin), bumps
+the version string `src/server.ts` reports to MCP clients in the `initialize` handshake
+(via release-please's generic updater and the `x-release-please-version` marker comment,
+since a `.ts` file can't take a `jsonpath` entry), updates `CHANGELOG.md`, and tags the
+merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
 published, checked out at that new tag, and does the actual platform builds +
 `electron-builder --publish always` (so `electron-updater` — not yet wired into `main.js`
 — can eventually point at those release artifacts; release-please itself is configured

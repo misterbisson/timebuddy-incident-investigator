@@ -3,21 +3,14 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import type { Config, GrafanaConnection } from '../config.js';
-import type { GrafanaFrame, DsQueryRequest } from '../grafana/types.js';
-import type { ResolvedTarget } from '../dashboards/panelQueries.js';
-import type { Screenshotter } from '../screenshot/types.js';
-import { parseGrafanaUrl } from '../alerts/urlParser.js';
-import { findPanel } from '../dashboards/panelQueries.js';
-import { mergeVariableOverrides, substituteTargetFields } from '../dashboards/variables.js';
-import { buildDsQueryTarget, executeQueryWindow } from '../query/executor.js';
-import { enforceWindowLimit, clampMaxDataPoints } from '../security/limits.js';
-import { buildSeriesColumnNames, frameToCsv, parseCsvLine, seriesToCsv } from '../export/csv.js';
-import { buildAuthHeader } from '../grafana/client.js';
-import { buildInspectDataUrl } from '../grafana/urlBuilder.js';
-import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
-import { resolveRenderWindow } from './renderDashboard.js';
-import { materializeVariables } from './liveVariables.js';
+import type { Config } from '../config.js';
+import { dashboardUrlFor, recordActivity, toolErrorResult } from './shared.js';
+import {
+  FORMULA_NEUTRALIZATION_NOTE,
+  MULTI_FILE_NOTE,
+  generatePanelCsv,
+  resolvePanelInvocation,
+} from './panelInvocation.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -29,61 +22,18 @@ interface SavedCsvFile {
 }
 
 /**
- * Drives a real (hidden) browser to Grafana's own Inspect > Data view and
- * captures its "Download CSV" output with "Apply panel transformations"
- * checked — the only way to get a panel's actual on-screen data (joins,
- * reduces, renames, ...) that this server's own /api/ds/query-based export
- * can't see, since those only ever run in Grafana's frontend. Returns
- * undefined when there's nothing to gain this way: no screenshotter (the
- * standalone CLI has no browser), no transformations configured on this
- * panel (Screenshotter.exportPanelCsv's own contract), or the attempt itself
- * failed — in every case the caller falls back to the direct export below,
- * which is exactly as correct for an untransformed panel and always
- * available. `captureNote` is set only on a genuine failed attempt, since
- * that's the one case where the caller can't be sure it isn't missing a real
- * transformation.
- */
-async function tryBrowserTransformedCsv(
-  screenshotter: Screenshotter | undefined,
-  connection: GrafanaConnection,
-  dashboardUid: string,
-  panelId: number,
-  fromMs: number,
-  toMs: number,
-  overrides: Record<string, string[]>,
-  config: Config,
-): Promise<{ csv: string } | { captureNote: string } | undefined> {
-  if (!screenshotter) return undefined;
-  const url = buildInspectDataUrl(connection.url, dashboardUid, panelId, { fromMs, toMs, variables: overrides });
-  try {
-    const result = await screenshotter.exportPanelCsv({
-      url,
-      headers: { Authorization: buildAuthHeader(connection) },
-      timeoutMs: config.screenshotTimeoutMs,
-    });
-    if (!result.csv) return undefined;
-    return { csv: result.csv.toString('utf8') };
-  } catch (err) {
-    return {
-      captureNote:
-        "Could not verify whether this panel has Grafana-side transformations to reproduce via the real browser " +
-        `(falling back to raw per-query data): ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-}
-
-/**
- * The CSV text itself is redacted the same as any other tool output, even
- * though (unlike the JSON result) it never reaches the model directly - a
- * "downloadable for reporting/presentations" file is exactly the kind of
- * thing that ends up shared outside this conversation, so a customer-
- * identifier pattern configured in redactionPatterns should still apply to it.
+ * Writes one CSV body — already redacted and already neutralized against
+ * spreadsheet formula injection by generatePanelCsv — to a file under DATA_DIR
+ * and returns its path. The transformations the CSV needs (neutralize, then
+ * redact) happen once, upstream in generatePanelCsv, so both this on-disk MCP
+ * export and the Electron Activity window's Downloads export write the same
+ * bytes; this only owns the filename and the write.
  */
 async function saveCsv(csv: string, config: Config, dashboardUid: string, panelId: number, suffix?: string): Promise<string> {
   const dir = join(config.dataDir, 'csv');
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${Date.now()}-${dashboardUid}-panel${panelId}${suffix ? `-${suffix}` : ''}.csv`);
-  await writeFile(path, redact(csv, config.redactionPatterns), 'utf8');
+  await writeFile(path, csv, 'utf8');
   return path;
 }
 
@@ -98,14 +48,25 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         'this first tries to capture the panel\'s real on-screen data - driving a hidden browser to Grafana\'s own ' +
         'Inspect > Data view with "Apply panel transformations" checked, so a panel with a join/reduce/rename/etc. ' +
         'configured comes back exactly as a person looking at the dashboard would see it, not just the raw per-query ' +
-        'result. "transformationsApplied: true" means that succeeded - the file is Grafana\'s own output, byte for ' +
-        'byte. Otherwise ("transformationsApplied: false") this panel has no transformations configured (nothing to ' +
+        'result. "transformationsApplied: true" means that succeeded - the file is Grafana\'s own on-screen data, ' +
+        're-serialized (RFC 4180) so it can be neutralized against spreadsheet formula injection: semantically ' +
+        'identical to Grafana\'s Download CSV, not byte-for-byte (see formulaNeutralizationNote). Otherwise ' +
+        '("transformationsApplied: false") this panel has no transformations configured (nothing to ' +
         'gain from the browser this way) or no screenshotter is available (standalone CLI), and the file is this ' +
         "server's own direct export instead: table panels as-is (every column from the query's raw data frame, in " +
         'order); timeseries/graph panels pivoted wide (a UTC-timestamp column plus one column per series, named from ' +
         'its labels or refId, outer-joined on timestamp so series sampled at different rates don\'t drop each ' +
         'other\'s points). Check "transformCaptureNote" when present - it means the browser attempt was made but ' +
-        'failed, so a real transformation may exist that this fallback data doesn\'t reflect. Pass a dashboard/panel ' +
+        'failed, so a real transformation may exist that this fallback data doesn\'t reflect. ' +
+        'Every file this tool writes is neutralized against spreadsheet formula injection ("formulaNeutralized": true ' +
+        'always): any cell beginning with =, +, -, or @ (or a whitespace character hiding one) is prefixed with an ' +
+        'apostrophe, so a spreadsheet displays it instead of executing it. Numbers are exempt, so negative values are ' +
+        'untouched - but a non-numeric cell like "-" or "-Infinity" does gain that apostrophe, so a few cells can ' +
+        'differ from the same values in a query result; that is the export being neutralized, not wrong. Reported ' +
+        '"columns" are neutralized too, so they match the file\'s header row. The Grafana-captured path ' +
+        '(transformationsApplied: true) is neutralized by re-serializing Grafana\'s output rather than at cell level, ' +
+        'so that file is semantically identical to Grafana\'s Download CSV but not byte-for-byte - see ' +
+        'formulaNeutralizationNote. Pass a dashboard/panel ' +
         'URL (its own "from"/"to" and var-* overrides are used automatically) or an alert-rule URL (resolved to its ' +
         'linked dashboard+panel, the same way get_alert_context does), or dashboardUid + panelId + connection ' +
         'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). Returns ' +
@@ -125,7 +86,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         panelTitle: z.string().optional().describe('Disambiguates panelId when a dashboard has more than one panel sharing that id'),
         fromMs: z.number().optional().describe('Window start, epoch ms - overrides the url\'s own "from" when both are given'),
         toMs: z.number().optional().describe('Window end, epoch ms - overrides the url\'s own "to" when both are given'),
-        variableOverrides: z.record(z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
+        variableOverrides: z.record(z.string(), z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Export panel CSV' },
@@ -135,198 +96,60 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('export_panel_csv', { url, dashboardUid: inputDashboardUid, panelId: inputPanelId }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection, hintUrl: url });
-          resolvedConnectionId = connectionId;
-
-          let dashboardUid = inputDashboardUid;
-          let panelId = inputPanelId;
-          let urlVars: Record<string, string[]> = {};
-          let urlFromRaw: string | undefined;
-          let urlToRaw: string | undefined;
-
-          if (url) {
-            const parsed = parseGrafanaUrl(url);
-            if (parsed.type === 'dashboard') {
-              dashboardUid = parsed.uid;
-              panelId = panelId ?? parsed.panelId;
-              urlVars = parsed.vars;
-              urlFromRaw = parsed.from;
-              urlToRaw = parsed.to;
-            } else {
-              // Alert-rule URL: resolve its linked dashboard+panel the same
-              // way get_alert_context does. That tool only warns when a rule
-              // has no dashboard/panel link - but this tool categorically
-              // needs one specific panel to export, so the same condition is
-              // a hard error here.
-              const rule = await client.getAlertRuleByUid(parsed.ruleUid);
-              const dashUid = rule.annotations?.__dashboardUid__;
-              const panelIdStr = rule.annotations?.__panelId__;
-              if (!dashUid || !panelIdStr) {
-                throw new Error(
-                  `Alert rule "${rule.title}" has no linked dashboard panel - export_panel_csv needs one specific ` +
-                    "panel to export. Use find_related_dashboards with the rule's labels to locate relevant dashboards.",
-                );
-              }
-              dashboardUid = dashUid;
-              panelId = Number.parseInt(panelIdStr, 10);
-            }
-          }
-
-          if (!dashboardUid) {
-            throw new Error('Must provide either "url" (a dashboard or alert-rule link) or "dashboardUid".');
-          }
-          resolvedDashboardUid = dashboardUid;
-          if (panelId === undefined) {
-            throw new Error('Must provide "panelId" (or a url that already carries one, e.g. a "viewPanel"/"panelId" link).');
-          }
-
-          const { dashboard } = await client.getDashboard(dashboardUid);
-          const panel = findPanel(dashboard, panelId, panelTitle);
-          if (!panel) {
-            throw new Error(`Panel ${panelId} not found on dashboard ${dashboardUid}.`);
-          }
-          const overrides = mergeVariableOverrides(urlVars, variableOverrides);
-
-          const { fromMs, toMs } = resolveRenderWindow({
-            inputFromMs,
-            inputToMs,
-            urlFromRaw,
-            urlToRaw,
-            dashboardTimeFrom: dashboard.time?.from,
-            dashboardTimeTo: dashboard.time?.to,
-            nowMs: Date.now(),
-          });
-          const window = { label: 'export', fromMs, toMs };
-          enforceWindowLimit(window, config);
-
-          const rawConnection = registry.list().find((c) => c.id === connectionId);
-          if (!rawConnection) {
-            throw new Error(`Unknown Grafana connection "${connectionId}".`);
-          }
-          const browserResult = await tryBrowserTransformedCsv(
-            screenshotter,
-            rawConnection,
-            dashboardUid,
-            panelId,
-            fromMs,
-            toMs,
-            overrides,
+          const inv = await resolvePanelInvocation(
+            registry,
             config,
+            { url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, connection },
+            {
+              toolName: 'export_panel_csv',
+              verb: 'export',
+              windowLabel: 'export',
+              onContext: (c) => {
+                if (c.connectionId) resolvedConnectionId = c.connectionId;
+                if (c.dashboardUid) resolvedDashboardUid = c.dashboardUid;
+              },
+            },
           );
 
+          const generated = await generatePanelCsv(screenshotter, config, inv);
+
           const files: SavedCsvFile[] = [];
-          let errors: Record<string, string> = {};
-          let unresolvedAllVariables: string[] = [];
-          const transformationsApplied = browserResult !== undefined && 'csv' in browserResult;
-
-          if (transformationsApplied && browserResult && 'csv' in browserResult) {
-            const path = await saveCsv(browserResult.csv, config, dashboardUid, panelId);
-            const lines = browserResult.csv.split(/\r\n|\n/).filter((l) => l.length > 0);
-            files.push({ path, rows: Math.max(0, lines.length - 1), columns: lines[0] ? parseCsvLine(lines[0]) : [] });
-          } else if (panel.mirrorsPanelIds) {
-            // Grafana's built-in "-- Dashboard --" datasource: no backend to
-            // query at all, so /api/ds/query always 404s here (the browser
-            // path above is the only way to actually get this panel's
-            // on-screen value; if it didn't run — no screenshotter — there's
-            // nothing left to fall back to).
-            throw new Error(
-              `Panel ${panelId} ("${panel.title ?? 'untitled'}") uses Grafana's built-in "-- Dashboard --" datasource ` +
-                `— it re-displays panel ${panel.mirrorsPanelIds.join(', ')}'s already-computed value client-side and ` +
-                `has no data of its own to export. Export panel ${panel.mirrorsPanelIds.join(', ')} instead.`,
-            );
-          } else {
-            const variables = dashboard.templating?.list ?? [];
-            const materialized = await materializeVariables(client, variables, overrides, window);
-            unresolvedAllVariables = materialized.unresolvedAllVariables;
-            const resolvedOverrides = materialized.overrides;
-
-            const targets: ResolvedTarget[] = await Promise.all(
-              panel.targets.map(async (t) => ({
-                ...t,
-                datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
-                raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints),
-              })),
-            );
-
-            const isTable = panel.type === 'table' || panel.type === 'table-old';
-
-            if (isTable) {
-              const maxDataPoints = clampMaxDataPoints(undefined, config);
-              const request: DsQueryRequest = {
-                from: String(fromMs),
-                to: String(toMs),
-                queries: targets.map((t) => buildDsQueryTarget(t, maxDataPoints)),
-              };
-              const response = await client.queryDs(request);
-              const frameEntries: Array<{ refId: string; frame: GrafanaFrame }> = [];
-              for (const [refId, result] of Object.entries(response.results)) {
-                if (result.error) {
-                  errors[refId] = result.error;
-                  continue;
-                }
-                for (const frame of result.frames ?? []) {
-                  frameEntries.push({ refId, frame });
-                }
-              }
-              const countByRefId = new Map<string, number>();
-              for (const { refId } of frameEntries) countByRefId.set(refId, (countByRefId.get(refId) ?? 0) + 1);
-              const seenByRefId = new Map<string, number>();
-              for (const { refId, frame } of frameEntries) {
-                let suffix: string | undefined;
-                if (frameEntries.length > 1) {
-                  const seen = seenByRefId.get(refId) ?? 0;
-                  seenByRefId.set(refId, seen + 1);
-                  suffix = (countByRefId.get(refId) ?? 0) > 1 ? `${refId}-${seen}` : refId;
-                }
-                const path = await saveCsv(frameToCsv(frame), config, dashboardUid, panelId, suffix);
-                files.push({
-                  path,
-                  refId,
-                  rows: Math.max(0, ...frame.data.values.map((c) => c.length)),
-                  columns: frame.schema.fields.map((f) => f.name),
-                });
-              }
-            } else {
-              const result = await executeQueryWindow(client, targets, window, config);
-              errors = result.errors;
-              const path = await saveCsv(seriesToCsv(result.series), config, dashboardUid, panelId);
-              files.push({
-                path,
-                rows: new Set(result.series.flatMap((s) => s.points.map((p) => p.t))).size,
-                columns: ['timestamp', ...buildSeriesColumnNames(result.series)],
-              });
-            }
+          for (const f of generated.files) {
+            const path = await saveCsv(f.content, config, inv.dashboardUid, inv.panelId, f.suffix);
+            files.push({ path, ...(f.refId ? { refId: f.refId } : {}), rows: f.rows, columns: f.columns });
           }
 
-          const resultUrl = dashboardUrlFor(registry, connectionId, dashboardUid, { panelId, fromMs, toMs, variables: overrides });
+          const resultUrl = dashboardUrlFor(registry, inv.connectionId, inv.dashboardUid, { panelId: inv.panelId, fromMs: inv.fromMs, toMs: inv.toMs, variables: inv.overrides });
           recordActivity(registry, activityLog, {
             toolName: 'export_panel_csv',
-            connectionId,
-            dashboardUid,
-            dashboardTitle: dashboard.title,
-            panelId,
-            panelTitle: panel.title,
+            connectionId: inv.connectionId,
+            dashboardUid: inv.dashboardUid,
+            dashboardTitle: inv.dashboard.title,
+            panelId: inv.panelId,
+            panelTitle: inv.panel.title,
             url: resultUrl,
           });
           const resultOut = {
             url: resultUrl,
-            dashboardUid,
-            panelId,
-            title: panel.title,
-            type: panel.type,
-            window: { fromMs, toMs },
-            transformationsApplied,
+            dashboardUid: inv.dashboardUid,
+            panelId: inv.panelId,
+            title: inv.panel.title,
+            type: inv.panel.type,
+            window: { fromMs: inv.fromMs, toMs: inv.toMs },
+            transformationsApplied: generated.transformationsApplied,
             files,
-            ...(Object.keys(errors).length > 0 ? { errors } : {}),
-            ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
-            ...(browserResult && 'captureNote' in browserResult ? { transformCaptureNote: browserResult.captureNote } : {}),
-            ...(files.length > 1
-              ? {
-                  note: 'This panel\'s data came back as more than one frame (more than one query, or a datasource ' +
-                    'splitting one query into several) - each is written to its own file rather than guessed-merged, ' +
-                    'since Grafana-side transformations used to combine them on screen are not applied here.',
-                }
-              : {}),
+            // Both paths are neutralized now: the direct exports at cell level,
+            // and Grafana's captured CSV by parse + re-serialize (see
+            // neutralizeCsvDocument). Kept as an always-true field rather than
+            // dropped so an existing caller keying off it doesn't suddenly read
+            // undefined — and paired below with the note on what re-serializing
+            // the captured path costs.
+            formulaNeutralized: true,
+            ...(generated.transformationsApplied ? { formulaNeutralizationNote: FORMULA_NEUTRALIZATION_NOTE } : {}),
+            ...(Object.keys(generated.errors).length > 0 ? { errors: generated.errors } : {}),
+            ...(generated.unresolvedAllVariables.length > 0 ? { unresolvedAllVariables: generated.unresolvedAllVariables } : {}),
+            ...(generated.captureNote ? { transformCaptureNote: generated.captureNote } : {}),
+            ...(files.length > 1 ? { note: MULTI_FILE_NOTE } : {}),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(resultOut, config.redactionPatterns)) }] };
         });

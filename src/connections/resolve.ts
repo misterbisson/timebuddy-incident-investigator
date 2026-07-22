@@ -1,3 +1,5 @@
+import type { GrafanaConnection } from '../config.js';
+
 export interface ResolveConnectionInput {
   explicitId?: string;
   hintUrl?: string;
@@ -27,10 +29,75 @@ function safeHostname(rawUrl: string): string | undefined {
   }
 }
 
-function hostMatches(host: string, connection: ResolvableConnection): boolean {
-  const connectionHost = safeHostname(connection.url);
-  if (connectionHost === host) return true;
-  return (connection.matchHosts ?? []).some((h) => h.toLowerCase() === host);
+/**
+ * Whether a bare hostname belongs to a connection: its own URL host, or any of
+ * its configured `matchHosts` aliases. Host-level and scheme-agnostic on
+ * purpose — this maps an alert/dashboard link's hostname to a connection so the
+ * engine can then issue its own request against that connection's own `url`, so
+ * the alias never dictates the scheme the token goes out over.
+ *
+ * Generic over ResolvableConnection so both GrafanaConnection and LogConnection
+ * share this logic via resolveConnection below.
+ *
+ * This is intentionally NOT the check the Electron live-view auth guard uses:
+ * that one injects a connection's Authorization header into a browser session's
+ * requests, so it must pin the scheme (see originMatchesConnection). The two
+ * live side by side here so the alias set they consult can't drift apart the
+ * way it did when the live-view guard ignored `matchHosts` entirely (#85).
+ */
+export function hostMatchesConnection(host: string, connection: ResolvableConnection): boolean {
+  const h = host.toLowerCase();
+  if (safeHostname(connection.url) === h) return true;
+  return (connection.matchHosts ?? []).some((entry) => entry.toLowerCase() === h);
+}
+
+/**
+ * Whether a request ORIGIN ("https://host[:port]") should be authenticated as
+ * this connection. Used by the Electron Activity window's long-lived live-view
+ * `<webview>` session, which injects a connection's Authorization header per
+ * request and so must decide which connection (if any) an arbitrary request
+ * origin belongs to.
+ *
+ * The connection's own origin always matches (exact scheme+host+port). A
+ * `matchHosts` alias matches too — but ONLY under the connection's own scheme,
+ * at that scheme's default port. That scheme pin is the security-relevant part:
+ * matching an alias on host alone would re-open the exact leak #69/#81 closed,
+ * where an https connection's bearer token is transmitted over plaintext
+ * http:// to the same hostname and read straight off the wire. An alias on a
+ * non-default port is deliberately not matched — `matchHosts` entries are bare
+ * hostnames with no port, and a deployment that needs a non-default-port alias
+ * wants full origins in `matchHosts`, which is tracked separately, not inferred
+ * here. A connection whose own `url` doesn't parse matches nothing.
+ *
+ * Grafana-only (not generic over ResolvableConnection): this guards the
+ * Electron live-view webview session, which only ever renders Grafana panels.
+ */
+export function originMatchesConnection(origin: string, connection: GrafanaConnection): boolean {
+  let connUrl: URL;
+  try {
+    connUrl = new URL(connection.url);
+  } catch {
+    return false;
+  }
+  if (connUrl.origin === origin) return true;
+  // Each matchHosts entry is a bare hostname; build its origin under the
+  // connection's own scheme (protocol carries its trailing colon, so this is
+  // e.g. "https://grafana-alias.example.com", normalizing to that scheme's
+  // default-port origin). Require the parsed hostname to equal the entry, so an
+  // entry that smuggles in userinfo, a path, or a port ("admin@evil.com",
+  // "evil.com/x", "evil.com:80") is rejected here exactly as
+  // hostMatchesConnection's string compare rejects it, rather than silently
+  // resolving to some other host — that keeps the two matchers' alias set the
+  // same, which is the whole reason they sit together.
+  return (connection.matchHosts ?? []).some((entry) => {
+    const host = entry.toLowerCase();
+    try {
+      const aliasUrl = new URL(`${connUrl.protocol}//${entry}`);
+      return aliasUrl.hostname === host && aliasUrl.origin === origin;
+    } catch {
+      return false;
+    }
+  });
 }
 
 function describeAvailable(connections: ResolvableConnection[]): string {
@@ -79,7 +146,7 @@ export function resolveConnection<T extends ResolvableConnection>(
 
   if (input.hintUrl) {
     const host = safeHostname(input.hintUrl);
-    const matches = host ? connections.filter((c) => hostMatches(host, c)) : [];
+    const matches = host ? connections.filter((c) => hostMatchesConnection(host, c)) : [];
     if (matches.length === 1) return { connection: matches[0]!, matchedBy: 'host' };
     if (matches.length > 1) {
       throw new Error(

@@ -1,6 +1,6 @@
 {
   "name": "timebuddy-connection-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Desktop app for timebuddy-incident-investigator: one binary that's a Grafana connection manager (GUI) and the MCP server itself (--mcp-server flag). Connection-manager UI and auth flow adapted from Time Buddy (github.com/Liquescent-Development/time-buddy) — see NOTICE.md.",
   "author": "Casey Bisson",
   "private": true,
@@ -25,8 +25,8 @@
   "dependencies": {
     "timebuddy-incident-investigator": "file:..",
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "undici": "^8.7.0",
-    "zod": "^3.24.1"
+    "undici": "^8.8.0",
+    "zod": "^4.4.3"
   },
   "build": {
     "appId": "com.timebuddy-incident-investigator.connection-manager",
@@ -53,8 +53,14 @@
       "node_modules/timebuddy-incident-investigator/package.json"
     ],
     "extraResources": [
-      { "from": "../.claude-plugin", "to": "plugin/.claude-plugin" },
-      { "from": "../skills", "to": "plugin/skills" }
+      {
+        "from": "../.claude-plugin",
+        "to": "plugin/.claude-plugin"
+      },
+      {
+        "from": "../skills",
+        "to": "plugin/skills"
+      }
     ],
     "mac": {
       "icon": "build/icon.icns",
@@ -67,7 +73,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ]
     },
@@ -78,7 +87,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -87,7 +98,9 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Development"

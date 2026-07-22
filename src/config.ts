@@ -78,6 +78,45 @@ export interface Config {
   redactionPatterns: RegExp[];
   dataDir: string;
   webhookPort: number;
+  /**
+   * Interface the webhook listener binds to. Defaults to loopback: the
+   * documented deployment is a Grafana contact point on the same host, and
+   * `POST /` writes attacker-chosen JSON straight into the store that
+   * `get_alert_context` feeds to the investigating agent. Binding wider has
+   * to be a deliberate act, which is why this is an env var and not a
+   * fallback. Set WEBHOOK_BIND_ADDRESS=0.0.0.0 to restore the pre-#68
+   * all-interfaces behavior — and set WEBHOOK_TOKEN when you do.
+   */
+  webhookBindAddress: string;
+  /**
+   * Optional shared secret. When set, `POST /` requires
+   * `Authorization: Bearer <token>`. Unset means no check — which is only
+   * safe because the bind address above is loopback by default.
+   */
+  webhookToken?: string;
+  /**
+   * Age cutoff, in hours, for the startup sweep of `<dataDir>/screenshots`.
+   * Every `screenshot_panel` call writes a full-resolution PNG named with
+   * `Date.now()` so nothing is ever overwritten — the highest-volume path in
+   * the data dir, and worthless once the incident it captured is over. On
+   * startup, files older than this are deleted. `0` (or any non-positive
+   * value) disables the sweep. Default 168h (7 days).
+   */
+  screenshotRetentionHours: number;
+  /**
+   * Size threshold, in bytes, at which `<dataDir>/audit.jsonl` is rotated on
+   * startup. Unlike the screenshots sweep this ROTATES rather than truncates:
+   * audit.jsonl is the record backing the read-only guarantee, so its history
+   * is preserved (`audit.jsonl.1` … `.N`), never deleted to reclaim disk.
+   * `0` (or any non-positive value) disables rotation. Default 5_000_000 (~5MB).
+   */
+  auditMaxBytes: number;
+  /**
+   * How many rotated audit generations to retain (`audit.jsonl.1` …
+   * `.auditKeep`). The oldest beyond this is dropped on each rotation. Minimum
+   * 1. Default 5.
+   */
+  auditKeep: number;
 }
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {
@@ -160,6 +199,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     redactionPatterns: parseRedactionPatterns(env.REDACTION_PATTERNS),
     dataDir,
     webhookPort: parseInt_(env.WEBHOOK_PORT, 4318),
+    webhookBindAddress: env.WEBHOOK_BIND_ADDRESS?.trim() || '127.0.0.1',
+    webhookToken: env.WEBHOOK_TOKEN?.trim() || undefined,
+    screenshotRetentionHours: parseInt_(env.SCREENSHOT_RETENTION_HOURS, 168),
+    auditMaxBytes: parseInt_(env.AUDIT_MAX_BYTES, 5_000_000),
+    auditKeep: parseInt_(env.AUDIT_KEEP_FILES, 5),
   };
   return cached;
 }

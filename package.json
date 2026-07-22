@@ -1,6 +1,6 @@
 {
   "name": "timebuddy-incident-investigator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Grafana Incident Review MCP server: read-only tools for AI-assisted incident investigation of dashboards, metrics, and logs.",
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -37,8 +37,8 @@
     "@liquescent/log-correlator-core": "0.0.7",
     "@liquescent/log-correlator-query-parser": "0.0.7",
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "undici": "^8.7.0",
-    "zod": "^3.24.1"
+    "undici": "^8.8.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

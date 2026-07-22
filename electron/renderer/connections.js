@@ -233,8 +233,18 @@ async function renderConnections() {
     row.appendChild(authCell);
 
     const statusCell = document.createElement('td');
-    statusCell.textContent = connection.hasSecret ? 'Configured' : 'Missing secret';
-    statusCell.className = connection.hasSecret ? 'status-ok' : 'status-warn';
+    // Three states, not two. "Can't decrypt" means a secret *is* stored but
+    // this machine's keychain can no longer open it (OS reinstall, keychain
+    // reset, migration) — unlike "Missing secret", re-entering the credential
+    // is the fix, so telling the user which one they have is the whole point.
+    if (connection.secretError) {
+      statusCell.textContent = "Can't decrypt secret";
+      statusCell.className = 'status-err';
+      statusCell.title = `${connection.secretError}\n\nEdit this connection and re-enter its credential to fix it. Other connections are unaffected.`;
+    } else {
+      statusCell.textContent = connection.hasSecret ? 'Configured' : 'Missing secret';
+      statusCell.className = connection.hasSecret ? 'status-ok' : 'status-warn';
+    }
     row.appendChild(statusCell);
 
     const actionsCell = document.createElement('td');

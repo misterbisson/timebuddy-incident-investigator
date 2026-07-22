@@ -42,7 +42,7 @@ bundled with the desktop app, so it's usually a couple of clicks, no separate do
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed from raw points. `includePoints: false` drops each series' raw points (stats/runs are still returned) for a wide window that would otherwise overflow. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` -> `resolve_panel_queries` -> `execute_query_window` per panel. `includePoints: false` drops raw points from every panel's series for a compact, stats-only survey. A panel mirroring another via Grafana's built-in "-- Dashboard --" datasource (see below) is reported with `mirrorsPanelIds`, never executed or errored. |
 | `export_panel_csv` | Writes one panel's data to a CSV file on disk, for archiving/reporting/presentations or further analysis elsewhere. In the Electron app, first tries to capture the panel's real on-screen data by driving a hidden browser to Grafana's own Inspect > Data view with "Apply panel transformations" checked (`transformationsApplied: true` in the result) — so a join/reduce/rename configured on the panel comes back exactly as shown, not just the raw query result. Otherwise (no transformations configured, or no Electron/`screenshotter`) falls back to a direct export: table panels as-is (every raw column); timeseries/graph panels pivoted wide (one UTC-timestamp column plus one column per series). |
-| `screenshot_panel` | *Electron app only.* Captures a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed, on-screen content isn't visible in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). The one tool whose output is **not** passed through the redaction layer. |
+| `screenshot_panel` | *Electron app only.* Captures a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed, on-screen content isn't visible in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). The one tool whose output is only **partly** covered by the redaction layer: its JSON payload is redacted like every other tool's, but the **image itself is not** — redaction only understands text, so anything legible on the panel (legend values, axis labels, annotation text) reaches the model as rendered. |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. When auto-discovering, checks one `scope` tier per call — `product` (default; the primary dashboard plus its Timebuddy knowledge panel's declared ops/SLI dashboards and dependencies, or just the primary dashboard alone with no knowledge published), `connection`, then `all-connections` — so a caller can report each tier's result and only pay for a wider, more expensive search when the narrower one didn't answer it. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
@@ -183,6 +183,15 @@ Connections live under Electron's per-OS `userData` directory, in two files:
   client for one of these connections — the decrypted form is never written back to
   disk.
 
+Both files are written atomically (temp file plus rename), so an interrupted write or a
+crash can't leave either one truncated.
+
+If a connection's row shows **"Can't decrypt secret"**, its stored credential is still
+there but this machine's keychain can no longer open it — most often after an OS
+reinstall, a keychain reset, or migrating to a new machine. Edit that connection and
+re-enter its token/password to fix it. Only that one connection is affected; the others
+keep working normally, and tool calls that don't use it are unaffected.
+
 ## Registering with Claude
 
 Once you've added your connections, the app's "Register with Claude" section shows a
@@ -278,7 +287,18 @@ screenshot `screenshot_panel` saved for it, or a live, authenticated view of the
 Grafana panel in an embedded `<webview>` — authenticated the same way `screenshotter.js`'s
 one-shot captures are (a connection's own bearer/basic header injected via `webRequest`),
 just against a long-lived, persistent session instead of a destroy-after-one-shot window
-(see `setupLiveViewSession` in `electron/src/main.js`).
+(see `setupLiveViewSession` in `electron/src/main.js`). A panel served from one of a
+connection's `matchHosts` aliases (a load-balancer or vanity hostname) authenticates here
+too — but only over that connection's own scheme, so an `https` connection's credentials are
+never transmitted to the alias over plaintext `http`.
+
+Each panel entry also has two buttons — **Export CSV** and **Capture screenshot** — so you
+can grab a panel's data or picture yourself, without asking Claude to. They run the exact
+same export/capture the `export_panel_csv` and `screenshot_panel` tools do (same panel, same
+time window and variables the entry was recorded with; the CSV is neutralized against
+spreadsheet formula injection just like the tool's, and both are redacted the same way), and
+save the file straight to your **Downloads** folder — with a **Show in folder** button to
+reveal it in Finder/Explorer/your file manager afterward.
 
 The log is in-memory only, for as long as that server keeps running — closing or
 restarting your Claude client (which restarts the server) clears it, and nothing is ever
@@ -294,14 +314,15 @@ omitted:
   `matchHosts`, for cases like a load balancer alias) — and returns `resolvedConnectionId`
   for you to pass into every subsequent call for that incident.
 - Single-target tools (`resolve_panel_queries`, `execute_query_window`, `validate_baseline`,
-  `get_product_context`, `list_datasources`, and the primary panel in `detect_correlated_anomalies`)
+  `get_product_context`, and the primary panel in `detect_correlated_anomalies`)
   fall back to the one configured connection if there's only one, otherwise error out listing the
   available connection ids — they never guess. `fetch_dashboard`, `render_dashboard`,
   `export_panel_csv`, and `screenshot_panel` additionally auto-detect the connection from a `url`'s
   host (before the same fallback), the same way `get_alert_context` does.
-- The two search tools (`find_related_dashboards`, and `detect_correlated_anomalies` when
-  auto-discovering candidates) fan out across every configured connection and merge
-  results, each tagged with its `connectionId`.
+- The fan-out tools (`find_related_dashboards`, `list_datasources`, and
+  `detect_correlated_anomalies` when auto-discovering candidates) query every configured
+  connection and merge results, each tagged with its `connectionId`. Passing `connection`
+  explicitly narrows any of them back to that one.
 
 The single-connection fallback only applies when nothing contradicts it. If you pass a URL
 whose host matches no configured connection, that's an error listing the available ids —
@@ -324,12 +345,69 @@ dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
 - `security/redact.ts` masks secret-shaped fields and any configured
   customer-identifier patterns before data is returned to the model.
 - `security/audit.ts` appends every tool invocation to a local JSONL audit log.
+- The optional webhook listener (`npm run webhook`) binds `127.0.0.1` and accepts only
+  `POST /`. See "Receiving alerts by webhook" below before exposing it more widely.
 - A per-user Bearer token or Basic-auth login (via the connection manager) no longer
   carries the "Viewer-role service account" defense-in-depth layer that a shared token
   gave you — whatever role that person actually has in Grafana applies. The read-only
   guarantee then rests entirely on the client allowlist above, which is why that allowlist
   has no generic escape hatch. A Viewer-scoped service-account token remains the more
   defense-in-depth choice for a shared/CI connection.
+
+## Local data and disk usage
+
+Everything this server writes lands under `DATA_DIR` (default `.data` for the CLI; the
+packaged app uses Electron's per-OS `userData` directory — a location most people never
+think to check for disk usage). Two paths grow with use and are bounded automatically by
+a best-effort sweep that runs **once when the MCP server starts** (it never blocks or
+fails startup):
+
+- **`screenshots/`** — one full-resolution PNG per `screenshot_panel` call, named so
+  nothing is ever overwritten. The highest-volume path, and of no value once the incident
+  it captured is over. Any PNG older than `SCREENSHOT_RETENTION_HOURS` (default `168`, i.e.
+  7 days) is deleted on startup. Set it to `0` to keep everything.
+- **`audit.jsonl`** — the record backing the read-only guarantee, so it is bounded by size
+  but **rotated, not truncated**. Once it passes `AUDIT_MAX_BYTES` (default ~5 MB) it is
+  rolled to `audit.jsonl.1`, keeping up to `AUDIT_KEEP_FILES` (default `5`) older
+  generations; history is preserved rather than deleted to reclaim disk. Set
+  `AUDIT_MAX_BYTES=0` to disable rotation.
+
+The metric-index cache (`metric-index.json`) is self-bounding — it's overwritten in place
+on each rebuild, not appended. The webhook alert store `alerts.jsonl` is deliberately
+**not** covered by this sweep; see the note under "Receiving alerts by webhook" below.
+
+## Receiving alerts by webhook
+
+Optional. Point a Grafana webhook contact point at this listener and `get_alert_context`
+with no arguments will pick up the most recent alert it received:
+
+```bash
+npm run webhook     # listens on 127.0.0.1:4318, appends to $DATA_DIR/alerts.jsonl
+```
+
+It accepts only `POST /` with a Grafana Alertmanager body, never contacts Grafana, and
+has no other routes.
+
+**It binds loopback by default, which assumes Grafana runs on the same host.** If yours
+doesn't, you need a wider bind — and you should set a shared secret at the same time:
+
+```bash
+WEBHOOK_BIND_ADDRESS=0.0.0.0
+WEBHOOK_TOKEN=<a long random string>
+```
+
+With `WEBHOOK_TOKEN` set, every request must carry `Authorization: Bearer <token>`;
+configure the same value as the Authorization header on the Grafana contact point.
+Binding wide *without* a token logs a startup warning, because anything posted to this
+port becomes the incident that `get_alert_context` hands to the investigating agent — an
+unauthenticated open port here is a way to feed that agent attacker-chosen content, not
+just a way to fill a disk.
+
+`alerts.jsonl` is deliberately left out of the startup data-dir sweep (see "Local data and
+disk usage"): `get_alert_context` reads it tail-first, so its size doesn't affect a lookup,
+and when the listener is exposed its growth is attacker-driven — better bounded by keeping
+the port loopback-and-authenticated, as above, than by a blanket age/size sweep that would
+race the listener's own appends.
 
 ## Known limitations (MVP)
 
@@ -362,6 +440,15 @@ dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
   joins across differently-named fields on each side and `group_left()`/`group_right()`
   many-to-one grouping are implemented in the underlying library but aren't exercised by
   this project's own tests yet.
+- **Every CSV `export_panel_csv` writes is neutralized against spreadsheet formula
+  injection.** A cell beginning with `=`, `+`, `-`, or `@` is executed as a formula when the
+  file is opened in Excel, LibreOffice, or Google Sheets, so every such cell is prefixed with
+  an apostrophe (it then displays instead of executing). The direct exports neutralize at the
+  cell level; the Grafana-captured path neutralizes by re-parsing and re-serializing Grafana's
+  output (a full RFC 4180 round-trip, since a quoted field can span lines). That makes the
+  captured file *semantically* identical to Grafana's Download CSV rather than byte-for-byte —
+  quoting is minimized, line endings normalized to CRLF, a leading BOM preserved — reported as
+  `formulaNeutralized: true` with a `formulaNeutralizationNote` explaining the re-serialization.
 
 ## Acknowledgments
 

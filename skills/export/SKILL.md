@@ -29,7 +29,9 @@ yourself; don't just describe what could be done.
    window than what's in the link - plus `panelId` (and `panelTitle`, if step 1 needed it to
    disambiguate a shared id). Check `transformationsApplied` in the result:
    - `true` means this is the Electron app's own real-browser capture - Grafana's actual on-screen
-     data (joins, reduces, renames, whatever the panel has configured), byte for byte. Trust it fully.
+     data (joins, reduces, renames, whatever the panel has configured). Trust it fully. It's
+     re-serialized (RFC 4180) so it can be neutralized for spreadsheets, so it's semantically
+     identical to Grafana's Download CSV, not byte-for-byte (see `formulaNeutralizationNote`).
    - `false` means it's this server's own direct export instead: table panels as-is, timeseries/graph
      panels as one UTC-timestamp column plus one column per series. This happens when the panel
      genuinely has no transformations configured (nothing lost - the direct export is exactly as
@@ -39,6 +41,11 @@ yourself; don't just describe what could be done.
    - If the result's `files` array has more than one entry, say so and mention why - the `note` field
      explains it (this only happens in the direct-export fallback: more than one query feeding the
      panel, with no merge applied).
+   - `formulaNeutralized` is always `true`: every file this tool writes has cells beginning with `=`,
+     `+`, `-`, or `@` prefixed with an apostrophe, so a spreadsheet displays them instead of executing
+     them on open. On the captured path (`transformationsApplied: true`) that's done by re-serializing
+     Grafana's output, so the file is not byte-for-byte identical to it; `formulaNeutralizationNote`
+     carries that caveat, worth passing along when you point someone at the file.
 
 3. **Also capture a screenshot** when: the person asked for one explicitly, or
    `transformationsApplied` is `false` for a table/matrix panel (i.e. the CSV is this server's raw

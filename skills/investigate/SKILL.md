@@ -95,9 +95,13 @@ skill exists to handle for them.
      `validate_baseline`/`detect_correlated_anomalies` all reject an ambiguous `panelId` outright
      rather than guessing, listing the candidate titles in the error — but that costs a whole extra
      round trip of retries you can just avoid up front by always passing the title when you have it.
-   - Pass `includePoints: false` when you're re-confirming something `stats`/`briefExcursions`/
-     `runs` already told you and don't need the raw series — same tradeoff as `render_dashboard`'s
-     option above, for the same reason.
+   - Pass `includePoints: false` **on `execute_query_window`** when you're re-confirming something
+     `stats`/`runs` already told you and don't need the raw series — same tradeoff as
+     `render_dashboard`'s option above, for the same reason. `validate_baseline` has no such
+     parameter, and passing it there is silently ignored rather than rejected (zod strips unknown
+     keys), so you'd believe you'd asked for a compact response and get the full one — which is the
+     response-overflow problem in step 3, not a fix for it. To keep a `validate_baseline` response
+     small, narrow the window instead.
    - `execute_query_window` with `dashboardUid`, `panelId`, `startsAtMs` (use `alertContext.startsAt`),
      `connection` — this gets you the incident window, a pre-window buffer, and baseline control
      windows in one call. Every series in the response already includes `stats`
@@ -146,6 +150,15 @@ skill exists to handle for them.
      "the first crossing" from it — a series that noisy is telling you the threshold or the
      window is wrong for it, so re-query a narrower window (or a coarser aggregation) and look
      again rather than summarizing what came back.
+   - **A run's `durationMs` is the span between its first and last crossing *sample*, not a
+     bucket-aware outage length — don't report it as the exact length.** A dip caught in a single
+     sample has `durationMs: 0` (start and end are the same timestamp); that is "one bucket wide,"
+     *not* instantaneous or a blip — a one-minute outage on a 60s-resolution series looks exactly
+     like this. Every run also understates the real duration by up to one sample interval, because
+     the final sample's own bucket isn't counted. Read `durationMs` together with `pointCount` and
+     the series' sample spacing (the gap between adjacent points): a `pointCount: 1` run lasted at
+     least one interval, and "N samples at ~S apart" is the honest way to describe how long a dip
+     persisted.
 
 4. **If there's no dashboard/panel link** (warnings said so, or there was nothing to paste in
    step 1), fall back to `find_related_dashboards` using `alertContext.labels` (or whatever labels
@@ -196,11 +209,24 @@ skill exists to handle for them.
    reading "0% for 5 hours" next to real traffic that only dipped 4% and was concentrated on one
    account is a materially different, more useful finding than the first panel alone.
 
-   A stat panel using Grafana's built-in "-- Dashboard --" datasource (re-displays another panel's
-   already-computed value; no backend to query) is detected automatically — it never shows up as a
-   404 or an `executionError`, it carries `mirrorsPanelIds` instead. Read the referenced panel(s)
-   directly rather than investigating the 404 yourself; there's nothing to fix, it's this Grafana
-   feature working as designed.
+   A stat panel using Grafana's built-in "-- Dashboard --" datasource re-displays another panel's
+   already-computed value client-side and has no backend to query, so it can never be executed. How
+   that reaches you depends on which tool you called, and it matters here because
+   `detect_correlated_anomalies` is one of the tools that *throws*:
+
+   - **Reported gracefully** by `render_dashboard` and `resolve_panel_queries`, as `mirrorsPanelIds`
+     on the panel — the rest of the dashboard still comes back normally.
+   - **Thrown as an error** by `execute_query_window`, `validate_baseline`, `export_panel_csv`, and
+     `detect_correlated_anomalies` *when the mirror panel is the one you named*. The message names
+     the mirrored panel id(s), so call that panel directly and move on.
+   - **Silently omitted** when `detect_correlated_anomalies` hits one among the candidates it
+     auto-discovered, rather than as the primary panel. Those run under `Promise.allSettled` and
+     rejected candidates are skipped, so the mirror panel is neither returned nor reported — it just
+     isn't in the results. Don't read a candidate's absence as evidence it was checked and cleared.
+
+   All three are expected, not failures to investigate. Don't go looking for a misconfiguration and
+   don't treat the throw as the dashboard being broken — it's this Grafana feature working as
+   designed.
 
    If a panel's queries fail with something like "404 Data source not found" for any *other*
    reason, check whether its datasource reference is a literal name rather than a UID (not a

@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Config } from '../config.js';
+import { writeJsonFileAtomic } from '../util/atomicWrite.js';
 
 export interface MetricIndexEntry {
   dashboardUid: string;
@@ -61,6 +62,14 @@ export interface AlertBackedPanelRef {
 
 export interface MetricIndex {
   builtAt: string;
+  /**
+   * How many dashboards /api/search enumerated across all pages. Compared
+   * against dashboardsScanned, the gap is dashboards that failed to fetch
+   * during the crawl. Optional so cache files written before this field
+   * (schemaVersion < 2 are rebuilt anyway; a same-version older file simply
+   * reads it as undefined) don't misparse.
+   */
+  dashboardsDiscovered?: number;
   dashboardsScanned: number;
   entriesByMetric: Record<string, MetricIndexEntry[]>;
   brokenDatasources: BrokenDatasourceRef[];
@@ -119,8 +128,10 @@ export async function loadIndex(config: Config, connectionId: string): Promise<M
 }
 
 export async function saveIndex(index: MetricIndex, config: Config, connectionId: string): Promise<void> {
-  await mkdir(indexDir(config), { recursive: true });
-  await writeFile(indexFilePath(config, connectionId), JSON.stringify(index, null, 2), 'utf8');
+  // Atomic: a plain writeFile here could be observed half-written by a
+  // concurrent loadIndex (which treats any parse failure as a cache miss and
+  // kicks off another multi-minute crawl). See writeJsonFileAtomic.
+  await writeJsonFileAtomic(indexFilePath(config, connectionId), index);
 }
 
 export function isStale(index: MetricIndex, ttlMs: number, nowMs = Date.now()): boolean {

@@ -64,16 +64,30 @@ try {
     'validate_baseline',
     'summarize_findings',
     'list_datasources',
+    'discover_influxdb_schema',
     'search_logs',
     'list_log_sources',
     'correlate_logs',
   ];
   const actualNames = tools.map((t) => t.name).sort();
+  // Compared as a set in *both* directions. The old one-way check
+  // (expected.filter(n => !actual.includes(n))) could only catch a tool
+  // disappearing from the list it already knew about — which is how
+  // discover_influxdb_schema stayed missing from it: a tool that exists but
+  // was never listed here was invisible to the assertion, and so was any tool
+  // added later. That's not the "full expected tool set" CONTRIBUTING.md
+  // claims this confirms, so the extra check is the point, not the one name.
   const missing = expectedNames.filter((n) => !actualNames.includes(n));
-  if (missing.length > 0) {
-    fail(`tools/list missing expected tools: ${missing.join(', ')} (got: ${actualNames.join(', ')})`);
+  const unexpected = actualNames.filter((n) => !expectedNames.includes(n));
+  if (missing.length > 0 || unexpected.length > 0) {
+    const parts = [];
+    if (missing.length > 0) parts.push(`missing: ${missing.join(', ')}`);
+    // Not a failure of the build so much as of this list: a newly registered
+    // tool belongs here (and in README.md's table) before this passes again.
+    if (unexpected.length > 0) parts.push(`unexpected (add them to expectedNames and README.md): ${unexpected.join(', ')}`);
+    fail(`tools/list did not match the expected tool set — ${parts.join('; ')} (got: ${actualNames.join(', ')})`);
   }
-  console.log(`OK: tools/list returned all ${expectedNames.length} expected tools`);
+  console.log(`OK: tools/list returned exactly the ${expectedNames.length} expected tools`);
 
   const result = await client.callTool({ name: 'fetch_dashboard', arguments: { dashboardUid: 'test-uid' } });
   const text = result.content?.[0]?.text ?? '';
