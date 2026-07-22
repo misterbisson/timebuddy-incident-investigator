@@ -9,6 +9,7 @@ import { clampRunList, clampSeriesPoints } from '../security/limits.js';
 import type { Config } from '../config.js';
 import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
+import { applyTagBreakout } from '../dashboards/tagBreakout.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -87,7 +88,13 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'array a wide/long-window call doesn\'t need, keeping the response from spilling to disk. ' +
         'If a series carries "runsTotal", its "runs" array was truncated to the first 1000 of that many crossings ' +
         '— the series crosses the threshold too often for a run list to be meaningful, so re-query a narrower ' +
-        'window rather than reading the truncated list as the complete set.',
+        'window rather than reading the truncated list as the complete set. ' +
+        'Pass "tagBreakout" to cut a panel that aggregates across hosts down to per-host series: ' +
+        '{ key: "host" } adds a GROUP BY that key (one series per value — surfaces which host is hot when a ' +
+        'cross-host aggregate hides it), and { key: "host", value: "web-07" } filters to that one value (to ' +
+        'confirm/isolate a host before feeding its name into a Graylog search_logs query). Get the real key/values ' +
+        'from discover_influxdb_schema first rather than inventing a hostname. Builder-mode InfluxQL panels only ' +
+        'for now — a raw-query or Prometheus target errors (it will not silently return the un-broken-out query).',
       inputSchema: {
         dashboardUid: z.string(),
         panelId: z.number(),
@@ -100,14 +107,21 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         threshold: z.number().optional().describe('When set, each returned series gets a "runs" array of contiguous points crossing this value (start/end/duration/min/max) - e.g. 1 for an uptime metric. Each run\'s "durationMs" spans its first crossing sample to its last, so a single-sample crossing is 0 ms and every run understates the outage by up to one sample interval; read it with "pointCount" and the sample spacing, not as an exact length'),
         thresholdDirection: z.enum(['below', 'above']).optional().default('below').describe('Whether "threshold" means find runs below or above that value'),
         includePoints: z.boolean().optional().default(true).describe('Set false to omit each series\' raw "points" array - stats/runs are still computed and returned either way'),
+        tagBreakout: z
+          .object({
+            key: z.string().trim().min(1).max(200).describe('Tag key to break out on, e.g. "host" / "instance" / "target_host"'),
+            value: z.string().max(500).optional().describe('When set, filter to this exact tag value (one host); when omitted, GROUP BY the key (one series per value)'),
+          })
+          .optional()
+          .describe('Re-run the panel broken out by a tag: { key } groups by it (one series per value), { key, value } filters to that value. Builder-mode InfluxQL only; a raw-query or Prometheus target hard-errors rather than silently returning the un-broken-out query. Pair with discover_influxdb_schema to get real tag keys/values.'),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Execute query window' },
     },
-    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, includePoints, connection }) => {
+    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, includePoints, tagBreakout, connection }) => {
       let resolvedConnectionId: string | undefined;
       try {
-        return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
+        return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs, tagBreakout }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
           resolvedConnectionId = connectionId;
           const windowSet = computeWindows({
@@ -151,7 +165,13 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             allWindows.map(async (window) => {
               const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, config.maxDataPoints, panelTitle);
               resolvedPanelTitle ??= panel.title;
-              const [result] = await executeQueryWindows(client, targets, [window], config);
+              // Break out by tag (per-host GROUP BY or single-host filter) after
+              // variable substitution, uniformly across every window so the
+              // baselines stay comparable. applyTagBreakout throws for targets
+              // it can't safely rewrite (raw-mode InfluxQL, PromQL) — surfaced
+              // as a hard error rather than a silently un-broken-out result.
+              const brokenOut = tagBreakout ? targets.map((t) => applyTagBreakout(t, tagBreakout)) : targets;
+              const [result] = await executeQueryWindows(client, brokenOut, [window], config);
               return annotateSeries(result!, threshold, thresholdDirection, includePoints, config);
             }),
           );

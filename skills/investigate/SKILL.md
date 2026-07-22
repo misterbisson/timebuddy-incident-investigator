@@ -263,6 +263,15 @@ skill exists to handle for them.
        is the actual host/IP list for that measurement — a set you can legitimately scope a log
        search to (still a real, data-derived set; it just doesn't by itself say *which* host was
        hot). Same last-resort framing as step 4: only when you'd otherwise have no identifier.
+     - To find *which* of those hosts was actually hot (not just the candidate set), re-run the
+       aggregating panel broken out per host: call `execute_query_window` with
+       `tagBreakout: { key: "<host tag>" }` (the same tag key you enumerated above). It adds a
+       `GROUP BY` that tag, so the panel returns one series per host instead of one aggregate —
+       read each series' `stats`/`runs` to see which host drove the anomaly, then use that host's
+       name as the `search_logs` identifier. To confirm a single suspected host in isolation, pass
+       `tagBreakout: { key, value: "web-07" }` to filter to just it. This works on builder-mode
+       InfluxQL panels only; a raw-query or Prometheus panel hard-errors (it won't silently return
+       the un-broken-out aggregate), so fall back to the candidate-set search above in that case.
    - Call `search_logs` with those identifiers built into Graylog query syntax (e.g.
      `host:web-03 AND level:ERROR`), the same `startsAtMs`/`endsAtMs` as the incident window, and
      the resolved log `connection`. Graylog's own field names for a given identifier aren't

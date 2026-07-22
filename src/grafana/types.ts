@@ -21,8 +21,12 @@ export interface PanelTarget {
   measurement?: string;
   policy?: string;
   select?: unknown[][];
-  groupBy?: unknown[][];
-  tags?: Array<{ key: string; operator: string; value: string }>;
+  // Grafana's InfluxQL model stores groupBy as a flat array of parts
+  // ({type:'time'|'tag'|'fill', params}); select is the nested one. Typed
+  // loosely as unknown[] because a stray nested shape has been seen in the
+  // wild and tagBreakout tolerates both — see dashboards/tagBreakout.ts.
+  groupBy?: unknown[];
+  tags?: Array<{ key: string; operator: string; value: string; condition?: string }>;
   [key: string]: unknown;
 }
 

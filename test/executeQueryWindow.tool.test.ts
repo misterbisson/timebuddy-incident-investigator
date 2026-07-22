@@ -53,6 +53,105 @@ function dashboardWithAllVariable(): DashboardGetResponse {
   };
 }
 
+function dashboardWithBuilderPanel(): DashboardGetResponse {
+  return {
+    dashboard: {
+      uid: 'dash1',
+      title: 'CPU load',
+      version: 1,
+      panels: [
+        {
+          id: 1,
+          title: 'CPU load (all hosts)',
+          targets: [
+            {
+              refId: 'A',
+              datasource: { uid: 'influx1' },
+              measurement: 'cpu_load',
+              rawQuery: false,
+              select: [[{ type: 'field', params: ['value'] }, { type: 'mean', params: [] }]],
+              groupBy: [{ type: 'time', params: ['$__interval'] }, { type: 'fill', params: ['null'] }],
+            },
+          ],
+        },
+      ],
+    },
+    meta: {},
+  };
+}
+
+/** The transformed target Grafana would receive for the incident window (first non-variable queryDs call). */
+function firstQueryTarget(queryDs: ReturnType<typeof vi.fn>): DsQueryRequest['queries'][number] {
+  const call = queryDs.mock.calls.find(([req]: [DsQueryRequest]) => req.queries[0]!.refId !== 'variable');
+  return call![0].queries[0];
+}
+
+describe('execute_query_window tagBreakout', () => {
+  it('adds a GROUP BY tag part (before fill) to a builder-mode target when only key is given', async () => {
+    const { client, queryDs } = fakeGrafanaClient({ dashboard: dashboardWithBuilderPanel() });
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    await call('execute_query_window', {
+      dashboardUid: 'dash1',
+      panelId: 1,
+      startsAtMs: Date.parse('2026-07-07T15:38:50Z'),
+      endsAtMs: Date.parse('2026-07-07T16:38:50Z'),
+      includeControls: false,
+      tagBreakout: { key: 'host' },
+      connection: 'test',
+    });
+
+    expect(firstQueryTarget(queryDs).groupBy).toEqual([
+      { type: 'time', params: ['$__interval'] },
+      { type: 'tag', params: ['host'] },
+      { type: 'fill', params: ['null'] },
+    ]);
+  });
+
+  it('adds a "key = value" tag filter to a builder-mode target when key and value are given', async () => {
+    const { client, queryDs } = fakeGrafanaClient({ dashboard: dashboardWithBuilderPanel() });
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    await call('execute_query_window', {
+      dashboardUid: 'dash1',
+      panelId: 1,
+      startsAtMs: Date.parse('2026-07-07T15:38:50Z'),
+      endsAtMs: Date.parse('2026-07-07T16:38:50Z'),
+      includeControls: false,
+      tagBreakout: { key: 'host', value: 'web-07' },
+      connection: 'test',
+    });
+
+    const sent = firstQueryTarget(queryDs);
+    expect(sent.tags).toEqual([{ key: 'host', operator: '=', value: 'web-07' }]);
+    // Filtering must not also add a GROUP BY — it's one or the other.
+    expect(sent.groupBy).toEqual([{ type: 'time', params: ['$__interval'] }, { type: 'fill', params: ['null'] }]);
+  });
+
+  it('hard-errors (does not silently run the aggregated query) when the target is raw-mode InfluxQL', async () => {
+    const { client, queryDs } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1'] });
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('execute_query_window', {
+      dashboardUid: 'dash1',
+      panelId: 1,
+      startsAtMs: Date.parse('2026-07-07T15:38:50Z'),
+      endsAtMs: Date.parse('2026-07-07T16:38:50Z'),
+      tagBreakout: { key: 'target_host' },
+      connection: 'test',
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('rawQuery: true');
+    // No panel query should have been executed against Grafana (only the live
+    // variable resolution, refId "variable", may have run).
+    expect(queryDs.mock.calls.every(([req]: [DsQueryRequest]) => req.queries[0]!.refId === 'variable')).toBe(true);
+  });
+});
+
 describe('execute_query_window tool', () => {
   it('live-resolves the "$__all" variable once for the whole call, not once per window', async () => {
     const { client, queryDs } = fakeGrafanaClient({ dashboard: dashboardWithAllVariable(), liveValues: ['h1', 'h2'] });
