@@ -4,6 +4,7 @@ import type { Config, LogConnection } from '../src/config.js';
 import { GraylogApiError } from '../src/graylog/client.js';
 import type { GraylogClient } from '../src/graylog/client.js';
 import { fakeGraylogClient, fakeLogRegistry, fakeServer } from './toolTestHelpers.js';
+import { createActivityLog } from '../src/activity/activityLog.js';
 
 const connections: LogConnection[] = [
   { id: 'log1', name: 'log1', sourceType: 'graylog', url: 'https://graylog.example.com', authType: 'token', token: 'x' },
@@ -151,6 +152,57 @@ describe('search_logs tool', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/non-positive duration/);
     expect(searchAbsolute).not.toHaveBeenCalled();
+  });
+
+  it('records a log-kind activity entry with the resolved connection and default stream name (#116)', async () => {
+    const streamed: LogConnection[] = [
+      { id: 'log1', name: 'Prod Graylog', sourceType: 'graylog', url: 'https://graylog.example.com', authType: 'token', token: 'x', streamId: 'stream-default', streamName: 'All prod' },
+    ];
+    const { client } = fakeGraylogClient({ messages: [{ message: { message: 'boom' } }] });
+    const activityLog = createActivityLog();
+    const { server, call } = fakeServer();
+    registerSearchLogs(server, {
+      logRegistry: fakeLogRegistry(streamed, client),
+      config: config({ logConnections: streamed }),
+      activityLog,
+    } as never);
+
+    await call('search_logs', { query: 'host:web-03', startsAtMs: 1000, endsAtMs: 2000 });
+
+    const [entry] = activityLog.list();
+    expect(entry).toMatchObject({
+      kind: 'log',
+      toolName: 'search_logs',
+      connectionId: 'log1',
+      connectionName: 'Prod Graylog',
+      query: 'host:web-03',
+      // No explicit streamId was passed, so the connection's own default stream
+      // (id + name) is recorded — the search actually ran against it.
+      streamId: 'stream-default',
+      streamName: 'All prod',
+      resultCount: 1,
+    });
+    expect(entry!.url).toContain('https://graylog.example.com');
+  });
+
+  it('does not attach a stream name when an explicit streamId differs from the connection default (#116)', async () => {
+    const streamed: LogConnection[] = [
+      { id: 'log1', name: 'Prod Graylog', sourceType: 'graylog', url: 'https://graylog.example.com', authType: 'token', token: 'x', streamId: 'stream-default', streamName: 'All prod' },
+    ];
+    const { client } = fakeGraylogClient({ messages: [] });
+    const activityLog = createActivityLog();
+    const { server, call } = fakeServer();
+    registerSearchLogs(server, {
+      logRegistry: fakeLogRegistry(streamed, client),
+      config: config({ logConnections: streamed }),
+      activityLog,
+    } as never);
+
+    await call('search_logs', { query: '*', startsAtMs: 0, endsAtMs: 1, streamId: 'other-stream' });
+
+    const [entry] = activityLog.list();
+    expect(entry).toMatchObject({ kind: 'log', streamId: 'other-stream' });
+    expect((entry as { streamName?: string }).streamName).toBeUndefined();
   });
 
   it('returns an error result (not a thrown exception) when no log connection is configured', async () => {

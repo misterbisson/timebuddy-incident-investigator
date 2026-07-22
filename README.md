@@ -217,18 +217,23 @@ Either way, skills appear under the `/timebuddy:` namespace — `explore`, `inve
 ## Activity window
 
 Once Claude has started the app as your MCP server, a companion **Timebuddy Activity**
-window appears the moment Claude pulls data from its first panel — a live, clickable log of
-what's being inspected. Each entry is one panel Claude actually queried or screenshotted.
-Clicking it shows either the saved screenshot or a live, authenticated view of the real
+window appears the moment Claude pulls data from its first panel or runs its first log
+search — a live, clickable log of what's being inspected. Each entry is one Grafana panel
+Claude actually queried or screenshotted, or one Graylog search (`search_logs`/
+`correlate_logs`) it ran, tagged **panel** or **logs** so the two read distinctly. Clicking a
+**panel** entry shows either the saved screenshot or a live, authenticated view of the real
 Grafana panel embedded in the window. A panel served from a connection's `matchHosts` alias
 authenticates here too, but only over that connection's own scheme — an `https` connection's
 credentials are never sent to the alias over plaintext `http`.
 
-Each entry also has **Export CSV** and **Capture screenshot** buttons — the same
+Each **panel** entry also has **Export CSV** and **Capture screenshot** buttons — the same
 export/capture the `export_panel_csv` and `screenshot_panel` tools do (same window,
 variables, formula-injection neutralization, and redaction), saved straight to your
-**Downloads** folder. The log is in-memory only and clears when the server restarts; nothing
-is written to disk.
+**Downloads** folder. A **logs** entry instead shows a short text summary of the search —
+query, stream, result count, and tool — plus an **Open in Graylog** button that opens the
+recorded search in your browser; it doesn't embed the Graylog UI (a log search isn't a single
+visual), and the panel-only export/screenshot buttons stay hidden. The log is in-memory only
+and clears when the server restarts; nothing is written to disk.
 
 ## Multiple connections
 

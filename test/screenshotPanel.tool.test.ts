@@ -8,7 +8,7 @@ import type { Config, GrafanaConnection } from '../src/config.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { CapturePanelRequest, Screenshotter } from '../src/screenshot/types.js';
 import type { DashboardGetResponse } from '../src/grafana/types.js';
-import type { ActivityEntry, ActivityLog } from '../src/activity/activityLog.js';
+import type { ActivityEntryInput, ActivityLog } from '../src/activity/activityLog.js';
 import { fakeRegistry, fakeServer } from './toolTestHelpers.js';
 
 const connections: GrafanaConnection[] = [
@@ -137,8 +137,8 @@ describe('screenshot_panel dimension clamping', () => {
 });
 
 describe('screenshot_panel result, persistence, and errors', () => {
-  function recordingActivityLog(): { activityLog: ActivityLog; recorded: Omit<ActivityEntry, 'id' | 'timestamp'>[] } {
-    const recorded: Omit<ActivityEntry, 'id' | 'timestamp'>[] = [];
+  function recordingActivityLog(): { activityLog: ActivityLog; recorded: ActivityEntryInput[] } {
+    const recorded: ActivityEntryInput[] = [];
     return { activityLog: { record: (e) => recorded.push(e) }, recorded };
   }
 

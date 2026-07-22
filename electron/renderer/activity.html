@@ -12,7 +12,7 @@
       <aside class="activity-sidebar">
         <header class="activity-sidebar-header">
           <h1>Activity</h1>
-          <p class="subtitle">Dashboards/panels inspected this session</p>
+          <p class="subtitle">Dashboards, panels, and logs inspected this session</p>
         </header>
         <ul id="activityList" class="activity-list">
           <li class="empty-row">Nothing inspected yet.</li>
@@ -46,6 +46,7 @@
           <div class="activity-detail-view">
             <img id="detailScreenshot" class="hidden" alt="Panel screenshot" />
             <webview id="detailWebview" class="hidden" partition="persist:activity-live-view"></webview>
+            <dl id="detailLogSummary" class="log-summary hidden"></dl>
           </div>
         </div>
       </main>
