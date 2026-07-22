@@ -34,13 +34,13 @@ src/
   security/       the read-only enforcement layer: time-range/point limits, redaction, audit log
   knowledge/      looks up an adopter-published "Timebuddy knowledge" dashboard/panel for a product, with caching
   activity/       in-memory log of panels actually queried/screenshotted, surfaced by the Electron app's Activity window
-  tools/          the 14 MCP tools (13 always registered, screenshot_panel only in the Electron app), each a thin wrapper over the modules above
+  tools/          the 17 MCP tools (16 always registered, screenshot_panel only in the Electron app), each a thin wrapper over the modules above
 electron/         the distributed app: a GUI for managing Grafana connections that is *also* the MCP
                   server (launched with --mcp-server instead of opening a window) — see the root
                   README.md for using it, electron/CONTRIBUTING.md for developing it.
 ```
 
-See the root [`README.md`](README.md#mcp-tools) for what each of the 14 MCP tools does, and
+See [`docs/TOOLS.md`](docs/TOOLS.md) for what each of the 17 MCP tools does, and
 [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md) for a few Grafana edge cases (product knowledge
 dashboards, live `$__all` variable resolution, the `-- Dashboard --` pseudo-datasource)
 that are easy to miss from a partial read of the code.
