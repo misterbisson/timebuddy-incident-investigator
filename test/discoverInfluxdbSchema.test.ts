@@ -3,6 +3,7 @@ import {
   buildShowFieldKeysQuery,
   buildShowMeasurementsQuery,
   buildShowTagKeysQuery,
+  buildShowTagValuesQuery,
   escapeInfluxIdentifier,
   escapeInfluxRegexLiteral,
   parseNameListFrames,
@@ -46,6 +47,16 @@ describe('buildShowFieldKeysQuery / buildShowTagKeysQuery', () => {
   it('quotes the measurement as an InfluxQL identifier', () => {
     expect(buildShowFieldKeysQuery('solidfire_cluster_active_faults')).toBe('SHOW FIELD KEYS FROM "solidfire_cluster_active_faults"');
     expect(buildShowTagKeysQuery('solidfire_cluster_active_faults')).toBe('SHOW TAG KEYS FROM "solidfire_cluster_active_faults"');
+  });
+});
+
+describe('buildShowTagValuesQuery', () => {
+  it('quotes both the measurement and the tag key as InfluxQL identifiers', () => {
+    expect(buildShowTagValuesQuery('cpu_load', 'host')).toBe('SHOW TAG VALUES FROM "cpu_load" WITH KEY = "host"');
+  });
+
+  it('escapes a tag key that tries to break out of the WITH KEY identifier', () => {
+    expect(buildShowTagValuesQuery('cpu_load', 'host" ; DROP')).toBe('SHOW TAG VALUES FROM "cpu_load" WITH KEY = "host\\" ; DROP"');
   });
 });
 

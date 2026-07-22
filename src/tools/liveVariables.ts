@@ -56,7 +56,7 @@ async function resolveVariableDatasource(
 }
 
 /** Extracts distinct string values from a "SHOW TAG VALUES"-shaped response — Grafana's standard key/value column pair, not tied to any particular measurement/schema. */
-function extractTagValues(response: DsQueryResponse): string[] {
+export function extractTagValues(response: DsQueryResponse): string[] {
   const values = new Set<string>();
   for (const result of Object.values(response.results)) {
     if (result.error) continue;
