@@ -335,6 +335,54 @@ cases: the product-knowledge-dashboard convention for publishing institutional k
 (what a panel means, known false positives, runbook links), live resolution of "all"
 dashboard variables, and Grafana's "-- Dashboard --" pseudo-datasource panels.
 
+## Searching logs during an investigation
+
+If you've added a Graylog connection (see ["Configuring connections"](#configuring-connections)
+above), `/timebuddy:investigate` pulls corroborating log evidence automatically — it pairs
+the right log source to the dashboard by shared `tags`, builds a query from the identifiers
+already in hand (hostname, IP, product string, request/trace id), and folds what it finds
+into the verdict. You don't have to call anything by hand.
+
+When you do want to drive the log tools directly (Claude Desktop, or an ad-hoc question),
+here's the shape:
+
+- **`search_logs`** takes a Graylog query and a time window. Use the identifiers a metric
+  investigation surfaced, not a bare wildcard — a targeted query is what makes the result
+  usable as evidence:
+
+  ```
+  search_logs(query: "source:api-gw-* AND level:ERROR", startsAtMs: <incident start>)
+  ```
+
+  It returns each matching message plus a clickable Graylog search URL, and defaults the
+  window end to now. A search that hits the per-stream line cap (`MAX_LOG_LINES`, default
+  500) is flagged so you know you're looking at a partial view.
+
+- **`correlate_logs`** joins two or more streams on a shared field, using a PromQL-inspired
+  query. The classic use is tracing one request across services by a shared id:
+
+  ```
+  correlate_logs(
+    query: "graylog(service:frontend) and on(request_id) graylog(service:backend)",
+    startsAtMs: <incident start>
+  )
+  ```
+
+  `and` is an inner join (only matched pairs), `or` a union, and `unless` a left-anti-join
+  ("which frontend requests never reached the backend"). The `[5m]` window the query
+  grammar allows has no effect — every stream uses the one `startsAtMs`/`endsAtMs` window
+  you pass. Note the safety behavior: an `unless` whose subtracted side got truncated at the
+  line cap **errors out** rather than return a possibly-inverted answer; narrow the window or
+  raise the cap and retry.
+
+- **`list_log_sources`** lists your Graylog connections (and, given a `connection`, its
+  streams) — the log-side counterpart to `list_datasources`. Cross-reference the two tools'
+  `tags` to see which log source covers the same environment as a given Grafana connection.
+
+Only Graylog's legacy (2.x–5.x) search API is supported — see
+["Known limitations"](#known-limitations-mvp) below. Contributors: the design rationale for
+this subsystem is in [`docs/LOGS.md`](docs/LOGS.md).
+
 ## Security model
 
 - The Grafana client (`src/grafana/client.ts`) is a fixed allowlist of read-only endpoints.
