@@ -69,6 +69,14 @@ node dist/index.js
 }
 ```
 
+A single Graylog connection can be added the same way, for iterating on the log tools
+(`search_logs`/`correlate_logs`/`list_log_sources`) without the Electron app: set
+`GRAYLOG_URL` plus either `GRAYLOG_TOKEN` (an API token — sent as HTTP Basic with the
+token as the username, per Graylog's convention) or `GRAYLOG_USERNAME`/`GRAYLOG_PASSWORD`,
+and optionally `GRAYLOG_STREAM_ID`/`GRAYLOG_TAGS`. See `.env.example` for the full list.
+Like the Grafana vars, these are the dev/CI convenience path only — the distributed app
+sources log connections from its own encrypted store instead.
+
 ## Webhook listener
 
 A separate, optional process (`src/webhook/listener.ts`) — not part of the MCP server

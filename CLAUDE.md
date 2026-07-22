@@ -136,7 +136,10 @@ convention), not a real `Authorization: Bearer` header. `src/logs/adapter.ts`'s
 library's own Loki/Graylog adapters, which are hardcoded to live-tail from `now` — it
 always re-runs `GraylogClient.searchAbsolute()` against a fixed historical window
 regardless of the engine's own relative-time derivation, which is what makes a
-live-tail-oriented join engine work for a historical incident window at all.
+live-tail-oriented join engine work for a historical incident window at all. The
+contributor-facing design doc for this whole subsystem (the two-connection-kind
+generalization, the historical adapter, the `unless`-truncation refusal) is
+`docs/LOGS.md` — the log counterpart to `docs/BEHAVIOR.md`; keep it current the same way.
 `src/logs/correlate.ts`'s `correlateLogs()` builds one `CorrelationEngine` + adapter per
 call (stateless across tool calls) and always tears both down in `finally`. Three tools
 (`search_logs`, `list_log_sources`, `correlate_logs`) follow the same
