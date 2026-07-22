@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.3.0...v0.4.0) (2026-07-22)
+
+
+### Features
+
+* break out a panel by tag value (per-host GROUP BY / single-host filter) ([#130](https://github.com/misterbisson/timebuddy-incident-investigator/issues/130)) ([cf656b9](https://github.com/misterbisson/timebuddy-incident-investigator/commit/cf656b9c6c48ee41987cb4c7138a23801cb816f6))
+* discover_label_values — datasource-agnostic label/tag value enumeration (Prometheus/Loki) ([#132](https://github.com/misterbisson/timebuddy-incident-investigator/issues/132)) ([f45bc25](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f45bc256d6224fb7581e08ba6826db39e74fc8b3))
+* enumerate InfluxDB tag values (SHOW TAG VALUES) for host/IP log-search seeds ([#128](https://github.com/misterbisson/timebuddy-incident-investigator/issues/128)) ([df13ce8](https://github.com/misterbisson/timebuddy-incident-investigator/commit/df13ce86d93af17b8c9a7dd1de15b206f610b4ec))
+
 ## [0.3.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.2.0...v0.3.0) (2026-07-22)
 
 
