@@ -41,7 +41,12 @@ function assertBreakoutSupported(t: PanelTarget): void {
         'It currently applies only to builder-mode InfluxQL targets.',
     );
   }
-  if (t.rawQuery === true) {
+  // Any truthy rawQuery means raw mode — a genuine builder target always has
+  // rawQuery false/absent. Guarding on `=== true` would let a non-standard
+  // dashboard that stored rawQuery as a truthy non-boolean (e.g. "true") with
+  // a populated `measurement` fall through and get mutated while Grafana ran
+  // the original raw query — the silent un-broken-out result we refuse to emit.
+  if (t.rawQuery) {
     throw new TagBreakoutError(
       `refId ${t.refId}: this InfluxQL target runs a raw query string (rawQuery: true), which tagBreakout won't ` +
         'rewrite — editing live InfluxQL text can\'t be done safely. Only builder-mode InfluxQL targets ' +

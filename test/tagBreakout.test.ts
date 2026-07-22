@@ -122,6 +122,14 @@ describe('applyTagBreakout — unsupported targets hard-error (never silent no-o
     expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(/rawQuery: true/);
   });
 
+  it('throws for a target whose rawQuery is a truthy non-boolean (e.g. "true") even with a measurement', () => {
+    // A non-standard dashboard JSON could store rawQuery as a string; guarding
+    // on `=== true` would silently mutate fields Grafana ignores while it runs
+    // the raw query. Any truthy rawQuery must be treated as raw mode.
+    const t = target({ measurement: 'cpu_load', query: 'SELECT mean("v")', rawQuery: 'true' as unknown as boolean });
+    expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(TagBreakoutError);
+  });
+
   it('throws for a Prometheus target (has expr), pointing at issue #127', () => {
     const t = target({ expr: 'sum(rate(http_requests_total[5m]))' });
     expect(() => applyTagBreakout(t, { key: 'instance' })).toThrow(/#127/);
