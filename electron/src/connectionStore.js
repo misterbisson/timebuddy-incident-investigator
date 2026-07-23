@@ -8,6 +8,8 @@ const {
   buildEngineConnections,
   buildLogEngineConnections,
   describeSecretFailure,
+  validateImportManifest,
+  planImport,
   SecretDecryptError,
   SecretFormatError,
 } = require('./connectionStoreCore.js');
@@ -251,6 +253,79 @@ function upsertConnection(draft) {
   return { ...meta, hasSecret: Boolean(secretsFile.secrets[id]) };
 }
 
+/**
+ * Builds one upsertConnection draft from a normalized import entry. On update
+ * (existingId set), `prior` is the existing metadata so fields the manifest
+ * doesn't carry aren't wiped: upsertConnection rewrites the whole meta from the
+ * draft, so a re-import that omits `username` would blank a stored one unless we
+ * carry it forward here (the stored *password* is already preserved by the
+ * blank-secret path in upsertConnection).
+ *
+ * The shared credential is applied only to basic-auth entries — the common
+ * "one login across every instance" case. `username` non-secret metadata falls
+ * back entry -> shared -> prior; `password` comes only from the shared field, so
+ * leaving it blank keeps any existing secret and otherwise leaves the connection
+ * secret-less for the user to fill in.
+ */
+function draftFromImportEntry(entry, existingId, shared, prior) {
+  const draft = {
+    id: existingId,
+    kind: entry.kind,
+    name: entry.name,
+    url: entry.url,
+    authType: entry.authType,
+    tags: entry.tags,
+    tlsVerify: entry.tlsVerify,
+  };
+  if (entry.kind === 'graylog') {
+    draft.streamId = entry.streamId;
+    draft.streamName = entry.streamName;
+  } else {
+    draft.matchHosts = entry.matchHosts;
+  }
+  if (entry.authType === 'basic') {
+    draft.username = entry.username ?? shared.username ?? prior?.username ?? undefined;
+    draft.password = shared.password ?? undefined;
+  }
+  return draft;
+}
+
+/**
+ * Bulk-imports connections from a metadata-only manifest (see
+ * validateImportManifest for the accepted shape and the no-secrets rule).
+ *
+ * Idempotent on url+kind: an entry matching an existing connection updates it in
+ * place; anything else is created. Upsert-only — a connection absent from the
+ * manifest is never touched, let alone deleted. Each entry goes through the same
+ * upsertConnection path as the GUI, so it inherits the atomic writes, the
+ * secrets-first ordering, and the blank-secret-keeps-existing behavior for free.
+ *
+ * `sharedCredential` ({ username?, password? }) is optional and applies to
+ * basic-auth entries only. Token/bearer entries, and basic entries with no
+ * shared password and no prior secret, land without a credential and are
+ * returned in `needSecret` for the user to finish in the GUI. `configured`
+ * counts connections that have a stored secret afterward (freshly set or
+ * preserved from a prior import/edit).
+ */
+function importConnections(manifest, sharedCredential = {}) {
+  const { connections: entries } = validateImportManifest(manifest);
+  const { connections: existing } = readConnectionsFile();
+  const { plan } = planImport(entries, existing);
+  const existingById = new Map(existing.map((c) => [c.id, c]));
+
+  const summary = { total: plan.length, created: 0, updated: 0, configured: 0, needSecret: [] };
+  for (const item of plan) {
+    const prior = item.existingId ? existingById.get(item.existingId) : undefined;
+    const draft = draftFromImportEntry(item.entry, item.existingId, sharedCredential, prior);
+    const saved = upsertConnection(draft);
+    if (item.action === 'update') summary.updated += 1;
+    else summary.created += 1;
+    if (saved.hasSecret) summary.configured += 1;
+    else summary.needSecret.push({ name: item.entry.name, kind: item.entry.kind, authType: item.entry.authType });
+  }
+  return summary;
+}
+
 function deleteConnection(id) {
   const connectionsFile = readConnectionsFile();
   const secretsFile = readSecretsFile();
@@ -264,6 +339,7 @@ function deleteConnection(id) {
 module.exports = {
   listConnectionsForDisplay,
   upsertConnection,
+  importConnections,
   deleteConnection,
   getConnectionsForEngine,
   getLogConnectionsForEngine,

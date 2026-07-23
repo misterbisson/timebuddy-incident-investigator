@@ -150,6 +150,44 @@ Adding, editing, or removing a connection takes effect on the very next tool cal
 restart. (Restarting the GUI window does nothing here; it's a separate process from the one
 your Claude client is talking to.)
 
+### Importing many connections at once
+
+Typing in a dozen-plus endpoints by hand gets old fast. If you have several Grafana and/or
+Graylog targets — say one per region and tier — put them in a JSON manifest and load them in
+one step with **Import from file…** on the connections screen.
+
+The manifest holds **only non-secret metadata** — name, URL, kind, auth type, tags, and the
+kind-specific extras (`matchHosts` for Grafana, `streamId`/`streamName` for Graylog). It never
+contains tokens or passwords, so it's safe to keep in a shared repo. See
+[`connections.example.json`](connections.example.json) for a complete example; the shape is:
+
+```json
+{
+  "version": 1,
+  "connections": [
+    { "kind": "grafana", "name": "prod-us-east-1", "url": "https://metrics.us-east-1.example.com",
+      "authType": "basic", "tags": ["prd", "us-east-1"] },
+    { "kind": "graylog", "name": "prod-us-logs", "url": "https://logs.us-east-1.example.com",
+      "authType": "basic", "tags": ["prd", "us-east-1"], "streamName": "spc-elb" }
+  ]
+}
+```
+
+- **Credentials come after import.** Because the file has no secrets, imported connections
+  start without one and show **Missing secret** in the list until you add it. If all your
+  connections share a single basic-auth login (a common setup), enter that username and
+  password once in the import dialog and it's applied to every imported *basic-auth*
+  connection; leave it blank to fill each in later by editing the row. Bearer/API-token
+  connections always get their token entered per-connection afterward, since those are
+  normally unique to each instance.
+- **Re-importing is safe.** Connections are matched on **URL + kind**: an entry whose URL and
+  kind already exist updates that connection's metadata in place (keeping its stored
+  credential), and everything else is added. Nothing is ever deleted — a connection missing
+  from the file is left alone. So you can keep the manifest in version control and re-import it
+  to pick up changes without clobbering credentials or creating duplicates. (Changing a
+  connection's URL in the file creates a new connection rather than renaming the old one, since
+  the URL *is* the key — delete the stale one afterward.)
+
 ### How connections are stored
 
 Connections live under Electron's per-OS `userData` directory, in two files written

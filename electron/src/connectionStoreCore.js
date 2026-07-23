@@ -19,6 +19,19 @@ class SecretDecryptError extends Error {}
 class SecretFormatError extends Error {}
 
 /**
+ * A user-supplied import manifest is structurally wrong. Carries *every*
+ * problem found rather than just the first, so someone fixing a 20-connection
+ * file sees the whole list in one pass instead of one round trip per mistake.
+ */
+class ImportValidationError extends Error {
+  constructor(problems) {
+    super(`connection manifest is not valid:\n- ${problems.join('\n- ')}`);
+    this.name = 'ImportValidationError';
+    this.problems = problems;
+  }
+}
+
+/**
  * Turns a secret failure into a message safe to log and to show in the GUI.
  *
  * Never returns the underlying error's own message, and that restriction is
@@ -250,14 +263,205 @@ function buildLogEngineConnections(connections, secrets, decrypt) {
   return { connections: built, failures };
 }
 
+/**
+ * Normalizes a URL to the form the idempotency key compares on. It must match
+ * how upsertConnection actually stores the URL (`.replace(/\/+$/, '')`, plus a
+ * trim, since the renderer trims but a hand-authored manifest might not), or a
+ * `…/` in the file and a `…` on disk would read as two different connections
+ * and the import would duplicate instead of update.
+ *
+ * Deliberately does *not* lowercase or otherwise canonicalize the host: it
+ * compares against the exact stored string, so what "already exists" stays
+ * predictable rather than depending on rules a user can't see.
+ */
+function normalizeUrlForKey(url) {
+  return String(url).trim().replace(/\/+$/, '');
+}
+
+/** kind -> the authTypes valid for it. Grafana is bearer/basic; Graylog's
+ *  API-token auth is 'token' (HTTP Basic under the hood — see buildLogEngineConnections). */
+const IMPORT_AUTH_TYPES = {
+  grafana: ['bearer', 'basic'],
+  graylog: ['token', 'basic'],
+};
+
+function importKey(kind, url) {
+  return `${kind}\n${normalizeUrlForKey(url)}`;
+}
+
+function validateOptionalStringArray(value, label, problems) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+    problems.push(`${label}: must be an array of strings`);
+    return undefined;
+  }
+  const cleaned = value.map((v) => v.trim()).filter(Boolean);
+  return cleaned.length ? cleaned : undefined;
+}
+
+/**
+ * Validates and normalizes a metadata-only import manifest into a list of
+ * connection entries ready for planImport(). Accepts either `{ version: 1,
+ * connections: [...] }` or a bare `[...]` array.
+ *
+ * Two rules are load-bearing rather than cosmetic:
+ *  - **No secrets in the file.** A `token`/`password` on any entry is a hard
+ *    error, not silently ignored — the whole point of the manifest is that it's
+ *    safe to keep in a repo, and credentials are entered after import.
+ *  - **No duplicate url+kind within the file.** That pair is the idempotency
+ *    key; two entries sharing it would race to update the same connection, so
+ *    it's rejected up front rather than resolved last-wins.
+ *
+ * Throws ImportValidationError with the full problem list on any failure.
+ */
+function validateImportManifest(raw) {
+  const rawList = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object'
+      ? raw.connections
+      : undefined;
+
+  if (!Array.isArray(raw) && raw && typeof raw === 'object' && raw.version !== undefined && raw.version !== 1) {
+    throw new ImportValidationError([
+      `unsupported manifest version ${JSON.stringify(raw.version)}; this app understands version 1`,
+    ]);
+  }
+  if (!Array.isArray(rawList)) {
+    throw new ImportValidationError([
+      'expected a JSON object with a "connections" array, or a bare array of connections',
+    ]);
+  }
+
+  const problems = [];
+  const connections = [];
+  const seenKeys = new Map(); // key -> the 1-based position of the entry that first claimed it
+
+  rawList.forEach((entry, i) => {
+    const label =
+      entry && typeof entry === 'object' && typeof entry.name === 'string' && entry.name.trim()
+        ? `"${entry.name.trim()}"`
+        : `#${i + 1}`;
+
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      problems.push(`connection ${label}: must be an object`);
+      return;
+    }
+
+    for (const secretField of ['token', 'password']) {
+      if (entry[secretField] !== undefined) {
+        problems.push(
+          `connection ${label}: remove "${secretField}" — the manifest must not contain secrets; ` +
+            'credentials are entered after import',
+        );
+      }
+    }
+
+    const { kind } = entry;
+    if (kind !== 'grafana' && kind !== 'graylog') {
+      problems.push(`connection ${label}: "kind" must be "grafana" or "graylog"`);
+      return; // nothing kind-specific can be checked without a valid kind
+    }
+
+    const name = typeof entry.name === 'string' ? entry.name.trim() : '';
+    if (!name) problems.push(`connection ${label}: "name" is required`);
+    const url = typeof entry.url === 'string' ? entry.url.trim() : '';
+    if (!url) problems.push(`connection ${label}: "url" is required`);
+    const { authType } = entry;
+    const authValid = IMPORT_AUTH_TYPES[kind].includes(authType);
+    if (!authValid) {
+      const allowed = IMPORT_AUTH_TYPES[kind].map((a) => `"${a}"`).join(' or ');
+      problems.push(`connection ${label}: "authType" must be ${allowed} for a ${kind} connection`);
+    }
+    if (entry.tlsVerify !== undefined && typeof entry.tlsVerify !== 'boolean') {
+      problems.push(`connection ${label}: "tlsVerify" must be true or false`);
+    }
+    if (entry.username !== undefined && typeof entry.username !== 'string') {
+      problems.push(`connection ${label}: "username" must be a string`);
+    }
+
+    const tags = validateOptionalStringArray(entry.tags, `connection ${label}: "tags"`, problems);
+    let matchHosts;
+    if (kind === 'grafana') {
+      matchHosts = validateOptionalStringArray(entry.matchHosts, `connection ${label}: "matchHosts"`, problems);
+    } else {
+      if (entry.streamId !== undefined && typeof entry.streamId !== 'string') {
+        problems.push(`connection ${label}: "streamId" must be a string`);
+      }
+      if (entry.streamName !== undefined && typeof entry.streamName !== 'string') {
+        problems.push(`connection ${label}: "streamName" must be a string`);
+      }
+    }
+
+    // Only build (and key) a normalized entry once its essentials are sound —
+    // the problems above already explain anything dropped here.
+    if (!name || !url || !authValid) return;
+
+    const key = importKey(kind, url);
+    if (seenKeys.has(key)) {
+      problems.push(
+        `connection ${label}: duplicate url+kind — connection #${seenKeys.get(key)} in this file already uses it`,
+      );
+      return;
+    }
+    seenKeys.set(key, i + 1);
+
+    const normalized = {
+      kind,
+      name,
+      url,
+      authType,
+      tlsVerify: entry.tlsVerify ?? true,
+    };
+    if (tags) normalized.tags = tags;
+    if (typeof entry.username === 'string' && entry.username.trim()) normalized.username = entry.username.trim();
+    if (kind === 'grafana') {
+      if (matchHosts) normalized.matchHosts = matchHosts;
+    } else {
+      if (typeof entry.streamId === 'string' && entry.streamId.trim()) normalized.streamId = entry.streamId.trim();
+      if (typeof entry.streamName === 'string' && entry.streamName.trim()) normalized.streamName = entry.streamName.trim();
+    }
+    connections.push(normalized);
+  });
+
+  if (problems.length) throw new ImportValidationError(problems);
+  if (connections.length === 0) throw new ImportValidationError(['the manifest contains no connections']);
+  return { connections };
+}
+
+/**
+ * Decides, per normalized entry, whether importing it creates a new connection
+ * or updates an existing one — matched on url+kind (the chosen idempotency key).
+ * Pure: it reads the existing connection metadata and returns a plan; the
+ * caller (importConnections) is what actually writes. `existingId` is carried
+ * through so the update path can upsert in place rather than duplicate.
+ *
+ * Connections predating the `kind` field are all Grafana (same convention as
+ * getConnectionsForEngine), so a missing kind keys as 'grafana'.
+ */
+function planImport(entries, existingConnections) {
+  const existingByKey = new Map();
+  for (const c of existingConnections) {
+    existingByKey.set(importKey(c.kind ?? 'grafana', c.url), c.id);
+  }
+  const plan = entries.map((entry) => {
+    const existingId = existingByKey.get(importKey(entry.kind, entry.url));
+    return { action: existingId ? 'update' : 'create', entry, existingId };
+  });
+  return { plan };
+}
+
 module.exports = {
   CorruptStoreError,
   SecretDecryptError,
   SecretFormatError,
+  ImportValidationError,
   STORE_FILE_MODE,
   describeSecretFailure,
   readJsonFile,
   writeJsonFileAtomic,
   buildEngineConnections,
   buildLogEngineConnections,
+  normalizeUrlForKey,
+  validateImportManifest,
+  planImport,
 };

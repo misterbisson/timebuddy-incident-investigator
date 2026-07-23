@@ -1,5 +1,6 @@
-const { app, BrowserWindow, Menu, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const { writeToDir, isWithinDirectory } = require('./downloads.js');
 const store = require('./connectionStore.js');
 const { testConnection } = require('./grafanaTest.js');
@@ -215,6 +216,43 @@ app.on('window-all-closed', () => {
 ipcMain.handle('connections:list', () => store.listConnectionsForDisplay());
 ipcMain.handle('connections:upsert', (_event, connection) => store.upsertConnection(connection));
 ipcMain.handle('connections:delete', (_event, id) => store.deleteConnection(id));
+
+// Bulk-import from a metadata-only manifest the user picks. The file itself
+// never holds secrets (store.importConnections rejects any), so reading it here
+// exposes nothing sensitive; the optional shared username/password come from the
+// renderer's own fields and only reach disk keychain-encrypted via upsert. The
+// file dialog is opened in main (renderers can't), scoped to the picking window.
+ipcMain.handle('connections:import', async (event, { sharedUsername, sharedPassword } = {}) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? connectionsWindow ?? undefined;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Import connections',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Connection manifest', extensions: ['json'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (canceled || !filePaths || filePaths.length === 0) return { canceled: true };
+
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(filePaths[0], 'utf8'));
+  } catch (err) {
+    return { error: `Could not read or parse that file as JSON: ${err.message}` };
+  }
+
+  try {
+    const summary = store.importConnections(manifest, {
+      username: sharedUsername || undefined,
+      password: sharedPassword || undefined,
+    });
+    return { summary };
+  } catch (err) {
+    // ImportValidationError carries the full problem[] list; anything else is
+    // reported by its message alone.
+    return { error: err.message, problems: err.problems };
+  }
+});
 ipcMain.handle('connections:test', (_event, draft) =>
   draft.kind === 'graylog' ? testGraylogConnection(draft) : testConnection(draft),
 );
