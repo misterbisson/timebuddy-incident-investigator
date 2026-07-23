@@ -18,6 +18,19 @@ skill exists to handle for them.
    alert-rule URL, a raw alert JSON object, or a full Alertmanager webhook body). If nothing
    usable was given, ask for one of those three — a pasted Slack/email alert often has a URL in
    it even if the surrounding text doesn't look like structured data.
+   - **When the person points at what's firing *right now* rather than pasting one alert** ("look
+     at what's firing", "the eu-central-1 alerts", "we're getting paged and I don't have a link"),
+     call `list_firing_alerts` first — it reads Grafana's live Alertmanager state and enumerates
+     the active alerts. Pass `labelFilters` (e.g. `{"region":"eu-central-1"}` or
+     `{"severity":"critical"}`) to narrow a busy estate, and `connection` if they named the
+     environment. Each entry comes back in the exact shape `get_alert_context` accepts as
+     `alertJson`, so once you've picked the relevant one, hand it straight to
+     `get_alert_context({ alertJson: <entry> })` (or pass its `source` link as `url`) — no need to
+     make the person go find and paste a link that Grafana already knows about. This is the
+     resolution for the common "I directed you at the firing alerts but you couldn't see them"
+     gap: there *is* a tool for it; don't ask the person to paste what `list_firing_alerts` can
+     list. An empty result (and no `failedConnections`) genuinely means nothing is firing on that
+     connection right now — say so rather than assuming you looked in the wrong place.
    - **Recognize stripped-link pasted alerts and ask, don't guess.** Slack (and some email
      clients) turn a message's hyperlinks into plain anchor text when copied — you'll see link
      *titles* like "Dashboard", "Runbook", "Silence", "Graylog: APIGW 5xx" with no URL anywhere
@@ -197,6 +210,27 @@ skill exists to handle for them.
    to `scope: "all-connections"` — the broadest and most expensive tier — when you still don't have a
    confident answer. Skipping straight to the widest scope costs several times the query volume for
    no benefit when the narrower tier would have already answered it.
+
+   **Finding correlated panels within `product` scope does *not* establish that the blast radius is
+   contained — it only tells you the product moved, which you already knew.** "Contained to the
+   product", "nothing else in the region was affected", "no other product moved" are all claims about
+   the *`connection`* tier (every other dashboard on the same Grafana — i.e. the other products in
+   that region/estate), and you cannot make any of them from `product`-scope results alone. This is
+   the resolution for the "never checked other products in the region" gap, and it is **not** a
+   knowledge-dashboard gap: `connection` scope sweeps the whole region regardless of whether a
+   Timebuddy knowledge dashboard is published. It bites hardest when `productScope.source` comes back
+   `same-dashboard-only` (no knowledge published for this alert) — there, `product` scope *only ever
+   looked at the primary dashboard itself*, so a "clean" or "self-contained" product-scope result has
+   quite literally not looked at any other product yet. So **before you assert containment or that the
+   blast radius is confined to the product, run `scope: "connection"`** (unless its
+   `nextScopeCandidateCount` was `0`, meaning there's nothing else on the connection to check). Report
+   what it found — "checked the N other dashboards on the region connection, nothing else moved" is a
+   real, earned containment statement; "the same-dashboard panels agreed with each other" is not.
+   Don't wait to be asked "what about other products?" — that check is part of establishing blast
+   radius, not an optional follow-up. The tool now flags this for you: a `containmentCheckIncomplete: true`
+   in the response (with a `containmentHint` naming how many same-connection panels are still unchecked)
+   means you are *not* done — re-run with `scope: "connection"` before writing any "contained"/"self-
+   contained"/"no other product affected" language into the verdict.
 
    **This only checks *other dashboards* — it won't catch a primary panel that's a narrow/synthetic
    signal (e.g. a health-check-style series) overstating impact that sibling panels on the *same*
