@@ -5,6 +5,7 @@ import type { LogConnectionRegistry } from '../graylog/registry.js';
 import type { Screenshotter } from '../screenshot/types.js';
 import type { ActivityLog } from '../activity/activityLog.js';
 import { registerGetAlertContext } from './getAlertContext.js';
+import { registerListFiringAlerts } from './listFiringAlerts.js';
 import { registerGetProductContext } from './getProductContext.js';
 import { registerFetchDashboard } from './fetchDashboard.js';
 import { registerResolvePanelQueries } from './resolvePanelQueries.js';
@@ -35,6 +36,7 @@ export interface ToolContext {
 
 export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerGetAlertContext(server, ctx);
+  registerListFiringAlerts(server, ctx);
   registerGetProductContext(server, ctx);
   registerFetchDashboard(server, ctx);
   registerResolvePanelQueries(server, ctx);
