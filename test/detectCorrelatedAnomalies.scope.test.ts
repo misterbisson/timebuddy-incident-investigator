@@ -142,10 +142,16 @@ describe('detect_correlated_anomalies scope tiering', () => {
     expect(productParsed.correlated.map((c: { dashboardUid: string }) => c.dashboardUid)).toEqual(['primary']);
     expect(productParsed.nextScope).toBe('connection');
     expect(productParsed.nextScopeCandidateCount).toBe(1);
+    // Product scope only saw the primary dashboard, and there's an unchecked same-connection panel
+    // (other-dash) — so containment is explicitly flagged as not yet established.
+    expect(productParsed.containmentCheckIncomplete).toBe(true);
+    expect(productParsed.containmentHint).toContain('scope:"connection"');
 
     const connectionScope = (await call('detect_correlated_anomalies', { ...base, scope: 'connection' })) as { content: Array<{ text: string }> };
     const connectionParsed = JSON.parse(connectionScope.content[0]!.text);
     expect(connectionParsed.scope).toBe('connection');
+    // The connection tier has now been checked, so the containment flag is gone.
+    expect(connectionParsed.containmentCheckIncomplete).toBeUndefined();
     expect(connectionParsed.candidatesChecked).toBe(1);
     expect(connectionParsed.correlated.map((c: { dashboardUid: string }) => c.dashboardUid)).toEqual(['other-dash']);
     expect(connectionParsed.nextScope).toBe('all-connections');
@@ -197,6 +203,9 @@ describe('detect_correlated_anomalies scope tiering', () => {
     // other-dash's only candidate panel was absorbed into the product tier, so the connection tier is now empty.
     expect(productParsed.nextScope).toBe('connection');
     expect(productParsed.nextScopeCandidateCount).toBe(0);
+    // With no unchecked same-connection panels left, product scope alone is a complete
+    // same-connection containment check, so the flag must not be raised.
+    expect(productParsed.containmentCheckIncomplete).toBeUndefined();
 
     const connectionScope = (await call('detect_correlated_anomalies', { ...base, scope: 'connection' })) as { content: Array<{ text: string }> };
     const connectionParsed = JSON.parse(connectionScope.content[0]!.text);

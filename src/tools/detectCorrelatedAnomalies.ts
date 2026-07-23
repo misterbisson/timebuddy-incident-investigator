@@ -56,6 +56,11 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         'can take minutes on a large Grafana estate, so this call only ever builds the index(es) the requested ' +
         '"scope" actually needs; "nextScopeCandidateCount" is omitted (not guessed) when the next tier would need ' +
         'a connection whose index isn\'t already built and cached - call that wider scope directly to find out. ' +
+        'A "containmentCheckIncomplete": true (with a "containmentHint") is returned whenever a "product"-scope call ' +
+        'still has unchecked panels on the same connection (i.e. other products in this region) - treat it as a hard ' +
+        'signal that you have NOT yet established blast radius and must re-run with "scope": "connection" before ' +
+        'reporting the incident as contained; finding correlated panels within "product" scope only shows the ' +
+        'product itself moved, never that nothing else did. ' +
         'Pass an explicit "candidates" array to bypass scoping and check exactly those panels in one call instead. A "$__all" ' +
         'selection on the primary panel\'s own variables is best-effort live-resolved (e.g. an InfluxQL "SHOW TAG ' +
         'VALUES" query variable); when that can\'t be done it falls back to matching everything and the variable ' +
@@ -171,7 +176,14 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
 
             let candidateRefs: CandidateRef[];
             let scopeInfo:
-              | { scope: Scope; productScope: { dashboardUids: string[]; source: 'knowledge-dependencies' | 'same-dashboard-only' }; nextScope?: Scope; nextScopeCandidateCount?: number }
+              | {
+                  scope: Scope;
+                  productScope: { dashboardUids: string[]; source: 'knowledge-dependencies' | 'same-dashboard-only' };
+                  nextScope?: Scope;
+                  nextScopeCandidateCount?: number;
+                  containmentCheckIncomplete?: boolean;
+                  containmentHint?: string;
+                }
               | undefined;
             if (candidates) {
               candidateRefs = candidates.map((c) => ({ ...c, connectionId: c.connectionId ?? connectionId }));
@@ -264,6 +276,18 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               for (const ref of allCandidateRefs) tiered[tierOf(ref, connectionId, productDashboardUids)].push(ref);
 
               candidateRefs = tiered[requestedScope].slice(0, Math.max(limit! * 3, 15));
+
+              // "product" scope alone can never establish blast-radius containment: it only ever
+              // looks at this one product's own dashboards (and, when no knowledge is published,
+              // just the primary dashboard itself). If there are other panels on this same
+              // connection - i.e. other products in this region/estate - that haven't been checked
+              // yet, say so explicitly so a "product scope was clean" result isn't misread as "the
+              // blast radius is contained." The primary connection's index is always built here, so
+              // the "connection" tier's count is always known at "product" scope (unlike the
+              // "all-connections" count, which we deliberately don't force a crawl for above). This
+              // is the data-side backstop for the same widen-before-claiming-containment rule the
+              // investigate skill spells out in prose.
+              const containmentCheckIncomplete = requestedScope === 'product' && tiered.connection.length > 0;
               scopeInfo = {
                 scope: requestedScope,
                 productScope: { dashboardUids: [...productDashboardUids], source: productScopeSource },
@@ -272,6 +296,19 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                 // above - we don't force a rebuild just to fill in this hint).
                 ...(nextScope && haveAllOtherConnections ? { nextScope, nextScopeCandidateCount: tiered[nextScope].length } : {}),
                 ...(nextScope && !haveAllOtherConnections ? { nextScope } : {}),
+                ...(containmentCheckIncomplete
+                  ? {
+                      containmentCheckIncomplete: true,
+                      containmentHint:
+                        'Only "product" scope has been checked' +
+                        (productScopeSource === 'same-dashboard-only'
+                          ? ' and no Timebuddy knowledge is published for this alert, so that was just the primary dashboard itself'
+                          : '') +
+                        `; ${tiered.connection.length} other panel(s) on this same connection (other products in this ` +
+                        'region/estate) have not been checked. Do not report the blast radius as contained until you ' +
+                        're-run with scope:"connection".',
+                    }
+                  : {}),
               };
             }
 

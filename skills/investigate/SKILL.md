@@ -198,6 +198,27 @@ skill exists to handle for them.
    confident answer. Skipping straight to the widest scope costs several times the query volume for
    no benefit when the narrower tier would have already answered it.
 
+   **Finding correlated panels within `product` scope does *not* establish that the blast radius is
+   contained — it only tells you the product moved, which you already knew.** "Contained to the
+   product", "nothing else in the region was affected", "no other product moved" are all claims about
+   the *`connection`* tier (every other dashboard on the same Grafana — i.e. the other products in
+   that region/estate), and you cannot make any of them from `product`-scope results alone. This is
+   the resolution for the "never checked other products in the region" gap, and it is **not** a
+   knowledge-dashboard gap: `connection` scope sweeps the whole region regardless of whether a
+   Timebuddy knowledge dashboard is published. It bites hardest when `productScope.source` comes back
+   `same-dashboard-only` (no knowledge published for this alert) — there, `product` scope *only ever
+   looked at the primary dashboard itself*, so a "clean" or "self-contained" product-scope result has
+   quite literally not looked at any other product yet. So **before you assert containment or that the
+   blast radius is confined to the product, run `scope: "connection"`** (unless its
+   `nextScopeCandidateCount` was `0`, meaning there's nothing else on the connection to check). Report
+   what it found — "checked the N other dashboards on the region connection, nothing else moved" is a
+   real, earned containment statement; "the same-dashboard panels agreed with each other" is not.
+   Don't wait to be asked "what about other products?" — that check is part of establishing blast
+   radius, not an optional follow-up. The tool now flags this for you: a `containmentCheckIncomplete: true`
+   in the response (with a `containmentHint` naming how many same-connection panels are still unchecked)
+   means you are *not* done — re-run with `scope: "connection"` before writing any "contained"/"self-
+   contained"/"no other product affected" language into the verdict.
+
    **This only checks *other dashboards* — it won't catch a primary panel that's a narrow/synthetic
    signal (e.g. a health-check-style series) overstating impact that sibling panels on the *same*
    dashboard would reveal.** Especially for an undirected "find errors"/"what's going on" investigation
