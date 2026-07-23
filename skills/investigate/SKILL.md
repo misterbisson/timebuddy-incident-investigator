@@ -236,11 +236,18 @@ skill exists to handle for them.
    end. If nothing close shows up, say so plainly rather than retrying — that dashboard needs a
    Grafana-side fix, not something any tool call here can resolve.
 
-6. **Pull corroborating log evidence**, once you have a primary panel and/or some identifiers —
-   this step is optional and skips itself cleanly when there's nothing configured for it.
+6. **Pull corroborating log evidence**, once you have a primary panel and/or some identifiers.
+   **This step is not optional and is not conditional on how the metrics looked.** Always run it —
+   calling `list_log_sources` is a required part of every investigation, and the *only* clean way to
+   skip the rest of the step is an empty `sources` (no Graylog configured). A confident,
+   clean-looking metrics verdict is **not** a reason to skip logs — it is exactly when logs pay off
+   most. Metrics tell you *that* a signal moved and *where* (which host/orchestrator/cell); logs
+   routinely tell you *why*, turning "chronic CM errors on `a2`" into "one specific certificate stuck
+   in a non-exportable state." Don't jump from step 5 to step 7 because the numbers already tell a
+   tidy story; pull the logs and let them sharpen (or contradict) it first.
    - Call `list_log_sources` with no arguments. If `sources` is empty, no Graylog connections are
      configured — skip the rest of this step silently; that's a normal, common state, not
-     something to flag as missing unless asked.
+     something to flag as missing unless asked. Any other outcome means you keep going.
    - **Pick which log connection to use.** If `sources` has exactly one entry, use its `id` as
      `connection` on the calls below — no further resolution needed. If there's more than one,
      pair by tags instead of asking outright: call `list_datasources` with
@@ -322,6 +329,24 @@ skill exists to handle for them.
      verdict, not a separate report — its `url` belongs in `evidence[]` the same way every other
      tool's URL does, and a specific log line or correlated pair worth citing belongs in the
      verdict's prose the same way a baseline number would.
+   - **Every log claim you make must be traceable to the exact search that produced it — surface
+     that search's own returned `url`, one link per distinct search.** Each `search_logs`/
+     `correlate_logs` call returns a `url` that encodes *that call's* query, time window, and
+     `streamId` exactly, so it re-runs to the same result set someone else can read. When you cite a
+     count, a cert ARN, a host, or an error string, link the `url` of the search that actually
+     returned it — **not** the broad `*`/single-bare-term fallback search you used along the way to
+     find the right query, and **not** one "representative" link standing in for several searches.
+     If several searches back the finding (e.g. one for the incident-window count and one over a
+     wider window), include each one's `url` as its own evidence entry so the query and window on
+     each link match the specific claim it supports. A verdict that asserts a precise root cause but
+     links a vaguer search (or no search) reads as unverifiable even when it's correct — the whole
+     point of the link is that the reader can click it and see the same lines you did.
+   - **This link discipline applies whenever you report log findings — including when logs are
+     pulled reactively, after you've already given a metrics verdict** (someone asks "what did you
+     find in Graylog?" and you go search). You're not going back through `summarize_findings` in that
+     case, but the same rule holds: name each search's own `url` next to the claim it supports, and
+     never hand-build or merge a Graylog URL (see step 7). Don't let a follow-up log dig skip the
+     evidence links just because it's outside the one-shot pipeline.
 
 7. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
    and an `evidence` array of dashboard/panel links you gathered along the way. Pass
