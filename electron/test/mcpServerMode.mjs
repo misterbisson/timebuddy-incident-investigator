@@ -52,6 +52,7 @@ try {
   const { tools } = await client.listTools();
   const expectedNames = [
     'get_alert_context',
+    'list_firing_alerts',
     'get_product_context',
     'fetch_dashboard',
     'resolve_panel_queries',

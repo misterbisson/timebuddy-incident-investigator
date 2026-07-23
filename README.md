@@ -77,7 +77,7 @@ above chain them. **See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.
 
 | Group | Tools |
 | --- | --- |
-| **Ingest & resolve** | `get_alert_context`, `get_product_context`, `fetch_dashboard`, `resolve_panel_queries` |
+| **Ingest & resolve** | `get_alert_context`, `list_firing_alerts`, `get_product_context`, `fetch_dashboard`, `resolve_panel_queries` |
 | **Query & analyze** | `execute_query_window`, `render_dashboard`, `validate_baseline`, `summarize_findings` |
 | **Correlate & discover** | `find_related_dashboards`, `detect_correlated_anomalies`, `discover_influxdb_schema`, `discover_label_values` |
 | **Export & capture** | `export_panel_csv`, `screenshot_panel` *(Electron app only)* |

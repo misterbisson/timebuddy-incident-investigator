@@ -18,6 +18,19 @@ skill exists to handle for them.
    alert-rule URL, a raw alert JSON object, or a full Alertmanager webhook body). If nothing
    usable was given, ask for one of those three — a pasted Slack/email alert often has a URL in
    it even if the surrounding text doesn't look like structured data.
+   - **When the person points at what's firing *right now* rather than pasting one alert** ("look
+     at what's firing", "the eu-central-1 alerts", "we're getting paged and I don't have a link"),
+     call `list_firing_alerts` first — it reads Grafana's live Alertmanager state and enumerates
+     the active alerts. Pass `labelFilters` (e.g. `{"region":"eu-central-1"}` or
+     `{"severity":"critical"}`) to narrow a busy estate, and `connection` if they named the
+     environment. Each entry comes back in the exact shape `get_alert_context` accepts as
+     `alertJson`, so once you've picked the relevant one, hand it straight to
+     `get_alert_context({ alertJson: <entry> })` (or pass its `source` link as `url`) — no need to
+     make the person go find and paste a link that Grafana already knows about. This is the
+     resolution for the common "I directed you at the firing alerts but you couldn't see them"
+     gap: there *is* a tool for it; don't ask the person to paste what `list_firing_alerts` can
+     list. An empty result (and no `failedConnections`) genuinely means nothing is firing on that
+     connection right now — say so rather than assuming you looked in the wrong place.
    - **Recognize stripped-link pasted alerts and ask, don't guess.** Slack (and some email
      clients) turn a message's hyperlinks into plain anchor text when copied — you'll see link
      *titles* like "Dashboard", "Runbook", "Silence", "Graylog: APIGW 5xx" with no URL anywhere

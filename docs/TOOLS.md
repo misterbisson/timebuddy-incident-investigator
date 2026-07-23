@@ -17,6 +17,7 @@ every call is audit-logged.
 | Tool | What it does |
 | --- | --- |
 | `get_alert_context` | Ingest an alert (webhook payload, pasted JSON, or a dashboard/panel/alert-rule URL) and resolve it to dashboard UID, panel ID, labels, threshold, and time range. Also attaches a matching "Timebuddy knowledge" panel when one has been published (see [`BEHAVIOR.md`](BEHAVIOR.md)). |
+| `list_firing_alerts` | Enumerate the alerts currently active in Grafana's Alertmanager — the "what's on fire right now" view for when someone points at a live incident without a link to paste. Filter by exact label matches (`labelFilters`) and/or `connection`; each entry comes back in the shape `get_alert_context` accepts as `alertJson`, so a chosen entry pipes straight into an investigation. Read-only — never silences or acknowledges. |
 | `get_product_context` | Look up a "Timebuddy knowledge" panel directly by product key, without an alert in hand. |
 | `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables — from a dashboard/panel/alert-rule URL (connection auto-detected) or a `dashboardUid`. Useful for finding a panel's id/type from its title before calling another tool. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
