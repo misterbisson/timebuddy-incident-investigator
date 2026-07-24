@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { buildSeriesColumnNames, frameToCsv, neutralizeCsvDocument, parseCsv, parseCsvLine, seriesToCsv } from '../src/export/csv.js';
+import {
+  approximateResolution,
+  buildSeriesColumnNames,
+  frameToCsv,
+  neutralizeCsvDocument,
+  parseCsv,
+  parseCsvLine,
+  resolutionFromTimestamps,
+  seriesToCsv,
+} from '../src/export/csv.js';
 import type { QuerySeries } from '../src/query/executor.js';
 import type { GrafanaFrame } from '../src/grafana/types.js';
 
@@ -332,5 +341,49 @@ describe('neutralizeCsvDocument (Grafana-captured CSV path, issue #91)', () => {
 
   it('returns empty output for empty input', () => {
     expect(neutralizeCsvDocument('')).toEqual({ csv: '', rows: [] });
+  });
+});
+
+describe('resolutionFromTimestamps', () => {
+  it('reports the median gap, point count, and span as an exact resolution', () => {
+    const min = 60_000;
+    expect(resolutionFromTimestamps([0, 5 * min, 10 * min, 15 * min])).toEqual({
+      points: 4,
+      effectiveBucketMs: 5 * min,
+      spanMs: 15 * min,
+      approximate: false,
+    });
+  });
+
+  it('uses the median so one irregular gap does not move the figure', () => {
+    // Gaps: 5, 5, 60 (one hole) — median stays 5, not the 23.3 a mean would give.
+    const min = 60_000;
+    expect(resolutionFromTimestamps([0, 5 * min, 10 * min, 70 * min])?.effectiveBucketMs).toBe(5 * min);
+  });
+
+  it('dedupes and sorts before measuring', () => {
+    expect(resolutionFromTimestamps([120_000, 0, 60_000, 60_000])).toMatchObject({ points: 3, effectiveBucketMs: 60_000 });
+  });
+
+  it('returns undefined below two distinct points', () => {
+    expect(resolutionFromTimestamps([])).toBeUndefined();
+    expect(resolutionFromTimestamps([1000])).toBeUndefined();
+    expect(resolutionFromTimestamps([1000, 1000])).toBeUndefined();
+  });
+});
+
+describe('approximateResolution', () => {
+  it('derives the bucket from row count over the window and flags it approximate', () => {
+    // 8065 rows over 28 days ≈ 5-minute buckets — the #111 target.
+    const twentyEightDaysMs = 28 * 24 * 60 * 60 * 1000;
+    const r = approximateResolution(8065, twentyEightDaysMs);
+    expect(r?.approximate).toBe(true);
+    expect(r?.points).toBe(8065);
+    expect(Math.round((r?.effectiveBucketMs ?? 0) / 60_000)).toBe(5);
+  });
+
+  it('returns undefined when it cannot say anything useful', () => {
+    expect(approximateResolution(1, 1000)).toBeUndefined();
+    expect(approximateResolution(10, 0)).toBeUndefined();
   });
 });

@@ -10,12 +10,24 @@ import { mergeVariableOverrides, substituteTargetFields } from '../dashboards/va
 import { buildDsQueryTarget, executeQueryWindow } from '../query/executor.js';
 import {
   clampMaxDataPoints,
+  clampRenderWidth,
   clampScreenshotDimension,
   enforceWindowLimit,
+  MAX_RENDER_WIDTH,
   MAX_SCREENSHOT_PX,
+  MIN_RENDER_WIDTH,
   MIN_SCREENSHOT_PX,
 } from '../security/limits.js';
-import { buildSeriesColumnNames, frameToCsv, neutralizeCsvDocument, neutralizeFormula, seriesToCsv } from '../export/csv.js';
+import type { ExportResolution } from '../export/csv.js';
+import {
+  approximateResolution,
+  buildSeriesColumnNames,
+  frameToCsv,
+  neutralizeCsvDocument,
+  neutralizeFormula,
+  resolutionFromTimestamps,
+  seriesToCsv,
+} from '../export/csv.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildInspectDataUrl, buildSoloPanelUrl } from '../grafana/urlBuilder.js';
 import { resolveRenderWindow } from './renderDashboard.js';
@@ -221,6 +233,13 @@ export interface GeneratedCsvFile {
   rows: number;
   columns: string[];
   suffix?: string;
+  /**
+   * The effective time resolution of this file, when it has a determinable
+   * time axis — so a caller can tell a coarse export from a fine one without
+   * re-deriving bucket width from the row spacing by hand (issues #109/#111).
+   * Omitted for a file with no time column (e.g. a plain table panel).
+   */
+  resolution?: ExportResolution;
 }
 
 export interface GeneratedCsv {
@@ -229,6 +248,18 @@ export interface GeneratedCsv {
   errors: Record<string, string>;
   unresolvedAllVariables: string[];
   captureNote?: string;
+  /**
+   * The render width actually used on the browser-render path, after clamping —
+   * set only when a renderWidth was supplied *and* that path ran, so a caller
+   * can confirm the knob took effect. See docs/BEHAVIOR.md.
+   */
+  renderWidth?: number;
+  /**
+   * Non-fatal advisories about this export — e.g. a renderWidth that was
+   * clamped, or one that was supplied but had no effect because the panel took
+   * the direct (non-browser) path. Empty when there's nothing to flag.
+   */
+  warnings: string[];
 }
 
 /**
@@ -250,6 +281,7 @@ async function tryBrowserTransformedCsv(
   screenshotter: Screenshotter | undefined,
   inv: PanelInvocation,
   config: Config,
+  renderWidth: number | undefined,
 ): Promise<{ csv: string } | { captureNote: string } | undefined> {
   if (!screenshotter) return undefined;
   const url = buildInspectDataUrl(inv.rawConnection.url, inv.dashboardUid, inv.panelId, {
@@ -262,6 +294,9 @@ async function tryBrowserTransformedCsv(
       url,
       headers: { Authorization: buildAuthHeader(inv.rawConnection) },
       timeoutMs: config.screenshotTimeoutMs,
+      // Left undefined → the screenshotter keeps its own 1400px default; a
+      // number here widens the render to pull finer resolution (see #111).
+      ...(renderWidth !== undefined ? { width: renderWidth } : {}),
     });
     if (!result.csv) return undefined;
     return { csv: result.csv.toString('utf8') };
@@ -286,13 +321,32 @@ export async function generatePanelCsv(
   screenshotter: Screenshotter | undefined,
   config: Config,
   inv: PanelInvocation,
+  opts: { renderWidth?: number } = {},
 ): Promise<GeneratedCsv> {
-  const browserResult = await tryBrowserTransformedCsv(screenshotter, inv, config);
+  const warnings: string[] = [];
+  const clampedWidth = clampRenderWidth(opts.renderWidth);
+  if (clampedWidth?.clamped) {
+    warnings.push(
+      `Requested renderWidth ${opts.renderWidth} was clamped to ${clampedWidth.value}px ` +
+        `(bounded to ${MIN_RENDER_WIDTH}-${MAX_RENDER_WIDTH}px).`,
+    );
+  }
+  const browserResult = await tryBrowserTransformedCsv(screenshotter, inv, config, clampedWidth?.value);
 
   const files: GeneratedCsvFile[] = [];
   let errors: Record<string, string> = {};
   let unresolvedAllVariables: string[] = [];
   const transformationsApplied = browserResult !== undefined && 'csv' in browserResult;
+
+  // A renderWidth only steers the browser-render path. If one was supplied but
+  // that path didn't run, say so rather than let it read as if it took effect.
+  if (opts.renderWidth !== undefined && !transformationsApplied) {
+    warnings.push(
+      'renderWidth was supplied but had no effect: this export used the direct /api/ds/query path (the panel has ' +
+        'no transformations, or no screenshotter is available), whose resolution is governed by maxDataPoints ' +
+        `(${config.maxDataPoints}), not by render width. renderWidth only steers the browser-render path.`,
+    );
+  }
 
   if (transformationsApplied && browserResult && 'csv' in browserResult) {
     // Grafana's own captured CSV. Written verbatim it would be — unlike the
@@ -306,13 +360,18 @@ export async function generatePanelCsv(
     // leading BOM is preserved). redact() is applied here, on the serialized
     // text, exactly as it was on the raw bytes before.
     const { csv: neutralized, rows } = neutralizeCsvDocument(browserResult.csv);
+    const dataRows = Math.max(0, rows.length - 1);
     files.push({
       content: redact(neutralized, config.redactionPatterns),
-      rows: Math.max(0, rows.length - 1),
+      rows: dataRows,
       // From the parsed header row, neutralized to match the bytes actually
       // written — correct even when a field spanned lines, which the old
       // line-split count was not.
       columns: (rows[0] ?? []).map(neutralizeFormula),
+      // Approximate: Grafana's captured CSV time column is locale-formatted and
+      // not reliably re-parseable here, so derive the bucket from the row count
+      // over the requested window rather than from observed timestamps.
+      ...withResolution(approximateResolution(dataRows, inv.toMs - inv.fromMs)),
     });
   } else if (inv.panel.mirrorsPanelIds) {
     // Grafana's built-in "-- Dashboard --" datasource: no backend to query at
@@ -378,15 +437,22 @@ export async function generatePanelCsv(
           // reported column against the file's header.
           columns: frame.schema.fields.map((f) => neutralizeFormula(f.name)),
           suffix,
+          // Exact when the frame has a time field; omitted for a table with no
+          // time axis, where "resolution" is meaningless.
+          ...withResolution(resolutionFromTimestamps(frameTimeValues(frame))),
         });
       }
     } else {
       const result = await executeQueryWindow(inv.client, targets, window, config);
       errors = result.errors;
+      const timestamps = result.series.flatMap((s) => s.points.map((p) => p.t));
       files.push({
         content: redact(seriesToCsv(result.series), config.redactionPatterns),
-        rows: new Set(result.series.flatMap((s) => s.points.map((p) => p.t))).size,
+        rows: new Set(timestamps).size,
         columns: ['timestamp', ...buildSeriesColumnNames(result.series)].map(neutralizeFormula),
+        // Exact: the union of every series' sample times is what the file's
+        // timestamp column carries.
+        ...withResolution(resolutionFromTimestamps(timestamps)),
       });
     }
   }
@@ -396,8 +462,22 @@ export async function generatePanelCsv(
     transformationsApplied,
     errors,
     unresolvedAllVariables,
+    warnings,
+    ...(clampedWidth && transformationsApplied ? { renderWidth: clampedWidth.value } : {}),
     ...(browserResult && 'captureNote' in browserResult ? { captureNote: browserResult.captureNote } : {}),
   };
+}
+
+/** `{ resolution }` when defined, `{}` otherwise — keeps the optional field off the object when there's no time axis. */
+function withResolution(resolution: ExportResolution | undefined): { resolution?: ExportResolution } {
+  return resolution ? { resolution } : {};
+}
+
+/** The numeric epoch-ms values of a frame's first time-typed field, or [] when it has none. */
+function frameTimeValues(frame: GrafanaFrame): number[] {
+  const idx = frame.schema.fields.findIndex((f) => f.type === 'time');
+  if (idx < 0) return [];
+  return (frame.data.values[idx] ?? []).filter((v): v is number => typeof v === 'number');
 }
 
 export const FORMULA_NEUTRALIZATION_NOTE =

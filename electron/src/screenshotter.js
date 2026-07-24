@@ -101,7 +101,7 @@ function createScreenshotter() {
       }
     },
 
-    async exportPanelCsv({ url, headers, timeoutMs }) {
+    async exportPanelCsv({ url, headers, timeoutMs, width, height }) {
       const ses = session.fromPartition(`csv-export-${++partitionCounter}`, { cache: false });
       // Only the panel's own origin gets the credentials — see authGuard.js.
       const targetOrigin = originOf(url);
@@ -112,8 +112,13 @@ function createScreenshotter() {
         show: false,
         frame: false,
         useContentSize: true,
-        width: 1400,
-        height: 1000,
+        // The render width governs the exported resolution: Grafana derives the
+        // panel's maxDataPoints from its rendered pixel width, so a wider window
+        // yields finer buckets over the same time range (see the engine's
+        // clampRenderWidth and docs/BEHAVIOR.md). Default 1400x1000, unchanged
+        // from when these were hardcoded, when the caller doesn't pass them.
+        width: width || 1400,
+        height: height || 1000,
         webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
       });
       const downloadDir = await mkdtemp(join(tmpdir(), 'timebuddy-csv-export-'));

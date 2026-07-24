@@ -18,6 +18,18 @@ export interface ExportPanelCsvRequest {
   url: string;
   headers: Record<string, string>;
   timeoutMs: number;
+  /**
+   * Content width/height of the render window, in logical pixels. The width
+   * is the knob that governs this path's resolution: Grafana derives a panel's
+   * `maxDataPoints` from its rendered pixel width, so a wider render yields
+   * more (finer) buckets over the same time window — this is what lets a caller
+   * pull, say, 5-minute data over a 28-day window in one call (see issue #111
+   * and docs/BEHAVIOR.md). Both are optional; the implementation falls back to
+   * its own default (1400×1000) when omitted, which is unchanged from before
+   * this became configurable.
+   */
+  width?: number;
+  height?: number;
 }
 
 export interface ExportPanelCsvResult {

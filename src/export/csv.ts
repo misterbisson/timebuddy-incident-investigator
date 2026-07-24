@@ -2,6 +2,56 @@ import type { GrafanaFrame } from '../grafana/types.js';
 import type { QuerySeries } from '../query/executor.js';
 
 /**
+ * The effective time resolution of an exported CSV — the field #109/#111 asked
+ * for so a caller doesn't have to re-derive bucket width from `(end-start)/
+ * (count-1)` by hand to notice a coarse export. `effectiveBucketMs` is the
+ * spacing between consecutive samples; `points` is how many time points the
+ * file carries; `spanMs` is the covered range.
+ *
+ * `approximate` distinguishes the two ways it's computed. When the exporter
+ * has the real numeric timestamps (this server's own direct timeseries/table
+ * export) it reports the observed *median* gap — exact, and robust to a single
+ * irregular sample. When it only has Grafana's already-serialized CSV (the
+ * browser-render path, whose time column is locale-formatted and not reliably
+ * re-parseable), it falls back to `spanMs / (points - 1)` over the requested
+ * window and marks the result approximate — the same derivation a caller would
+ * otherwise do, just done once here and labeled.
+ */
+export interface ExportResolution {
+  points: number;
+  effectiveBucketMs: number;
+  spanMs: number;
+  approximate: boolean;
+}
+
+/**
+ * Exact resolution from observed timestamps (epoch ms). Uses the median gap
+ * rather than the mean so one missing bucket or one clock skew doesn't move
+ * the reported figure. Returns undefined for fewer than two distinct points,
+ * where "resolution" isn't meaningful.
+ */
+export function resolutionFromTimestamps(timestampsMs: number[]): ExportResolution | undefined {
+  const ts = [...new Set(timestampsMs)].filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+  if (ts.length < 2) return undefined;
+  const gaps: number[] = [];
+  for (let i = 1; i < ts.length; i++) gaps.push(ts[i]! - ts[i - 1]!);
+  gaps.sort((a, b) => a - b);
+  const median = gaps[Math.floor(gaps.length / 2)]!;
+  return { points: ts.length, effectiveBucketMs: Math.round(median), spanMs: ts[ts.length - 1]! - ts[0]!, approximate: false };
+}
+
+/**
+ * Approximate resolution when only a row count and the requested window are
+ * known (the browser-render path). Assumes the rows span the window roughly
+ * evenly; when they don't, the figure overstates the bucket, which is why it's
+ * flagged `approximate`. Returns undefined when it can't say anything useful.
+ */
+export function approximateResolution(dataRows: number, spanMs: number): ExportResolution | undefined {
+  if (dataRows < 2 || spanMs <= 0) return undefined;
+  return { points: dataRows, effectiveBucketMs: Math.round(spanMs / (dataRows - 1)), spanMs, approximate: true };
+}
+
+/**
  * A cell that a spreadsheet would evaluate rather than display. Excel,
  * LibreOffice, and Google Sheets all treat a leading =, +, -, or @ as the
  * start of a formula.
