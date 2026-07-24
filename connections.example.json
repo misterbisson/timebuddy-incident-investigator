@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "connections": [
+    {
+      "kind": "grafana",
+      "name": "prod-us-east-1",
+      "url": "https://metrics.us-east-1.example.com",
+      "authType": "basic",
+      "tags": ["prd", "us-east-1"],
+      "matchHosts": ["metrics-lb.us-east-1.internal"],
+      "tlsVerify": true
+    },
+    {
+      "kind": "grafana",
+      "name": "prod-eu-west-1",
+      "url": "https://metrics.eu-west-1.example.com",
+      "authType": "basic",
+      "tags": ["prd", "eu-west-1"]
+    },
+    {
+      "kind": "grafana",
+      "name": "staging",
+      "url": "https://metrics.staging.example.com",
+      "authType": "bearer",
+      "tags": ["stg"]
+    },
+    {
+      "kind": "graylog",
+      "name": "prod-us-logs",
+      "url": "https://logs.us-east-1.example.com",
+      "authType": "basic",
+      "tags": ["prd", "us-east-1"],
+      "streamName": "spc-elb"
+    },
+    {
+      "kind": "graylog",
+      "name": "prod-eu-logs",
+      "url": "https://logs.eu-west-1.example.com",
+      "authType": "basic",
+      "tags": ["prd", "eu-west-1"]
+    }
+  ]
+}

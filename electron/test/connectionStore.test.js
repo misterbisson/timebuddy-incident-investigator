@@ -85,6 +85,64 @@ app.whenReady().then(() => {
     store.deleteConnection(graylog.id);
     assert.strictEqual(store.listConnectionsForDisplay().length, 0, 'expected both connections deleted');
 
+    // --- importConnections: metadata-only manifest + shared credential ---
+    const importSummary = store.importConnections(
+      {
+        version: 1,
+        connections: [
+          { kind: 'grafana', name: 'imp-bearer', url: 'https://imp-g1.example.com', authType: 'bearer', tags: ['imp'] },
+          { kind: 'grafana', name: 'imp-basic', url: 'https://imp-g2.example.com', authType: 'basic' },
+          { kind: 'graylog', name: 'imp-logs', url: 'https://imp-gl.example.com', authType: 'basic', streamName: 'S' },
+        ],
+      },
+      { username: 'shared-user', password: 'shared-pass' },
+    );
+    assert.strictEqual(importSummary.total, 3, 'expected 3 imported');
+    assert.strictEqual(importSummary.created, 3, 'all three are new');
+    assert.strictEqual(importSummary.updated, 0);
+    // The shared login lands on both basic-auth connections; the bearer one has no secret.
+    assert.strictEqual(importSummary.configured, 2, 'both basic-auth connections got the shared credential');
+    assert.deepStrictEqual(
+      importSummary.needSecret.map((c) => c.name),
+      ['imp-bearer'],
+      'the bearer connection still needs a token',
+    );
+
+    const imported = store.listConnectionsForDisplay();
+    assert.strictEqual(imported.length, 3, 'expected 3 connections after import');
+    const impBasic = imported.find((c) => c.name === 'imp-basic');
+    assert.strictEqual(impBasic.hasSecret, true);
+    assert.strictEqual(impBasic.username, 'shared-user', 'shared username stored as metadata');
+
+    // The shared credential really decrypts through the engine path.
+    const impGrafanaEngine = store.getConnectionsForEngine().find((c) => c.url === 'https://imp-g2.example.com');
+    assert.strictEqual(impGrafanaEngine.username, 'shared-user');
+    assert.strictEqual(impGrafanaEngine.password, 'shared-pass');
+
+    // Re-import (idempotent on url+kind): a rename with no shared password
+    // updates metadata in place and keeps the existing secret, no duplicate row.
+    const reSummary = store.importConnections({
+      connections: [
+        { kind: 'grafana', name: 'imp-basic-renamed', url: 'https://imp-g2.example.com/', authType: 'basic' },
+      ],
+    });
+    assert.strictEqual(reSummary.updated, 1, 'matched existing on url+kind');
+    assert.strictEqual(reSummary.created, 0, 'no duplicate created despite trailing slash');
+    assert.strictEqual(reSummary.configured, 1, 'existing secret preserved on re-import');
+    const afterReimport = store.listConnectionsForDisplay();
+    assert.strictEqual(afterReimport.length, 3, 'still 3 connections, not 4');
+    const renamed = afterReimport.find((c) => c.url === 'https://imp-g2.example.com');
+    assert.strictEqual(renamed.name, 'imp-basic-renamed', 'metadata updated in place');
+    assert.strictEqual(renamed.username, 'shared-user', 'username preserved when manifest omits it');
+    assert.strictEqual(
+      store.getConnectionsForEngine().find((c) => c.url === 'https://imp-g2.example.com').password,
+      'shared-pass',
+      'password preserved across re-import',
+    );
+
+    for (const c of afterReimport) store.deleteConnection(c.id);
+    assert.strictEqual(store.listConnectionsForDisplay().length, 0, 'cleaned up imported connections');
+
     console.log('ALL CHECKS PASSED');
     app.exit(0);
   } catch (err) {

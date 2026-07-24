@@ -19,6 +19,7 @@
 
     <section class="toolbar">
       <button id="addConnectionBtn" type="button" class="primary">Add connection</button>
+      <button id="importConnectionsBtn" type="button">Import from file&hellip;</button>
     </section>
 
     <table id="connectionsTable">
@@ -153,6 +154,35 @@
           <span class="spacer"></span>
           <button id="cancelConnectionBtn" type="button">Cancel</button>
           <button id="saveConnectionBtn" type="button" class="primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="importModal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Import connections</h2>
+        <p class="subtitle">
+          Load a JSON manifest of connections (name, URL, kind, auth type, tags). Matching is by
+          URL&#43;kind: an entry that matches an existing connection updates it; the rest are added.
+          Nothing is ever deleted.
+        </p>
+        <p class="field-hint">
+          The manifest holds no passwords or tokens &mdash; keep it in a repo safely. If your
+          connections share one basic-auth login, enter it once below and it&rsquo;s applied to every
+          imported basic-auth connection; leave it blank to fill each credential in afterward.
+        </p>
+
+        <label for="importSharedUsername">Shared username (optional)</label>
+        <input id="importSharedUsername" type="text" placeholder="Applied to all basic-auth connections" />
+        <label for="importSharedPassword">Shared password (optional)</label>
+        <input id="importSharedPassword" type="password" placeholder="Applied to all basic-auth connections" />
+
+        <div id="importResult" class="test-result"></div>
+
+        <div class="modal-actions">
+          <span class="spacer"></span>
+          <button id="cancelImportBtn" type="button">Cancel</button>
+          <button id="chooseImportFileBtn" type="button" class="primary">Choose file &amp; import</button>
         </div>
       </div>
     </div>
