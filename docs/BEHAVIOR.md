@@ -110,3 +110,38 @@ There is a third outcome worth stating explicitly, because it isn't an error at 
 `Promise.allSettled` + skip-non-fulfilled loop that guards candidate scanning. That candidate is
 neither returned nor reported — it is simply absent from the results, which a caller should not
 read as "checked and found unrelated."
+
+## `export_panel_csv` resolution: render width, not time range
+
+`export_panel_csv` has two internal paths, and which one runs decides how the exported
+resolution is controlled — a distinction that used to be invisible from the result (issues
+[#109](https://github.com/misterbisson/timebuddy-incident-investigator/issues/109) and
+[#111](https://github.com/misterbisson/timebuddy-incident-investigator/issues/111)).
+
+- **Direct export** (`transformationsApplied: false`) — this server's own `/api/ds/query`
+  call, used for a panel with no Grafana-side transformations, or when no browser
+  (screenshotter) is available. Its resolution is governed by `maxDataPoints` (config
+  `MAX_DATA_POINTS`, default 2000), substituted into `$__interval` in the query text. Passing
+  `renderWidth` here does nothing; the result's `warnings` say so.
+- **Browser render** (`transformationsApplied: true`) — a hidden browser driven to Grafana's
+  own Inspect → Data view, used for a panel *with* transformations. Here the effective
+  resolution is a function of **the rendered viewport's pixel width**, not the time range:
+  Grafana derives the panel's `maxDataPoints` from its rendered pixel width, so a *wider*
+  render yields *more* (finer) buckets over the same window. This is why a 5-minute-over-28-days
+  extraction is a single call, not a chunk-and-stitch job — you just render wide enough. The
+  window width was hardcoded at 1400px; `renderWidth` (px, clamped 200–16384 by
+  `clampRenderWidth`) now exposes it. To target a bucket, aim for roughly one pixel of width per
+  point you want: 28 days at 5-minute is ~8064 points, so `renderWidth: ~8100`.
+
+Either way, each returned file now carries a `resolution` object —
+`{points, effectiveBucketMs, spanMs, approximate}` — so a caller can see the bucket width
+directly instead of computing `(end-start)/(count-1)` from the rows. `approximate` is `false`
+for the direct path (measured from the observed sample timestamps, median gap) and `true` for
+the browser path (derived from the row count over the requested window, since Grafana's
+captured CSV time column is locale-formatted and not reliably re-parseable here).
+
+> **Unverified on real hardware.** The `renderWidth`→`maxDataPoints` relationship, and whether
+> Chromium honors very wide offscreen content sizes, are asserted from Grafana's/Electron's
+> documented behavior, not measured — the engine's test suite has no live Grafana or Electron.
+> The `16384` ceiling is a generous guardrail, not a measured limit. Confirm the finer-buckets
+> effect on a real instance before relying on a specific `renderWidth`.

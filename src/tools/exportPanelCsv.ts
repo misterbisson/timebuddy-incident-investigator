@@ -13,12 +13,15 @@ import {
 } from './panelInvocation.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import { MAX_RENDER_WIDTH, MIN_RENDER_WIDTH } from '../security/limits.js';
+import type { ExportResolution } from '../export/csv.js';
 
 interface SavedCsvFile {
   path: string;
   refId?: string;
   rows: number;
   columns: string[];
+  resolution?: ExportResolution;
 }
 
 /**
@@ -70,8 +73,14 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         'URL (its own "from"/"to" and var-* overrides are used automatically) or an alert-rule URL (resolved to its ' +
         'linked dashboard+panel, the same way get_alert_context does), or dashboardUid + panelId + connection ' +
         'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). Returns ' +
-        '"files": each with its absolute path, row count, and column names - always mention the path so the person ' +
-        'can open the actual file. In the direct-export fallback, if a table panel\'s data comes back as more than ' +
+        '"files": each with its absolute path, row count, column names, and (when the file has a time axis) a ' +
+        '"resolution" object - {points, effectiveBucketMs, spanMs, approximate} - so you can tell a coarse export ' +
+        'from a fine one without deriving bucket width from the row spacing yourself. "approximate" is false when the ' +
+        'bucket is measured from observed timestamps (this server\'s own direct export) and true when it is derived ' +
+        'from the row count over the requested window (the browser-render path, whose time column is not reliably ' +
+        're-parseable). For a panel WITH transformations, resolution is a function of the render viewport width, not ' +
+        'the time range - pass "renderWidth" to render wider and pull finer buckets over a wide window in one call. ' +
+        'Always mention the path so the person can open the actual file. In the direct-export fallback, if a table panel\'s data comes back as more than ' +
         'one frame (more than one query, or a datasource splitting one query into several), each frame is written to ' +
         'its own file rather than guessed-merged - see the "note" field when that happens. A "$__all" selection on a ' +
         'variable Grafana computes live (e.g. an InfluxQL "SHOW TAG VALUES" query variable) is best-effort ' +
@@ -87,11 +96,19 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         fromMs: z.number().optional().describe('Window start, epoch ms - overrides the url\'s own "from" when both are given'),
         toMs: z.number().optional().describe('Window end, epoch ms - overrides the url\'s own "to" when both are given'),
         variableOverrides: z.record(z.string(), z.array(z.string())).optional().describe('Variable name -> value(s); overrides the url\'s own var-* params per-name when both are given'),
+        renderWidth: z.number().optional().describe(
+          'Browser-render path only: the render viewport width in pixels (clamped to ' +
+            `${MIN_RENDER_WIDTH}-${MAX_RENDER_WIDTH}). This governs the exported resolution for a panel WITH ` +
+            'transformations - Grafana derives maxDataPoints from the rendered pixel width, so a wider render yields ' +
+            'finer buckets over the same window (e.g. pass ~8100 to pull ~5-minute data over a 28-day window in one ' +
+            'call). Defaults to 1400 when omitted. Has NO effect on the direct-export path (panels without ' +
+            'transformations); the result "warnings" say so if you pass it and that path is taken.',
+        ),
         connection: z.string().optional().describe('Connection id to use, when multiple Grafana connections are configured'),
       },
       annotations: { readOnlyHint: true, title: 'Export panel CSV' },
     },
-    async ({ url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, connection }) => {
+    async ({ url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, renderWidth, connection }) => {
       let resolvedConnectionId: string | undefined;
       let resolvedDashboardUid: string | undefined;
       try {
@@ -111,12 +128,18 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
             },
           );
 
-          const generated = await generatePanelCsv(screenshotter, config, inv);
+          const generated = await generatePanelCsv(screenshotter, config, inv, { renderWidth });
 
           const files: SavedCsvFile[] = [];
           for (const f of generated.files) {
             const path = await saveCsv(f.content, config, inv.dashboardUid, inv.panelId, f.suffix);
-            files.push({ path, ...(f.refId ? { refId: f.refId } : {}), rows: f.rows, columns: f.columns });
+            files.push({
+              path,
+              ...(f.refId ? { refId: f.refId } : {}),
+              rows: f.rows,
+              columns: f.columns,
+              ...(f.resolution ? { resolution: f.resolution } : {}),
+            });
           }
 
           const resultUrl = dashboardUrlFor(registry, inv.connectionId, inv.dashboardUid, { panelId: inv.panelId, fromMs: inv.fromMs, toMs: inv.toMs, variables: inv.overrides });
@@ -149,6 +172,8 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
             ...(Object.keys(generated.errors).length > 0 ? { errors: generated.errors } : {}),
             ...(generated.unresolvedAllVariables.length > 0 ? { unresolvedAllVariables: generated.unresolvedAllVariables } : {}),
             ...(generated.captureNote ? { transformCaptureNote: generated.captureNote } : {}),
+            ...(generated.renderWidth !== undefined ? { renderWidth: generated.renderWidth } : {}),
+            ...(generated.warnings.length > 0 ? { warnings: generated.warnings } : {}),
             ...(files.length > 1 ? { note: MULTI_FILE_NOTE } : {}),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(resultOut, config.redactionPatterns)) }] };

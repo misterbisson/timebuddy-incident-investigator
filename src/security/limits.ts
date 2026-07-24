@@ -134,3 +134,37 @@ export function clampScreenshotDimension(requested: number, fallback: number): {
   // warning "Requested undefinedxundefined was clamped to 1600x900".
   return { value, clamped: !fellBack && value !== requested };
 }
+
+/**
+ * Bounds for export_panel_csv's optional `renderWidth`. This governs the width
+ * of the hidden BrowserWindow the browser-render CSV path uses, which in turn
+ * governs the exported resolution (Grafana derives maxDataPoints from rendered
+ * pixel width — see docs/BEHAVIOR.md). The ceiling is deliberately far above
+ * MAX_SCREENSHOT_PX: pulling fine resolution over a wide window is exactly the
+ * point of #111 (5-minute over 28 days ≈ 8064 points ≈ an 8000px render), and
+ * unlike screenshot_panel this path never captures the window bitmap to a PNG —
+ * `capturePage()`/`toPNG()` are never called on it — so the dominant per-call
+ * allocation that MAX_SCREENSHOT_PX exists to bound isn't present here. The
+ * floor matches the screenshot floor: a narrower render lays out no legible panel.
+ *
+ * NOTE: the exact width→maxDataPoints relationship, and whether Chromium
+ * honors very wide content sizes for an offscreen window, are unverified on
+ * real Electron hardware (see #111). Treat the ceiling as a generous guardrail,
+ * not a measured limit.
+ */
+export const MIN_RENDER_WIDTH = 200;
+export const MAX_RENDER_WIDTH = 16384;
+
+/**
+ * Clamps a caller-supplied renderWidth, or returns undefined when none was
+ * given (or a non-finite value was) so the caller leaves the screenshotter's
+ * own default width in place rather than forcing a number onto it. Mirrors
+ * clampScreenshotDimension's clamped-flag contract so the tool can warn when it
+ * used a width other than the one asked for.
+ */
+export function clampRenderWidth(requested: number | undefined): { value: number; clamped: boolean } | undefined {
+  if (requested === undefined || !Number.isFinite(requested)) return undefined;
+  const rounded = Math.round(requested);
+  const value = Math.min(Math.max(rounded, MIN_RENDER_WIDTH), MAX_RENDER_WIDTH);
+  return { value, clamped: value !== rounded };
+}

@@ -3,6 +3,7 @@ import type { ConnectionsSource } from '../grafana/registry.js';
 import { ConnectionRegistry } from '../grafana/registry.js';
 import { loadConfig } from '../config.js';
 import type { Screenshotter } from '../screenshot/types.js';
+import type { ExportResolution } from '../export/csv.js';
 import { dashboardUrlFor } from '../tools/shared.js';
 import { redact } from '../security/redact.js';
 import {
@@ -36,6 +37,8 @@ export interface PanelActionInput extends PanelInvocationInput {
   /** Screenshot only; defaults to the same 1600x900 screenshot_panel uses. */
   width?: number;
   height?: number;
+  /** CSV export only; browser-render path viewport width — see export_panel_csv's renderWidth. */
+  renderWidth?: number;
 }
 
 export interface PanelScreenshotResult {
@@ -51,6 +54,7 @@ export interface PanelCsvFileResult {
   refId?: string;
   rows: number;
   columns: string[];
+  resolution?: ExportResolution;
 }
 
 export interface PanelCsvResult {
@@ -120,7 +124,7 @@ export function createPanelActions(
         verb: 'export',
         windowLabel: 'export',
       });
-      const generated = await generatePanelCsv(screenshotter, config, inv);
+      const generated = await generatePanelCsv(screenshotter, config, inv, { renderWidth: input.renderWidth });
       const files: PanelCsvFileResult[] = generated.files.map((f) => ({
         suggestedFilename: suggestName(inv, 'csv', config.redactionPatterns, f.suffix),
         content: f.content,
@@ -132,6 +136,7 @@ export function createPanelActions(
         // describes — the MCP export_panel_csv path redacts its whole result
         // for the same reason.
         columns: f.columns.map((c) => redact(c, config.redactionPatterns)),
+        ...(f.resolution ? { resolution: f.resolution } : {}),
       }));
       const meta = redact(
         {
@@ -147,6 +152,8 @@ export function createPanelActions(
           ...(Object.keys(generated.errors).length > 0 ? { errors: generated.errors } : {}),
           ...(generated.unresolvedAllVariables.length > 0 ? { unresolvedAllVariables: generated.unresolvedAllVariables } : {}),
           ...(generated.captureNote ? { transformCaptureNote: generated.captureNote } : {}),
+          ...(generated.renderWidth !== undefined ? { renderWidth: generated.renderWidth } : {}),
+          ...(generated.warnings.length > 0 ? { warnings: generated.warnings } : {}),
           ...(files.length > 1 ? { note: MULTI_FILE_NOTE } : {}),
         },
         config.redactionPatterns,
