@@ -88,22 +88,34 @@ export function clampRunList<T>(runs: T[]): { list: T[]; total: number; truncate
  * truncated answer, it takes the server down mid-investigation and loses every
  * other in-flight tool call with it.
  *
- * 3840 is deliberately well past any real need (the default capture is
- * 1600x900) and applies to both axes rather than as a 4K aspect box, so a tall
- * table panel can still be captured in full. The floor matters too: a window a
- * few pixels wide renders no legible chart, and Electron rejects a
- * non-positive dimension outright, so a bad-but-plausible 0 would surface as
- * an opaque Electron error rather than a usable image.
+ * The per-axis bound is deliberately well past any real need (the default
+ * capture is 1600x900) and applies to each axis independently rather than as a
+ * 4K aspect box, so a tall table panel can still be captured in full. The floor
+ * matters too: a window a few pixels wide renders no legible chart, and Electron
+ * rejects a non-positive dimension outright, so a bad-but-plausible 0 would
+ * surface as an opaque Electron error rather than a usable image.
  *
- * These are *logical* pixels, not device pixels: screenshotter.js passes them
- * to BrowserWindow with useContentSize, so on a 2x display the backing bitmap
- * is 4x the pixel count these numbers suggest. 3840x3840 is ~14.7 Mpx here but
- * ~59 Mpx of backing store there. That still bounds the allocation, which is
- * the point — but it means the headroom is scale-factor-dependent rather than
- * fixed, so don't read these as a byte budget. See issue #96.
+ * The per-axis bound alone isn't enough, though: two independent 8192 axes would
+ * permit a 6.7e7-px capture, far past what the square worst case ever was. So a
+ * gentler *area* cap (MAX_SCREENSHOT_AREA_PX) rides alongside it and is the real
+ * ceiling on the allocation — it lets a genuinely tall table through (e.g.
+ * 1600x10000) while still bounding total pixels, which a symmetric per-axis wall
+ * couldn't do without also forbidding that table. See clampScreenshotArea and
+ * issue #96; 1.6e7 is the value that issue settled on as binding gently (it's
+ * ~the old 3840x3840 square worst case, just redistributable between the axes).
+ *
+ * These are all *logical* pixels, not device pixels: screenshotter.js passes them
+ * to BrowserWindow with useContentSize, so on a 2x display the backing bitmap is
+ * 4x the pixel count these numbers suggest. A 1.6e7-px capture is ~16 Mpx here
+ * but ~64 Mpx of backing store there. The area cap bounds the *logical* worst
+ * case; the backing store on top of it stays scale-factor-dependent, so don't
+ * read these as a byte budget. Fully bounding the device-pixel backing store
+ * (dividing by screen.getPrimaryDisplay().scaleFactor) is the open, unverified
+ * half of #96 — it needs measurement on real hi-dpi Electron hardware first.
  */
 export const MIN_SCREENSHOT_PX = 200;
-export const MAX_SCREENSHOT_PX = 3840;
+export const MAX_SCREENSHOT_PX = 8192;
+export const MAX_SCREENSHOT_AREA_PX = 1.6e7;
 
 /**
  * Clamps rather than rejects, matching clampMaxDataPoints: a slightly
@@ -133,4 +145,30 @@ export function clampScreenshotDimension(requested: number, fallback: number): {
   // path reports `value !== undefined` as a clamp and emits the nonsense
   // warning "Requested undefinedxundefined was clamped to 1600x900".
   return { value, clamped: !fellBack && value !== requested };
+}
+
+/**
+ * The area backstop applied *after* both axes are per-axis-clamped: if their
+ * product still exceeds MAX_SCREENSHOT_AREA_PX, both are scaled down by the same
+ * factor so the capture keeps its aspect ratio while its total pixel count
+ * (hence the process allocation this whole file exists to bound) fits. Scaling
+ * both preserves aspect; scaling only the larger axis would distort the panel.
+ *
+ * Only ever shrinks — a request already within the area is returned untouched
+ * (`clamped: false`) — and never below MIN_SCREENSHOT_PX on either axis, though
+ * in practice anything over the area cap is far above the floor. The floor guard
+ * is belt-and-suspenders against a pathological aspect ratio (e.g. 8192x200).
+ */
+export function clampScreenshotArea(
+  width: number,
+  height: number,
+): { width: number; height: number; clamped: boolean } {
+  const area = width * height;
+  if (area <= MAX_SCREENSHOT_AREA_PX) return { width, height, clamped: false };
+  const scale = Math.sqrt(MAX_SCREENSHOT_AREA_PX / area);
+  return {
+    width: Math.max(MIN_SCREENSHOT_PX, Math.round(width * scale)),
+    height: Math.max(MIN_SCREENSHOT_PX, Math.round(height * scale)),
+    clamped: true,
+  };
 }

@@ -94,7 +94,12 @@ function createScreenshotter() {
         await loadWithTimeout(win, url, timeoutMs);
         await waitForNetworkIdle(activity, timeoutMs);
         const image = await win.webContents.capturePage();
-        return image.toPNG();
+        // Report the size actually captured, not the size requested: the OS,
+        // useContentSize adjustment, or a display's scale factor can all land
+        // the image at different dimensions, and the caller echoes these back
+        // as the authoritative width/height (see issue #96 and CapturePanelResult).
+        const size = image.getSize();
+        return { png: image.toPNG(), width: size.width, height: size.height };
       } finally {
         activity.dispose();
         win.destroy();

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { clampScreenshotDimension, clampSeriesPoints, MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../src/security/limits.js';
+import {
+  clampScreenshotArea,
+  clampScreenshotDimension,
+  clampSeriesPoints,
+  MAX_SCREENSHOT_AREA_PX,
+  MAX_SCREENSHOT_PX,
+  MIN_SCREENSHOT_PX,
+} from '../src/security/limits.js';
 import type { Config } from '../src/config.js';
 import type { QuerySeries } from '../src/query/executor.js';
 
@@ -54,18 +61,46 @@ describe('screenshot dimension bounds', () => {
   // fully reinstating #73's OOM (50000x50000 is 2.5e9 px). These two lines are
   // what make the rest of the file mean anything.
   it('are the values this guard was sized for', () => {
-    expect(MAX_SCREENSHOT_PX).toBe(3840);
+    expect(MAX_SCREENSHOT_PX).toBe(8192);
     expect(MIN_SCREENSHOT_PX).toBe(200);
+    expect(MAX_SCREENSHOT_AREA_PX).toBe(1.6e7);
   });
 
   // Independent of the constants entirely, so a future retune has to stay
-  // inside something defensible rather than silently unbounding the guard.
+  // inside something defensible rather than silently unbounding the guard. The
+  // per-axis clamp alone no longer bounds total pixels (two 8192 axes = 67 Mpx),
+  // so the area backstop is what has to hold the line — assert the *composed*
+  // result, the same order generatePanelPng applies them.
   it('keep any request inside a sane absolute range, whatever the constants become', () => {
-    expect(clampScreenshotDimension(1e9, 1600).value).toBeLessThanOrEqual(4000);
-    expect(clampScreenshotDimension(1e9, 1600).value * clampScreenshotDimension(1e9, 900).value)
-      .toBeLessThanOrEqual(16_000_000);
+    expect(clampScreenshotDimension(1e9, 1600).value).toBeLessThanOrEqual(8192);
+    const w = clampScreenshotDimension(1e9, 1600).value;
+    const h = clampScreenshotDimension(1e9, 900).value;
+    const area = clampScreenshotArea(w, h);
+    expect(area.width * area.height).toBeLessThanOrEqual(16_000_000);
     expect(clampScreenshotDimension(0, 1600).value).toBeGreaterThan(0);
     expect(clampScreenshotDimension(-1e9, 1600).value).toBeGreaterThan(0);
+  });
+});
+
+describe('clampScreenshotArea', () => {
+  it('leaves an in-budget pair untouched', () => {
+    expect(clampScreenshotArea(1600, 900)).toEqual({ width: 1600, height: 900, clamped: false });
+  });
+
+  it('scales an over-budget pair down proportionally, preserving aspect ratio', () => {
+    const r = clampScreenshotArea(8192, 8192);
+    expect(r.clamped).toBe(true);
+    expect(r.width).toBe(r.height); // square in → square out
+    expect(r.width * r.height).toBeLessThanOrEqual(MAX_SCREENSHOT_AREA_PX);
+    // Just under the cap after scaling, not far under — it shrinks only as much as needed.
+    expect(r.width * r.height).toBeGreaterThan(MAX_SCREENSHOT_AREA_PX * 0.98);
+  });
+
+  it('keeps a tall, narrow panel fully within the area cap', () => {
+    const r = clampScreenshotArea(1600, 10000); // 1.6e7 exactly — the boundary case
+    expect(r.width * r.height).toBeLessThanOrEqual(MAX_SCREENSHOT_AREA_PX);
+    expect(r.width).toBeGreaterThanOrEqual(MIN_SCREENSHOT_PX);
+    expect(r.height).toBeGreaterThanOrEqual(MIN_SCREENSHOT_PX);
   });
 });
 
