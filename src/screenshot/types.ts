@@ -13,6 +13,19 @@ export interface CapturePanelRequest {
   timeoutMs: number;
 }
 
+export interface CapturePanelResult {
+  png: Buffer;
+  /**
+   * The content size the captured image actually came back at, read from the
+   * NativeImage (image.getSize()) rather than assumed from the requested
+   * width/height. The OS, useContentSize adjustment, or the area backstop can
+   * all land the window at a different size than asked for, so this is the only
+   * honest source for "what was really captured" — see issue #96.
+   */
+  width: number;
+  height: number;
+}
+
 export interface ExportPanelCsvRequest {
   /** The full (chrome-included) dashboard/panel URL with the Inspect/Data drawer pre-opened — see grafana/urlBuilder.ts's buildInspectDataUrl. */
   url: string;
@@ -43,7 +56,7 @@ export interface ExportPanelCsvResult {
  * simply isn't registered when this isn't supplied.
  */
 export interface Screenshotter {
-  capturePanel(req: CapturePanelRequest): Promise<Buffer>;
+  capturePanel(req: CapturePanelRequest): Promise<CapturePanelResult>;
   /**
    * Reproduces a panel's actual on-screen data — including Grafana-side
    * panel transformations (joins, reduces, renames, ...) that this server's

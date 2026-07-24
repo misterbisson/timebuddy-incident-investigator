@@ -61,7 +61,10 @@ function timeseriesQueryDsResponse(): DsQueryResponse {
 }
 
 function noScreenshotter(): Screenshotter {
-  return { capturePanel: vi.fn(async () => Buffer.from('')), exportPanelCsv: vi.fn(async () => ({})) };
+  return {
+    capturePanel: vi.fn(async (req: Parameters<Screenshotter['capturePanel']>[0]) => ({ png: Buffer.from(''), width: req.width, height: req.height })),
+    exportPanelCsv: vi.fn(async () => ({})),
+  };
 }
 
 const WINDOW = { fromMs: 0, toMs: 60_000 };
@@ -70,7 +73,11 @@ describe('createPanelActions.screenshot', () => {
   it('captures the panel and returns the PNG, a suggested filename, and redacted metadata', async () => {
     state.dashboard = timeseriesDashboard();
     const png = Buffer.from('PNGBYTES');
-    const capturePanel = vi.fn(async () => png);
+    const capturePanel = vi.fn(async (req: Parameters<Screenshotter['capturePanel']>[0]) => ({
+      png,
+      width: req.width,
+      height: req.height,
+    }));
     const actions = createPanelActions(connections, {}, { capturePanel, exportPanelCsv: vi.fn(async () => ({})) });
 
     const res = await actions.screenshot({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
@@ -98,7 +105,7 @@ describe('createPanelActions.screenshot', () => {
       },
       meta: {},
     };
-    const actions = createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(async () => Buffer.from('PNG')), exportPanelCsv: vi.fn() });
+    const actions = createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(async (req: Parameters<Screenshotter['capturePanel']>[0]) => ({ png: Buffer.from('PNG'), width: req.width, height: req.height })), exportPanelCsv: vi.fn() });
 
     const res = await actions.screenshot({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
 

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import type { Screenshotter } from '../screenshot/types.js';
-import { MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../security/limits.js';
+import { MAX_SCREENSHOT_AREA_PX, MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../security/limits.js';
 import { dashboardUrlFor, recordActivity, toolErrorResult } from './shared.js';
 import {
   DEFAULT_SCREENSHOT_HEIGHT,
@@ -57,9 +57,11 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
         "model) see the panel, but the person you're talking to may not see inline image content the same way you " +
         'do, depending on how they\'re connected to you - always mention the savedTo path in your response so they ' +
         'can open the actual file themselves, not just your description of it. ' +
-        `"width"/"height" are each clamped to ${MIN_SCREENSHOT_PX}-${MAX_SCREENSHOT_PX}px; if that changed what you asked ` +
-        'for, the result carries a "warnings" array saying so and the returned "width"/"height" are the dimensions ' +
-        'actually captured - read those rather than assuming your requested size was used. ' +
+        `"width"/"height" are each clamped to ${MIN_SCREENSHOT_PX}-${MAX_SCREENSHOT_PX}px, and their product to ` +
+        `${(MAX_SCREENSHOT_AREA_PX / 1e6).toFixed(0)} Mpx (a very tall/wide panel is scaled down to fit, keeping its ` +
+        'aspect ratio); if either changed what you asked for, the result carries a "warnings" array saying so. The ' +
+        'returned "width"/"height" are the dimensions the capture actually came back at (observed from the image ' +
+        'itself), which can differ from what you requested - read those rather than assuming your requested size was used. ' +
         'Note: unlike every other tool here, the image is NOT passed through the redaction layer - that only ' +
         'understands text - so anything visible on the panel itself (legend values, axis labels, annotation text) ' +
         'reaches the model as-is.',
@@ -122,11 +124,11 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             title: inv.panel.title,
             type: inv.panel.type,
             window: { fromMs: inv.fromMs, toMs: inv.toMs },
-            // The dimensions *asked of* the capture after clamping, not the
-            // ones originally requested — and deliberately not described as
-            // the dimensions captured: capturePanel returns only a Buffer, so
-            // nothing here observes the window's real content size, which the
-            // OS or useContentSize can still adjust. See issue #96.
+            // The dimensions the capture actually came back at, observed from
+            // the returned image (image.getSize()) rather than asserted from
+            // the requested-then-clamped values — the OS, useContentSize, the
+            // area cap, or a display's scale factor can all land the window at
+            // a different content size than asked for. See issue #96.
             width,
             height,
             savedTo,

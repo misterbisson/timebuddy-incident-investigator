@@ -10,11 +10,14 @@ import { mergeVariableOverrides, substituteTargetFields } from '../dashboards/va
 import { buildDsQueryTarget, executeQueryWindow } from '../query/executor.js';
 import {
   clampMaxDataPoints,
+  clampScreenshotArea,
   clampScreenshotDimension,
   enforceWindowLimit,
+  MAX_SCREENSHOT_AREA_PX,
   MAX_SCREENSHOT_PX,
   MIN_SCREENSHOT_PX,
 } from '../security/limits.js';
+import { Semaphore } from '../util/semaphore.js';
 import { buildSeriesColumnNames, frameToCsv, neutralizeCsvDocument, neutralizeFormula, seriesToCsv } from '../export/csv.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildInspectDataUrl, buildSoloPanelUrl } from '../grafana/urlBuilder.js';
@@ -165,17 +168,44 @@ export async function resolvePanelInvocation(
 
 export interface GeneratedPng {
   png: Buffer;
-  /** Dimensions actually asked of the capture after clamping — read these, not the requested ones. */
+  /**
+   * The dimensions the capture actually came back at — the size the
+   * screenshotter observed (image.getSize()), not the requested-then-clamped
+   * values it was asked for. Read these: the OS/useContentSize/scale factor can
+   * land the window at a different size than requested (issue #96).
+   */
   width: number;
   height: number;
   warnings: string[];
 }
 
 /**
+ * Caps concurrent BrowserWindow captures. `config.maxConcurrency` previously
+ * gated only outgoing Grafana HTTP requests (grafana/client.ts); the capture
+ * path — which allocates a whole BrowserWindow plus a PNG buffer in this same
+ * process — went through no gate at all, so N parallel screenshot_panel calls
+ * could each allocate a max-area bitmap at once and reintroduce exactly the
+ * memory pressure the per-call clamp removes (issue #96, part 3). Keyed by the
+ * limit so all captures sharing a maxConcurrency share one gate; a process only
+ * ever has one config value, so in practice that's a single gate.
+ */
+const captureGates = new Map<number, Semaphore>();
+function captureGate(maxConcurrency: number): Semaphore {
+  let gate = captureGates.get(maxConcurrency);
+  if (!gate) {
+    gate = new Semaphore(maxConcurrency);
+    captureGates.set(maxConcurrency, gate);
+  }
+  return gate;
+}
+
+/**
  * Builds the d-solo panel URL and captures it as a PNG, clamping the requested
  * dimensions immediately before the capture (the only path into capturePanel,
- * whose BrowserWindow lives in this same process). Shared by screenshot_panel
- * and the Activity window's "Capture screenshot" button.
+ * whose BrowserWindow lives in this same process): per-axis first, then a
+ * gentler total-area cap. The capture runs behind a concurrency gate so
+ * simultaneous captures can't each allocate a max-size bitmap at once. Shared by
+ * screenshot_panel and the Activity window's "Capture screenshot" button.
  */
 export async function generatePanelPng(
   screenshotter: Screenshotter,
@@ -198,14 +228,25 @@ export async function generatePanelPng(
         'clamped size, so its aspect ratio may differ from what you asked for.',
     );
   }
-  const png = await screenshotter.capturePanel({
-    url: soloUrl,
-    headers: { Authorization: buildAuthHeader(inv.rawConnection) },
-    width: w.value,
-    height: h.value,
-    timeoutMs: config.screenshotTimeoutMs,
-  });
-  return { png, width: w.value, height: h.value, warnings };
+  const area = clampScreenshotArea(w.value, h.value);
+  if (area.clamped) {
+    warnings.push(
+      `Capture area ${w.value}x${h.value} (${(w.value * h.value / 1e6).toFixed(1)} Mpx) exceeded the ` +
+        `${(MAX_SCREENSHOT_AREA_PX / 1e6).toFixed(0)} Mpx cap and was scaled to ${area.width}x${area.height} to ` +
+        "bound the capture's memory footprint. The image keeps its aspect ratio at the smaller size.",
+    );
+  }
+  const result = await captureGate(config.maxConcurrency).run(() =>
+    screenshotter.capturePanel({
+      url: soloUrl,
+      headers: { Authorization: buildAuthHeader(inv.rawConnection) },
+      width: area.width,
+      height: area.height,
+      timeoutMs: config.screenshotTimeoutMs,
+    }),
+  );
+  // Return the observed size, not the requested-then-clamped one — see GeneratedPng.
+  return { png: result.png, width: result.width, height: result.height, warnings };
 }
 
 /**
