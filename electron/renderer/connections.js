@@ -277,6 +277,65 @@ async function renderConnections() {
 $('addConnectionBtn').addEventListener('click', openModalForAdd);
 $('cancelConnectionBtn').addEventListener('click', closeModal);
 
+function openImportModal() {
+  $('importSharedUsername').value = '';
+  $('importSharedPassword').value = '';
+  $('importResult').textContent = '';
+  $('importResult').className = 'test-result';
+  $('importModal').classList.remove('hidden');
+}
+
+function closeImportModal() {
+  $('importModal').classList.add('hidden');
+}
+
+function describeImportSummary(summary) {
+  const parts = [
+    `Imported ${summary.total} connection${summary.total === 1 ? '' : 's'} ` +
+      `(${summary.created} added, ${summary.updated} updated).`,
+  ];
+  if (summary.configured > 0) {
+    parts.push(`${summary.configured} have a stored credential.`);
+  }
+  if (summary.needSecret.length > 0) {
+    const names = summary.needSecret.map((c) => c.name).join(', ');
+    parts.push(`Still need a credential (edit each to add one): ${names}.`);
+  }
+  return parts.join(' ');
+}
+
+$('importConnectionsBtn').addEventListener('click', openImportModal);
+$('cancelImportBtn').addEventListener('click', closeImportModal);
+
+$('chooseImportFileBtn').addEventListener('click', async () => {
+  const resultEl = $('importResult');
+  resultEl.textContent = 'Choose a file…';
+  resultEl.className = 'test-result';
+
+  const response = await window.connectionManager.import({
+    sharedUsername: $('importSharedUsername').value.trim(),
+    sharedPassword: $('importSharedPassword').value,
+  });
+
+  if (response.canceled) {
+    resultEl.textContent = '';
+    return;
+  }
+  if (response.error) {
+    // A validation failure carries the full problem list; show each on its own
+    // line so a multi-mistake manifest is fixable in one pass.
+    resultEl.textContent = response.problems?.length
+      ? `Import failed:\n- ${response.problems.join('\n- ')}`
+      : `Import failed: ${response.error}`;
+    resultEl.className = 'test-result status-warn';
+    return;
+  }
+
+  resultEl.textContent = describeImportSummary(response.summary);
+  resultEl.className = 'test-result status-ok';
+  await renderConnections();
+});
+
 $('saveConnectionBtn').addEventListener('click', async () => {
   const draft = readDraft();
   if (!draft.name || !draft.url) {

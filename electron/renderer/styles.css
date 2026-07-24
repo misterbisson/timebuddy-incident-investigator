@@ -28,6 +28,8 @@ h1 {
 }
 
 .toolbar {
+  display: flex;
+  gap: 8px;
   margin-bottom: 12px;
 }
 
@@ -226,6 +228,9 @@ td button + button {
   font-size: 12px;
   margin-top: 12px;
   min-height: 16px;
+  /* Import results list one problem per line; keep the breaks rather than
+     collapsing them to spaces. Single-line test messages are unaffected. */
+  white-space: pre-line;
 }
 
 .modal-actions {

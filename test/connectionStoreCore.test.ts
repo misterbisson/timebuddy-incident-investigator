@@ -12,11 +12,15 @@ const require = createRequire(import.meta.url);
 const {
   CorruptStoreError,
   SecretFormatError,
+  ImportValidationError,
   STORE_FILE_MODE,
   describeSecretFailure,
   readJsonFile,
   writeJsonFileAtomic,
   buildEngineConnections,
+  normalizeUrlForKey,
+  validateImportManifest,
+  planImport,
 } = require('../electron/src/connectionStoreCore.js');
 
 let dir: string;
@@ -316,5 +320,146 @@ describe('describeSecretFailure', () => {
     // what the GUI status and README both tell the user to do.
     expect(describeSecretFailure(new Error('safeStorage said no'))).toContain('keychain');
     expect(describeSecretFailure(new SecretFormatError('x'))).not.toContain('keychain');
+  });
+});
+
+describe('normalizeUrlForKey', () => {
+  // Must match upsertConnection's own `.replace(/\/+$/, '')`, or a trailing
+  // slash in the manifest and none on disk would key as two connections.
+  it('strips trailing slashes and surrounding whitespace', () => {
+    expect(normalizeUrlForKey('https://g.example.com/')).toBe('https://g.example.com');
+    expect(normalizeUrlForKey('https://g.example.com///')).toBe('https://g.example.com');
+    expect(normalizeUrlForKey('  https://g.example.com  ')).toBe('https://g.example.com');
+  });
+
+  // Deliberately not canonicalized further — matching is against the exact
+  // stored string, so "already exists" stays predictable.
+  it('does not lowercase the host', () => {
+    expect(normalizeUrlForKey('https://G.Example.com')).toBe('https://G.Example.com');
+  });
+});
+
+describe('validateImportManifest', () => {
+  const grafana = (extra: Record<string, unknown> = {}) => ({
+    kind: 'grafana',
+    name: 'prod',
+    url: 'https://g.example.com',
+    authType: 'bearer',
+    ...extra,
+  });
+
+  it('accepts a well-formed manifest and normalizes each entry', () => {
+    const { connections } = validateImportManifest({
+      version: 1,
+      connections: [
+        grafana({ tags: [' prod ', 'us', ''], matchHosts: ['lb.internal'] }),
+        { kind: 'graylog', name: 'logs', url: 'https://gl.example.com', authType: 'token', streamName: 'APIGW' },
+      ],
+    });
+    expect(connections).toHaveLength(2);
+    expect(connections[0]).toMatchObject({
+      kind: 'grafana',
+      name: 'prod',
+      url: 'https://g.example.com',
+      authType: 'bearer',
+      tlsVerify: true, // defaulted when absent
+      tags: ['prod', 'us'], // trimmed, empties dropped
+      matchHosts: ['lb.internal'],
+    });
+    expect(connections[1]).toMatchObject({ kind: 'graylog', authType: 'token', streamName: 'APIGW' });
+  });
+
+  it('accepts a bare array as well as a { connections } object', () => {
+    const { connections } = validateImportManifest([grafana()]);
+    expect(connections).toHaveLength(1);
+  });
+
+  it('preserves an explicit tlsVerify: false rather than defaulting it to true', () => {
+    const { connections } = validateImportManifest([grafana({ tlsVerify: false })]);
+    expect(connections[0].tlsVerify).toBe(false);
+  });
+
+  // The load-bearing guardrail: the manifest is meant to live in a repo, so an
+  // inline credential is a hard error, not something silently stored.
+  it('rejects inline secrets (token/password)', () => {
+    expect(() => validateImportManifest([grafana({ token: 'glsa_leaked' })])).toThrow(ImportValidationError);
+    expect(() => validateImportManifest([grafana({ token: 'glsa_leaked' })])).toThrow(/must not contain secrets/);
+    expect(() => validateImportManifest([grafana({ password: 'hunter2' })])).toThrow(/password/);
+  });
+
+  it('rejects a duplicate url+kind within the file (the idempotency key)', () => {
+    expect(() =>
+      validateImportManifest([grafana({ name: 'a' }), grafana({ name: 'b', url: 'https://g.example.com/' })]),
+    ).toThrow(/duplicate url\+kind/);
+  });
+
+  // Same url, different kind is NOT a duplicate — a Grafana and a Graylog can
+  // legitimately share a hostname.
+  it('allows the same url across different kinds', () => {
+    const { connections } = validateImportManifest([
+      { kind: 'grafana', name: 'g', url: 'https://same.example.com', authType: 'bearer' },
+      { kind: 'graylog', name: 'l', url: 'https://same.example.com', authType: 'token' },
+    ]);
+    expect(connections).toHaveLength(2);
+  });
+
+  it('rejects an authType that is wrong for the kind', () => {
+    // 'token' is a Graylog authType, not a Grafana one.
+    expect(() => validateImportManifest([grafana({ authType: 'token' })])).toThrow(/authType/);
+    // 'bearer' is a Grafana authType, not a Graylog one.
+    expect(() =>
+      validateImportManifest([{ kind: 'graylog', name: 'l', url: 'https://gl.example.com', authType: 'bearer' }]),
+    ).toThrow(/authType/);
+  });
+
+  it('collects every problem, not just the first', () => {
+    let caught: any;
+    try {
+      validateImportManifest([{ kind: 'nope' }, { kind: 'grafana' }]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ImportValidationError);
+    // one bad kind + (missing name, url, authType) on the second = 4 problems
+    expect(caught.problems.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('rejects a manifest with no connections', () => {
+    expect(() => validateImportManifest({ version: 1, connections: [] })).toThrow(/no connections/);
+  });
+
+  it('rejects an unsupported version', () => {
+    expect(() => validateImportManifest({ version: 2, connections: [grafana()] })).toThrow(/version/);
+  });
+
+  it('rejects a non-array connections field', () => {
+    expect(() => validateImportManifest({ version: 1, connections: 'nope' })).toThrow(/connections/);
+  });
+});
+
+describe('planImport', () => {
+  const entry = (kind: string, url: string, name = 'x') => ({ kind, name, url, authType: 'bearer' });
+
+  it('marks an entry create when nothing matches its url+kind', () => {
+    const { plan } = planImport([entry('grafana', 'https://new.example.com')], []);
+    expect(plan[0]).toMatchObject({ action: 'create', existingId: undefined });
+  });
+
+  it('marks an entry update and carries the existing id when url+kind matches', () => {
+    const existing = [{ id: 'conn-1', kind: 'grafana', url: 'https://g.example.com' }];
+    const { plan } = planImport([entry('grafana', 'https://g.example.com/')], existing);
+    expect(plan[0]).toMatchObject({ action: 'update', existingId: 'conn-1' });
+  });
+
+  it('treats a connection with no kind as grafana (pre-kind connections)', () => {
+    const existing = [{ id: 'old', url: 'https://g.example.com' }]; // no kind field
+    const { plan } = planImport([entry('grafana', 'https://g.example.com')], existing);
+    expect(plan[0]).toMatchObject({ action: 'update', existingId: 'old' });
+  });
+
+  it('does not match across kinds on the same url', () => {
+    const existing = [{ id: 'graylog-1', kind: 'graylog', url: 'https://same.example.com' }];
+    const { plan } = planImport([entry('grafana', 'https://same.example.com')], existing);
+    expect(plan[0]).toMatchObject({ action: 'create' });
   });
 });
