@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.4.1...v0.5.0) (2026-07-24)
+
+
+### Features
+
+* add list_firing_alerts tool ([#141](https://github.com/misterbisson/timebuddy-incident-investigator/issues/141)) ([4790fdd](https://github.com/misterbisson/timebuddy-incident-investigator/commit/4790fdd82c7b5db6afbfcdd2df4648d3c31cf602))
+* **electron:** import connections from a metadata-only JSON manifest ([#140](https://github.com/misterbisson/timebuddy-incident-investigator/issues/140)) ([030aa90](https://github.com/misterbisson/timebuddy-incident-investigator/commit/030aa900a7d38516d4d1035678e27e8fc1b58d9e))
+
+
+### Bug Fixes
+
+* **ci:** backfill release assets via gh upload, not electron-builder publish ([#135](https://github.com/misterbisson/timebuddy-incident-investigator/issues/135)) ([5c0d0f4](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5c0d0f48107c271b8ba914765c5f363ce4b5b56e))
+* **investigate:** make Graylog log evidence mandatory and link-traceable ([#137](https://github.com/misterbisson/timebuddy-incident-investigator/issues/137)) ([75a93ab](https://github.com/misterbisson/timebuddy-incident-investigator/commit/75a93ab81003838b461db5c71fccaa5e3d892db3))
+* **investigate:** require connection-scope check before claiming blast-radius containment ([#142](https://github.com/misterbisson/timebuddy-incident-investigator/issues/142)) ([5d3ffaa](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5d3ffaafcfbaaf67f1ef4aabfc430aec4448e5e8))
+
 ## [0.4.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.4.0...v0.4.1) (2026-07-22)
 
 
