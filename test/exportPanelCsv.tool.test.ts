@@ -353,6 +353,100 @@ describe('export_panel_csv tool with a screenshotter', () => {
   });
 });
 
+describe('export_panel_csv resolution + renderWidth (issues #109/#111)', () => {
+  it('reports the exact effective resolution of a direct timeseries export', async () => {
+    const client = fakeClient(timeseriesDashboard(), timeseriesQueryDsResponse);
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 60000, connection: 'test' })) as {
+      content: Array<{ text: string }>;
+    };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    // Sample times are 0 and 60000 → one 60s bucket, observed exactly.
+    expect(parsed.files[0].resolution).toEqual({ points: 2, effectiveBucketMs: 60000, spanMs: 60000, approximate: false });
+  });
+
+  it('threads renderWidth to the browser render path and echoes the width used', async () => {
+    const client = fakeClient(timeseriesDashboard(), vi.fn(timeseriesQueryDsResponse));
+    const exportPanelCsv = vi.fn(async (req: Parameters<Screenshotter['exportPanelCsv']>[0]) => {
+      expect(req.width).toBe(8100);
+      return { csv: Buffer.from('Time,Mean\r\n2026-07-01 00:00:00,1\r\n2026-07-01 00:05:00,2\r\n') };
+    });
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', {
+      dashboardUid: 'reqs',
+      panelId: 2,
+      fromMs: 0,
+      toMs: 60000,
+      renderWidth: 8100,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(exportPanelCsv).toHaveBeenCalledOnce();
+    expect(parsed.transformationsApplied).toBe(true);
+    expect(parsed.renderWidth).toBe(8100);
+    expect(parsed.warnings).toBeUndefined();
+    // Browser CSV → approximate resolution derived from the 2 data rows over the window.
+    expect(parsed.files[0].resolution).toMatchObject({ points: 2, approximate: true });
+  });
+
+  it('clamps an oversized renderWidth and warns', async () => {
+    const client = fakeClient(timeseriesDashboard(), vi.fn(timeseriesQueryDsResponse));
+    const exportPanelCsv = vi.fn(async (req: Parameters<Screenshotter['exportPanelCsv']>[0]) => {
+      expect(req.width).toBe(16384);
+      return { csv: Buffer.from('Time,Mean\r\n2026-07-01 00:00:00,1\r\n') };
+    });
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', {
+      dashboardUid: 'reqs',
+      panelId: 2,
+      fromMs: 0,
+      toMs: 60000,
+      renderWidth: 999999,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.renderWidth).toBe(16384);
+    expect(parsed.warnings.join(' ')).toMatch(/clamped to 16384/);
+  });
+
+  it('warns that renderWidth had no effect when the direct path is taken', async () => {
+    const client = fakeClient(timeseriesDashboard(), timeseriesQueryDsResponse);
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('export_panel_csv', {
+      dashboardUid: 'reqs',
+      panelId: 2,
+      fromMs: 0,
+      toMs: 60000,
+      renderWidth: 8100,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.transformationsApplied).toBe(false);
+    expect(parsed.renderWidth).toBeUndefined();
+    expect(parsed.warnings.join(' ')).toMatch(/renderWidth was supplied but had no effect/);
+  });
+});
+
 describe('export_panel_csv formula-injection disclosure', () => {
   it('reports formulaNeutralized: true for this server\'s own export, and writes a neutralized cell', async () => {
     const queryDs = vi.fn(timeseriesQueryDsResponse);
