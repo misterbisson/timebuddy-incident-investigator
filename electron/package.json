@@ -1,6 +1,6 @@
 {
   "name": "timebuddy-connection-manager",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Desktop app for timebuddy-incident-investigator: one binary that's a Grafana connection manager (GUI) and the MCP server itself (--mcp-server flag). Connection-manager UI and auth flow adapted from Time Buddy (github.com/Liquescent-Development/time-buddy) — see NOTICE.md.",
   "author": "Casey Bisson",
   "private": true,
