@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerScreenshotPanel } from '../src/tools/screenshotPanel.js';
-import { MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../src/security/limits.js';
+import { MAX_SCREENSHOT_AREA_PX, MAX_SCREENSHOT_PX, MIN_SCREENSHOT_PX } from '../src/security/limits.js';
 import type { Config, GrafanaConnection } from '../src/config.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { CapturePanelRequest, Screenshotter } from '../src/screenshot/types.js';
@@ -56,7 +56,10 @@ function harness() {
   const captured: CapturePanelRequest[] = [];
   const capturePanel = vi.fn(async (req: CapturePanelRequest) => {
     captured.push(req);
-    return Buffer.from('fake-png');
+    // Echo the requested size back as the "observed" size, so existing
+    // assertions that the result reports the clamped dimensions still hold; a
+    // dedicated test overrides this to prove the result echoes observed, not requested.
+    return { png: Buffer.from('fake-png'), width: req.width, height: req.height };
   });
   const screenshotter = { capturePanel, exportPanelCsv: vi.fn() } as unknown as Screenshotter;
   const client = { getDashboard: vi.fn(async () => dashboard()) } as unknown as GrafanaClient;
@@ -88,11 +91,25 @@ describe('screenshot_panel dimension clamping', () => {
 
   // The reported crash: an unbounded dimension reaches BrowserWindow, which
   // allocates a pixel buffer of that size inside the MCP server's own process.
-  it('clamps an absurd dimension before it can reach capturePanel', async () => {
+  // One absurd axis with a modest other axis is bounded by the per-axis cap
+  // (their product is well under the area cap, so no further scaling).
+  it('clamps an absurd single dimension to the per-axis cap before it reaches capturePanel', async () => {
+    const { call, captured } = harness();
+    await call('screenshot_panel', { ...baseArgs, width: 100_000, height: 900 });
+    expect(captured[0]!.width).toBe(MAX_SCREENSHOT_PX);
+    expect(captured[0]!.height).toBe(900);
+  });
+
+  // Both axes absurd: per-axis clamping alone would still permit an 8192×8192 ≈
+  // 67 Mpx buffer, so the area cap scales both down (keeping aspect ratio) to
+  // bound the actual allocation. This is issue #96 part 1.
+  it('scales both axes down to the area cap when their product is still too large', async () => {
     const { call, captured } = harness();
     await call('screenshot_panel', { ...baseArgs, width: 100_000, height: 100_000 });
-    expect(captured[0]!.width).toBe(MAX_SCREENSHOT_PX);
-    expect(captured[0]!.height).toBe(MAX_SCREENSHOT_PX);
+    expect(captured[0]!.width).toBeLessThanOrEqual(MAX_SCREENSHOT_PX);
+    expect(captured[0]!.width * captured[0]!.height).toBeLessThanOrEqual(MAX_SCREENSHOT_AREA_PX);
+    // A square request stays square after area-scaling.
+    expect(captured[0]!.width).toBe(captured[0]!.height);
   });
 
   it('clamps a zero or negative dimension up to the floor, rather than letting Electron reject it', async () => {
@@ -116,6 +133,33 @@ describe('screenshot_panel dimension clamping', () => {
     expect(result.height).toBe(900);
     expect(result.warnings).toHaveLength(1);
     expect((result.warnings as string[])[0]).toContain(String(MAX_SCREENSHOT_PX));
+  });
+
+  // Issue #96 part 2: the result echoes the size the capture actually came back
+  // at (observed from the image), not the size it was asked for. Proven by a
+  // screenshotter that reports a size unrelated to the request.
+  it('reports the observed capture size, not the requested one', async () => {
+    const captured: CapturePanelRequest[] = [];
+    const capturePanel = vi.fn(async (req: CapturePanelRequest) => {
+      captured.push(req);
+      return { png: Buffer.from('fake-png'), width: 1234, height: 567 };
+    });
+    const screenshotter = { capturePanel, exportPanelCsv: vi.fn() } as unknown as Screenshotter;
+    const client = { getDashboard: vi.fn(async () => dashboard()) } as unknown as GrafanaClient;
+    const { server, call } = fakeServer();
+    registerScreenshotPanel(server, { registry: fakeRegistry(connections, client), config: config(), screenshotter } as never);
+
+    const result = payload(await call('screenshot_panel', { ...baseArgs, width: 1600, height: 900, connection: 'test' }));
+    expect(captured[0]).toMatchObject({ width: 1600, height: 900 });
+    expect(result.width).toBe(1234);
+    expect(result.height).toBe(567);
+  });
+
+  it('warns when the area cap scaled the capture down', async () => {
+    const { call } = harness();
+    const result = payload(await call('screenshot_panel', { ...baseArgs, width: 8000, height: 8000 }));
+    const warnings = (result.warnings as string[]) ?? [];
+    expect(warnings.some((w) => /Mpx cap/.test(w))).toBe(true);
   });
 
   // Guards the fallback direction. An earlier draft treated any non-finite
@@ -145,7 +189,10 @@ describe('screenshot_panel result, persistence, and errors', () => {
   function setup(activityLog?: ActivityLog) {
     const png = Buffer.from('fake-png');
     const client = { getDashboard: vi.fn(async () => dashboard()) } as unknown as GrafanaClient;
-    const screenshotter = { capturePanel: vi.fn(async () => png), exportPanelCsv: vi.fn() } as unknown as Screenshotter;
+    const screenshotter = {
+      capturePanel: vi.fn(async (req: CapturePanelRequest) => ({ png, width: req.width, height: req.height })),
+      exportPanelCsv: vi.fn(),
+    } as unknown as Screenshotter;
     const { server, call } = fakeServer();
     registerScreenshotPanel(server, { registry: fakeRegistry(connections, client), config: config(), screenshotter, activityLog } as never);
     return { call, png };
@@ -197,5 +244,42 @@ describe('screenshot_panel result, persistence, and errors', () => {
     const text = result.content.find((c) => c.type === 'text')!.text!;
     expect(text).toContain('panelId');
     expect(text).toContain('grafana.example.com');
+  });
+});
+
+// Issue #96 part 3: each capture allocates a BrowserWindow + PNG buffer in this
+// process, and maxConcurrency previously gated only Grafana HTTP calls, not
+// captures. The gate is keyed by maxConcurrency, so a value no other test uses
+// gives this one its own isolated gate.
+describe('screenshot_panel capture concurrency', () => {
+  it('never runs more concurrent captures than maxConcurrency', async () => {
+    const MAX_CONC = 3; // unique across this file, so this test gets its own gate
+    let active = 0;
+    let peak = 0;
+    let release!: () => void;
+    const gateOpen = new Promise<void>((r) => {
+      release = r;
+    });
+    const capturePanel = vi.fn(async (req: CapturePanelRequest) => {
+      active++;
+      peak = Math.max(peak, active);
+      await gateOpen; // hold every capture open until we've launched them all
+      active--;
+      return { png: Buffer.from('p'), width: req.width, height: req.height };
+    });
+    const screenshotter = { capturePanel, exportPanelCsv: vi.fn() } as unknown as Screenshotter;
+    const client = { getDashboard: vi.fn(async () => dashboard()) } as unknown as GrafanaClient;
+    const { server, call } = fakeServer();
+    const cfg = { ...config(), maxConcurrency: MAX_CONC };
+    registerScreenshotPanel(server, { registry: fakeRegistry(connections, client), config: cfg, screenshotter } as never);
+
+    const calls = Array.from({ length: 6 }, () => call('screenshot_panel', { ...baseArgs, connection: 'test' }));
+    // Let the gate fill up, then release everything.
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    await Promise.all(calls);
+
+    expect(peak).toBe(MAX_CONC); // filled the gate but never exceeded it
+    expect(capturePanel).toHaveBeenCalledTimes(6);
   });
 });
