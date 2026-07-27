@@ -21,7 +21,7 @@ import { buildInspectDataUrl, buildSoloPanelUrl } from '../grafana/urlBuilder.js
 import { resolveRenderWindow } from './renderDashboard.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
-import { resolveTargetDatasource, resolveToolClient } from './shared.js';
+import { resolveGotoUrl, resolveTargetDatasource, resolveToolClient } from './shared.js';
 
 /**
  * The default capture size, shared by screenshot_panel's zod schema and the
@@ -100,13 +100,19 @@ export async function resolvePanelInvocation(
   let urlToRaw: string | undefined;
 
   if (input.url) {
-    const parsed = parseGrafanaUrl(input.url);
+    const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, input.url);
+    const parsed = parseGrafanaUrl(resolvedUrl);
     if (parsed.type === 'dashboard') {
       dashboardUid = parsed.uid;
       panelId = panelId ?? parsed.panelId;
       urlVars = parsed.vars;
       urlFromRaw = parsed.from;
       urlToRaw = parsed.to;
+    } else if (parsed.type === 'folder') {
+      throw new Error(
+        `"${input.url}" is a folder link, not a dashboard - ${toolName} needs one specific panel to ${verb}. Use ` +
+          'list_folder_dashboards to see what\'s in this folder, then pass one of its dashboard/panel links.',
+      );
     } else {
       // Alert-rule URL: resolve its linked dashboard+panel the same way
       // get_alert_context does. That tool only warns when a rule has no

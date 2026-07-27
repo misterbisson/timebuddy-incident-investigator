@@ -63,6 +63,18 @@ export function buildInspectDataUrl(
   return url.toString();
 }
 
+/**
+ * Builds a clickable Grafana folder URL (`/dashboards/f/:uid/:slug`) — the
+ * folder-browsing counterpart to buildDashboardUrl, for list_folder_dashboards
+ * to link back to the folder it just listed. Grafana resolves `/dashboards/f/:uid`
+ * by UID alone the same way `/d/:uid` does, so a slugless path still works;
+ * pass the folder's own title (slugified) when known for a prettier link.
+ */
+export function buildFolderUrl(baseUrl: string, folderUid: string, slug?: string): string {
+  const path = `/dashboards/f/${encodeURIComponent(folderUid)}${slug ? `/${encodeURIComponent(slug)}` : ''}`;
+  return `${baseUrl.replace(/\/+$/, '')}${path}`;
+}
+
 export function buildSoloPanelUrl(
   baseUrl: string,
   dashboardUid: string,

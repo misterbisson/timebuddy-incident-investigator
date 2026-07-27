@@ -8,6 +8,7 @@ import { registerGetAlertContext } from './getAlertContext.js';
 import { registerListFiringAlerts } from './listFiringAlerts.js';
 import { registerGetProductContext } from './getProductContext.js';
 import { registerFetchDashboard } from './fetchDashboard.js';
+import { registerListFolderDashboards } from './listFolderDashboards.js';
 import { registerResolvePanelQueries } from './resolvePanelQueries.js';
 import { registerExecuteQueryWindow } from './executeQueryWindow.js';
 import { registerRenderDashboard } from './renderDashboard.js';
@@ -39,6 +40,7 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerListFiringAlerts(server, ctx);
   registerGetProductContext(server, ctx);
   registerFetchDashboard(server, ctx);
+  registerListFolderDashboards(server, ctx);
   registerResolvePanelQueries(server, ctx);
   registerExecuteQueryWindow(server, ctx);
   registerRenderDashboard(server, ctx);

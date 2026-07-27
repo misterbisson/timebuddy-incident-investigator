@@ -65,8 +65,9 @@ Three things shape almost every module here and are easy to miss from a partial 
 
 1. **The Grafana client is a closed allowlist, not a passthrough.** `src/grafana/client.ts`
    exposes exactly the read-only endpoints the tools need (search, dashboard-by-uid,
-   datasources, `/api/ds/query`, alertmanager alerts, ruler rules, annotations, and the
-   Prometheus/Loki label-values *resources* proxy) and nothing else. Note the last one:
+   datasources, `/api/ds/query`, alertmanager alerts, ruler rules, annotations, short-URL
+   resolution, and the Prometheus/Loki label-values *resources* proxy) and nothing else. Note
+   the last one:
    `getPrometheusLabelValues`/`getLokiLabelValues` hit `/api/datasources/uid/:uid/resources/...`,
    which *could* be a generic datasource-proxy escape hatch — they deliberately aren't. Each
    builds a fixed path to exactly the label-values resource and nothing else, so the boundary

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildAuthHeader, GrafanaClient } from '../src/grafana/client.js';
+import { buildAuthHeader, GrafanaApiError, GrafanaClient } from '../src/grafana/client.js';
 import type { Config, GrafanaConnection } from '../src/config.js';
 
 function connection(overrides: Partial<GrafanaConnection>): GrafanaConnection {
@@ -109,5 +109,73 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
     const client = new GrafanaClient(connection({ token: 't' }), config());
 
     await expect(client.getPrometheusLabelValues('prom1', 'instance', 'up')).resolves.toEqual([]);
+  });
+});
+
+describe('GrafanaClient.resolveShortUrl', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetch(body: unknown, status = 200): { urls: string[] } {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return new Response(JSON.stringify(body), { status });
+      }),
+    );
+    return { urls };
+  }
+
+  it('hits GET /api/short-urls/:uid and returns the resolved path', async () => {
+    const { urls } = stubFetch({ uid: 'AT76wBvGk', path: 'd/abc123/my-dashboard?orgId=1&viewPanel=3', lastSeenAt: 1780000000000 });
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    const result = await client.resolveShortUrl('AT76wBvGk');
+
+    expect(result).toEqual({ uid: 'AT76wBvGk', path: 'd/abc123/my-dashboard?orgId=1&viewPanel=3', lastSeenAt: 1780000000000 });
+    expect(new URL(urls[0]!).pathname).toBe('/api/short-urls/AT76wBvGk');
+  });
+
+  it('throws a GrafanaApiError with status 404 for an unknown/expired short-link uid', async () => {
+    stubFetch({ message: 'shorturl not found' }, 404);
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    const err = await client.resolveShortUrl('dead123').catch((e) => e);
+    expect(err).toBeInstanceOf(GrafanaApiError);
+    expect((err as InstanceType<typeof GrafanaApiError>).status).toBe(404);
+  });
+});
+
+describe('GrafanaClient.searchFolders', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetch(body: unknown, status = 200): { urls: string[] } {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return new Response(JSON.stringify(body), { status });
+      }),
+    );
+    return { urls };
+  }
+
+  it('searches with type=dash-folder scoped to a folderUid', async () => {
+    const { urls } = stubFetch([{ uid: 'sub1', title: 'Subfolder', type: 'dash-folder', tags: [], url: '/dashboards/f/sub1/subfolder' }]);
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    const results = await client.searchFolders({ folderUid: 'infra-status' });
+
+    expect(results).toHaveLength(1);
+    const url = new URL(urls[0]!);
+    expect(url.pathname).toBe('/api/search');
+    expect(url.searchParams.get('type')).toBe('dash-folder');
+    expect(url.searchParams.get('folderUIDs')).toBe('infra-status');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseGrafanaTimeExpr, parseGrafanaUrl } from '../src/alerts/urlParser.js';
+import { parseGotoShortId, parseGrafanaTimeExpr, parseGrafanaUrl } from '../src/alerts/urlParser.js';
 
 describe('parseGrafanaUrl', () => {
   it('parses a dashboard URL with panel, vars, and time range', () => {
@@ -54,6 +54,21 @@ describe('parseGrafanaUrl', () => {
     expect(() => parseGrafanaUrl('https://grafana.example.com/explore')).toThrow(/Unrecognized/);
   });
 
+  it('parses a folder browse URL', () => {
+    const parsed = parseGrafanaUrl('https://grafana.example.com/dashboards/f/infra-status/infra-status?orgId=1');
+    expect(parsed).toEqual({ type: 'folder', uid: 'infra-status', slug: 'infra-status' });
+  });
+
+  it('parses a folder browse URL with no slug', () => {
+    const parsed = parseGrafanaUrl('https://grafana.example.com/dashboards/f/infra-status');
+    expect(parsed).toEqual({ type: 'folder', uid: 'infra-status', slug: undefined });
+  });
+
+  it('does not mistake a folder URL for a dashboard URL', () => {
+    const parsed = parseGrafanaUrl('https://grafana.example.com/dashboards/f/infra-status/infra-status');
+    expect(parsed.type).toBe('folder');
+  });
+
   it('handles a dashboard URL with no query params', () => {
     const parsed = parseGrafanaUrl('https://grafana.example.com/d/xyz/slug');
     expect(parsed).toEqual({ type: 'dashboard', uid: 'xyz', slug: 'slug', panelId: undefined, vars: {}, from: undefined, to: undefined });
@@ -78,6 +93,28 @@ describe('parseGrafanaUrl', () => {
     const parsed = parseGrafanaUrl(url);
     expect(parsed.vars).toEqual({ region: ['us-east-1'] });
     expect(parsed.rejectedVars).toEqual(['region']);
+  });
+});
+
+describe('parseGotoShortId', () => {
+  it('extracts the short id from a /goto/<id> URL', () => {
+    expect(parseGotoShortId('https://grafana.example.com/goto/AT76wBvGk?orgId=1')).toBe('AT76wBvGk');
+  });
+
+  it('extracts the short id with no query string', () => {
+    expect(parseGotoShortId('https://grafana.example.com/goto/AT76wBvGk')).toBe('AT76wBvGk');
+  });
+
+  it('returns undefined for a dashboard URL', () => {
+    expect(parseGotoShortId('https://grafana.example.com/d/abc123/my-dashboard')).toBeUndefined();
+  });
+
+  it('returns undefined for a folder URL', () => {
+    expect(parseGotoShortId('https://grafana.example.com/dashboards/f/infra-status/infra-status')).toBeUndefined();
+  });
+
+  it('returns undefined for an alert-rule URL', () => {
+    expect(parseGotoShortId('https://grafana.example.com/alerting/grafana/rule-uid-1/view')).toBeUndefined();
   });
 });
 

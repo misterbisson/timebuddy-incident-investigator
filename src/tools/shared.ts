@@ -1,12 +1,13 @@
 import { z } from 'zod';
-import type { GrafanaClient } from '../grafana/client.js';
+import { GrafanaApiError, type GrafanaClient } from '../grafana/client.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import type { DashboardJson, TemplateVariable } from '../grafana/types.js';
 import { findPanel, type ResolvedPanel, type ResolvedTarget } from '../dashboards/panelQueries.js';
 import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards/variables.js';
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
-import { buildDashboardUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
+import { parseGotoShortId } from '../alerts/urlParser.js';
+import { buildDashboardUrl, buildFolderUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
 import { buildGraylogSearchUrl } from '../graylog/urlBuilder.js';
 import type { GraylogClient } from '../graylog/client.js';
 import type { LogConnectionRegistry } from '../graylog/registry.js';
@@ -71,6 +72,54 @@ export function dashboardUrlFor(
   const connection = registry.list().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildDashboardUrl(connection.url, dashboardUid, opts);
+}
+
+/** Folder counterpart to dashboardUrlFor — builds a clickable folder-browse URL for a connection a tool already resolved. */
+export function folderUrlFor(
+  registry: ConnectionRegistry,
+  connectionId: string,
+  folderUid: string,
+  slug?: string,
+): string | undefined {
+  const connection = registry.list().find((c) => c.id === connectionId);
+  if (!connection) return undefined;
+  return buildFolderUrl(connection.url, folderUid, slug);
+}
+
+/**
+ * Rewrites a Grafana `/goto/<shortId>` share short-link (Share -> Link ->
+ * Shorten URL) to the canonical absolute URL it stands for, via the
+ * connection's short-URL API — before parseGrafanaUrl, which has no notion of
+ * short links, ever sees it. Every other URL shape passes through unchanged
+ * (parseGotoShortId returns undefined for them, so this never pays for a
+ * network round-trip on the common case). Distinguishes a dead short-link
+ * (Grafana prunes/expires these server-side) from any other failure, since a
+ * 404 here means "this link is gone", not "unrecognized URL shape" — the
+ * error a bare parseGrafanaUrl call would produce for the same dead link if
+ * this were skipped and the raw `/goto/...` path fell through to it.
+ */
+export async function resolveGotoUrl(
+  registry: ConnectionRegistry,
+  client: GrafanaClient,
+  connectionId: string,
+  rawUrl: string,
+): Promise<string> {
+  const shortId = parseGotoShortId(rawUrl);
+  if (!shortId) return rawUrl;
+  const connection = registry.list().find((c) => c.id === connectionId);
+  if (!connection) return rawUrl; // unreachable in practice: connectionId was just resolved from this same registry
+  try {
+    const { path } = await client.resolveShortUrl(shortId);
+    return `${connection.url.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+  } catch (err) {
+    if (err instanceof GrafanaApiError && err.status === 404) {
+      throw new Error(
+        `Grafana short link "${shortId}" has expired or was not found (Grafana prunes short URLs server-side over ` +
+          'time) — ask for a fresh share link, or use the dashboard\'s canonical "/d/:uid" URL instead.',
+      );
+    }
+    throw err;
+  }
 }
 
 /**

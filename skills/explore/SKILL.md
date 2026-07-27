@@ -74,6 +74,11 @@ person who has never successfully used this tool won't reach for it under real p
      directly — some folders publish a "Timebuddy knowledge" dashboard with product-specific
      context (owner, runbook links, known false positives). An empty `matches` array just means
      nothing's been published there yet, not an error.
+   - If they paste a Grafana **folder** link instead of a dashboard/panel one (runbooks/wikis
+     often link a whole folder, e.g. `/dashboards/f/:uid/...`, sometimes shortened via a
+     `/goto/<id>` share link), use `list_folder_dashboards` rather than `fetch_dashboard` (which
+     errors on a folder link) — it lists what's directly inside, and `recursive: true` flattens
+     an entire subtree when they want to browse further than one level.
 
 Every dashboard/panel you mention — in `alertBackedDashboards`, `matches`, or anywhere else —
 comes with a ready-to-click `url` field already pointing at the right connection and panel. Include

@@ -72,14 +72,14 @@ your saved credentials, so **Allow** it.
 
 ## MCP tools
 
-17 read-only tools, grouped by what they're for. You rarely call them by name — the skills
+19 read-only tools, grouped by what they're for. You rarely call them by name — the skills
 above chain them. **See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.**
 
 | Group | Tools |
 | --- | --- |
 | **Ingest & resolve** | `get_alert_context`, `list_firing_alerts`, `get_product_context`, `fetch_dashboard`, `resolve_panel_queries` |
 | **Query & analyze** | `execute_query_window`, `render_dashboard`, `validate_baseline`, `summarize_findings` |
-| **Correlate & discover** | `find_related_dashboards`, `detect_correlated_anomalies`, `discover_influxdb_schema`, `discover_label_values` |
+| **Correlate & discover** | `find_related_dashboards`, `list_folder_dashboards`, `detect_correlated_anomalies`, `discover_influxdb_schema`, `discover_label_values` |
 | **Export & capture** | `export_panel_csv`, `screenshot_panel` *(Electron app only)* |
 | **Logs** | `search_logs`, `list_log_sources`, `correlate_logs` |
 | **Utility** | `list_datasources` |
@@ -284,7 +284,8 @@ Every tool takes an optional `connection` parameter (a connection id). When it's
   `validate_baseline`, `get_product_context`, and the primary panel of
   `detect_correlated_anomalies`) fall back to the sole configured connection, otherwise error
   out listing the available ids — they never guess. `fetch_dashboard`, `render_dashboard`,
-  `export_panel_csv`, and `screenshot_panel` additionally auto-detect from a URL's host first.
+  `export_panel_csv`, `screenshot_panel`, and `list_folder_dashboards` additionally auto-detect
+  from a URL's host first.
 - **Fan-out tools** (`find_related_dashboards`, `list_datasources`, and
   `detect_correlated_anomalies` when auto-discovering) query every connection and merge
   results, each tagged with its `connectionId`. Passing `connection` narrows them to one.

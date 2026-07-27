@@ -50,6 +50,8 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
         'inline plus a clickable link to the same panel/window in Grafana. Pass a dashboard/panel URL (its own ' +
         '"from"/"to" and var-* overrides are used automatically) or an alert-rule URL (resolved to its linked ' +
         "dashboard+panel, the same way get_alert_context does; errors if that rule has no linked panel). " +
+        'A "/goto/<id>" share short-link is resolved to its canonical link first, transparently (a dead/pruned ' +
+        'one errors distinctly from an unrecognized URL); a folder link errors - use list_folder_dashboards instead. ' +
         'Alternatively pass dashboardUid + panelId + connection directly, with fromMs/toMs (falls back to the ' +
         "dashboard's own saved default time range if omitted). Best used selectively on the 1-2 panels that matter " +
         "for an investigation, not as a substitute for execute_query_window/render_dashboard's structured data. " +
