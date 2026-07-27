@@ -69,7 +69,9 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         'formulaNeutralizationNote. Pass a dashboard/panel ' +
         'URL (its own "from"/"to" and var-* overrides are used automatically) or an alert-rule URL (resolved to its ' +
         'linked dashboard+panel, the same way get_alert_context does), or dashboardUid + panelId + connection ' +
-        'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). Returns ' +
+        'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). A ' +
+        '"/goto/<id>" share short-link is resolved to its canonical link first, transparently (a dead/pruned one ' +
+        'errors distinctly from an unrecognized URL); a folder link errors - use list_folder_dashboards instead. Returns ' +
         '"files": each with its absolute path, row count, and column names - always mention the path so the person ' +
         'can open the actual file. In the direct-export fallback, if a table panel\'s data comes back as more than ' +
         'one frame (more than one query, or a datasource splitting one query into several), each frame is written to ' +

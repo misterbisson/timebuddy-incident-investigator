@@ -180,6 +180,13 @@ export async function resolveAlertContext(
       };
     }
 
+    if (parsed.type === 'folder') {
+      throw new Error(
+        `"${input.url}" is a folder link, not an alert - get_alert_context needs a specific alert/dashboard/panel. ` +
+          "Use list_folder_dashboards to see what's in this folder, then pass one of its dashboard/panel links.",
+      );
+    }
+
     // Alert-rule URL: fetch the rule to recover its dashboard/panel link,
     // labels, and query targets.
     const client = getClient(input.url);

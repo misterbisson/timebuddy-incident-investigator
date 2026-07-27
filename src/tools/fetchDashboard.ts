@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { parseGrafanaUrl } from '../alerts/urlParser.js';
 import { flattenPanels, resolvePanelDataLinks } from '../dashboards/panelQueries.js';
-import { dashboardUrlFor, resolveToolClient, toolErrorResult } from './shared.js';
+import { dashboardUrlFor, resolveGotoUrl, resolveToolClient, toolErrorResult } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -15,7 +15,10 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
       description:
         'Fetches a Grafana dashboard: its metadata, the flat list of panels (id, title, type), and its template ' +
         'variables. Pass a dashboard/panel or alert-rule URL (the connection is auto-detected from its host, the ' +
-        'same as render_dashboard/screenshot_panel/export_panel_csv) or a dashboardUid + connection directly. ' +
+        'same as render_dashboard/screenshot_panel/export_panel_csv) or a dashboardUid + connection directly. A ' +
+        '"/goto/<id>" share short-link (Grafana\'s "Share -> Link -> Shorten URL") is resolved to its canonical ' +
+        'link first, transparently; a dead/pruned short-link errors distinctly from an unrecognized URL. A folder ' +
+        'link ("/dashboards/f/:uid/...") errors - use list_folder_dashboards for that instead. ' +
         'Useful on its own to find a panel\'s id/type from its title before calling one of those other tools by ' +
         'name rather than id. Use resolve_panel_queries to get a specific panel\'s query targets with variables ' +
         'substituted (including its dataLinks, if hasDataLinks is true here). If more than one panel in this list ' +
@@ -39,9 +42,15 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
 
           let dashboardUid = inputDashboardUid;
           if (url) {
-            const parsed = parseGrafanaUrl(url);
+            const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, url);
+            const parsed = parseGrafanaUrl(resolvedUrl);
             if (parsed.type === 'dashboard') {
               dashboardUid = parsed.uid;
+            } else if (parsed.type === 'folder') {
+              throw new Error(
+                `"${url}" is a folder link, not a dashboard - fetch_dashboard needs one specific dashboard. Use ` +
+                  'list_folder_dashboards to see what\'s in this folder, then pass one of its dashboard links.',
+              );
             } else {
               // Alert-rule URL: resolve its linked dashboard the same way
               // get_alert_context/render_dashboard do.

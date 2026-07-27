@@ -5,7 +5,7 @@ three [skills](../README.md#skills) chain them for you. This page is for
 driving them directly (Claude Desktop or another MCP client without skill support), or for
 understanding exactly what a call returns.
 
-18 tools total. 17 are always registered; `screenshot_panel` is only present in the
+20 tools total. 19 are always registered; `screenshot_panel` is only present in the
 Electron app (it needs a browser to drive). Every tool takes an optional `connection`
 parameter — see [Multiple connections](../README.md#multiple-connections).
 
@@ -22,6 +22,13 @@ every call is audit-logged.
 | `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables — from a dashboard/panel/alert-rule URL (connection auto-detected) or a `dashboardUid`. Useful for finding a panel's id/type from its title before calling another tool. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 
+`fetch_dashboard`, `render_dashboard`, `export_panel_csv`, and `screenshot_panel` all accept
+a Grafana `/goto/<shortId>` share short-link ("Share → Link → Shorten URL") wherever they
+accept a URL — it's resolved to its canonical dashboard/panel link first, transparently, via
+the connection's short-URL API; an expired/pruned short-link errors distinctly ("expired or
+was not found") from an unrecognized URL shape. None of them accept a folder link
+(`/dashboards/f/:uid/...`) — see `list_folder_dashboards` below.
+
 ## Query & analyze
 
 | Tool | What it does |
@@ -36,6 +43,7 @@ every call is audit-logged.
 | Tool | What it does |
 | --- | --- |
 | `find_related_dashboards` | Reverse-index lookup: which other dashboards use a given metric or share label values with the alert. Also surfaces `alertBackedDashboards` and `knowledgeDashboards` (with their published product keys) as standing overviews, independent of any search term. |
+| `list_folder_dashboards` | List the dashboards and subfolders directly inside a Grafana folder — the MCP counterpart to opening a folder's browse page (`/dashboards/f/:uid/...`). Pass `recursive: true` to flatten every dashboard nested anywhere beneath it into `dashboards` (`subfolders` always stays direct-children-only). Use this when you only have a folder link and need to find the dashboard inside it. |
 | `detect_correlated_anomalies` | Rank candidate panels by deviation strength, label overlap, and anomaly-onset timing vs. the primary alert. When auto-discovering, checks one `scope` tier per call — `product` (default: the primary dashboard plus any ops/SLI dashboards and dependencies its Timebuddy knowledge panel declares, or the primary dashboard alone when none is published), then `connection`, then `all-connections` — so a caller can report each tier's result and only pay for a wider search when the narrower one didn't answer. |
 | `discover_influxdb_schema` | Query an InfluxDB datasource directly for its own measurement/field/tag schema — not dashboarded data. A last-resort fallback when `find_related_dashboards` finds nothing for a metric you have independent evidence should exist (the index only knows about metrics some panel already visualizes). Requires a `searchTerm`; there's no "list everything" mode by design. When it resolves to one measurement, also pass `tagKey` to enumerate that tag's actual values (`SHOW TAG VALUES`) — the concrete hosts/IPs panels aggregate across, so you can feed a real identifier into `search_logs` instead of inventing one. InfluxDB only, by design (it's an InfluxDB schema catalog); for the same host/IP enumeration on a Prometheus- or Loki-backed panel, use `discover_label_values`. |
 | `discover_label_values` | The datasource-agnostic counterpart to `discover_influxdb_schema`'s `tagKey` enumeration: given a `metric` and a `label` key, list that label's actual values, dispatching by datasource type — InfluxDB `SHOW TAG VALUES`, Prometheus `label_values(metric, label)`, Loki's label-values API. Same purpose as the InfluxDB path: surface the concrete hosts/IPs/instances a panel aggregates across so you can feed a real identifier into `search_logs` instead of inventing one — only values returned here are safe to search on. A datasource-level query failure is a hard error, not an empty list. |

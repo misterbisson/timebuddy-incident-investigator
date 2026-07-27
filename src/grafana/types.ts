@@ -119,6 +119,18 @@ export interface SearchResultItem {
   url: string;
 }
 
+/**
+ * `GET /api/short-urls/:uid` response — resolves a Grafana share short-link
+ * (`/goto/<uid>`, produced by "Share -> Link -> Shorten URL") to the canonical
+ * path it stands for. `path` is relative to the Grafana root (e.g.
+ * "d/abc123/my-dashboard?orgId=1&viewPanel=3"), never an absolute URL.
+ */
+export interface ShortUrlInfo {
+  uid: string;
+  path: string;
+  lastSeenAt: number;
+}
+
 export interface DatasourceInfo {
   uid: string;
   id: number;

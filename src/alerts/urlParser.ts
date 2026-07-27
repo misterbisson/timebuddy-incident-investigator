@@ -62,12 +62,24 @@ export interface ParsedAlertRuleUrl {
   ruleUid: string;
 }
 
-export type ParsedGrafanaUrl = ParsedDashboardUrl | ParsedAlertRuleUrl;
+export interface ParsedFolderUrl {
+  type: 'folder';
+  uid: string;
+  slug?: string;
+}
+
+export type ParsedGrafanaUrl = ParsedDashboardUrl | ParsedAlertRuleUrl | ParsedFolderUrl;
 
 /**
  * Parses the Grafana URL shapes an on-call engineer would actually click:
- * dashboard/panel links (`/d/:uid/:slug`, `/d-solo/:uid/:slug`) and
- * alert-rule links (`/alerting/grafana/:ruleUid/view`).
+ * dashboard/panel links (`/d/:uid/:slug`, `/d-solo/:uid/:slug`), alert-rule
+ * links (`/alerting/grafana/:ruleUid/view`), and folder-browse links
+ * (`/dashboards/f/:uid/:slug`). A `/goto/<shortId>` share short-link is
+ * deliberately not handled here: resolving one requires an authenticated
+ * request against the connection it came from, which this module — a pure
+ * parser with no I/O — doesn't do. See parseGotoShortId and shared.ts's
+ * resolveGotoUrl, which rewrites a goto link to its canonical form (one of
+ * the three shapes below) before this function ever sees it.
  */
 export function parseGrafanaUrl(rawUrl: string): ParsedGrafanaUrl {
   const url = new URL(rawUrl);
@@ -105,9 +117,34 @@ export function parseGrafanaUrl(rawUrl: string): ParsedGrafanaUrl {
     return { type: 'alert-rule', ruleUid: alertRuleMatch[1]! };
   }
 
+  // Checked after /d/ and /alerting/ (neither can ever match this shape, so
+  // ordering is not load-bearing) — Grafana's folder-browse page, listing the
+  // dashboards/subfolders directly inside one folder. See list_folder_dashboards.
+  const folderMatch = url.pathname.match(/\/dashboards\/f\/([^/]+)(?:\/([^/]+))?/);
+  if (folderMatch) {
+    const [, uid, slug] = folderMatch;
+    return { type: 'folder', uid: uid!, slug };
+  }
+
   throw new Error(
-    `Unrecognized Grafana URL: ${rawUrl} (expected a dashboard/panel link "/d/:uid/..." or an alert rule link "/alerting/grafana/:uid/view")`,
+    `Unrecognized Grafana URL: ${rawUrl} (expected a dashboard/panel link "/d/:uid/...", an alert rule link ` +
+      '"/alerting/grafana/:uid/view", or a folder link "/dashboards/f/:uid/...")',
   );
+}
+
+const GOTO_RE = /\/goto\/([^/?#]+)/;
+
+/**
+ * Extracts a Grafana share short-link's id from a `/goto/<shortId>` URL — the
+ * form produced by "Share -> Link -> Shorten URL" in Grafana's UI. Returns
+ * undefined for any other URL shape (including a dashboard/folder/alert-rule
+ * link parseGrafanaUrl already understands), so a caller can cheaply check
+ * "is this a goto link at all" before paying for the network round-trip
+ * resolving one requires (see shared.ts's resolveGotoUrl).
+ */
+export function parseGotoShortId(rawUrl: string): string | undefined {
+  const url = new URL(rawUrl);
+  return url.pathname.match(GOTO_RE)?.[1];
 }
 
 const RELATIVE_TIME_RE = /^now(?:-(\d+)([smhdwMy]))?$/;

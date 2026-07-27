@@ -10,7 +10,7 @@ import { substituteTargetFields, mergeVariableOverrides } from '../dashboards/va
 import { executeQueryWindow } from '../query/executor.js';
 import { computeStats } from '../analysis/baseline.js';
 import { clampSeriesPoints, enforceWindowLimit } from '../security/limits.js';
-import { dashboardUrlFor, recordActivity, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveGotoUrl, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -83,7 +83,9 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
         'dashboard for a single time window, instead of chaining fetch_dashboard -> resolve_panel_queries -> ' +
         'execute_query_window per panel. Pass a dashboard/panel URL (its own "from"/"to" - relative like "now-1h" ' +
         'or absolute - and var-* overrides are used automatically), or an alert-rule URL (resolved to its linked ' +
-        'dashboard, the same way get_alert_context does; errors if that rule has no dashboard link). Alternatively ' +
+        'dashboard, the same way get_alert_context does; errors if that rule has no dashboard link). A "/goto/<id>" ' +
+        'share short-link is resolved to its canonical link first, transparently (a dead/pruned one errors ' +
+        'distinctly from an unrecognized URL); a folder link errors - use list_folder_dashboards instead. Alternatively ' +
         'pass dashboardUid + connection directly, with fromMs/toMs (falls back to the dashboard\'s own saved default ' +
         'time range if omitted). Unlike execute_query_window, this uses exactly the one window given - no pre-window ' +
         'buffer, no baseline control windows - since the point here is "what\'s on screen", not incident analysis; ' +
@@ -127,12 +129,18 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
           let urlToRaw: string | undefined;
 
           if (url) {
-            const parsed = parseGrafanaUrl(url);
+            const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, url);
+            const parsed = parseGrafanaUrl(resolvedUrl);
             if (parsed.type === 'dashboard') {
               dashboardUid = parsed.uid;
               urlVars = parsed.vars;
               urlFromRaw = parsed.from;
               urlToRaw = parsed.to;
+            } else if (parsed.type === 'folder') {
+              throw new Error(
+                `"${url}" is a folder link, not a dashboard - render_dashboard needs one specific dashboard. Use ` +
+                  'list_folder_dashboards to see what\'s in this folder, then pass one of its dashboard links.',
+              );
             } else {
               // Alert-rule URL: resolve its linked dashboard the same way
               // get_alert_context does. That tool only warns when a rule has

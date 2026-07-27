@@ -11,6 +11,7 @@ import type {
   RulerAlertRule,
   RulerRuleGroup,
   SearchResultItem,
+  ShortUrlInfo,
 } from './types.js';
 
 /** A tiny counting semaphore used to cap concurrent outgoing Grafana requests. */
@@ -162,6 +163,22 @@ export class GrafanaClient {
     return this.request<SearchResultItem[]>('GET', `/api/search?${qs.toString()}`);
   }
 
+  /**
+   * Same `/api/search` endpoint as searchDashboards, scoped to `type=dash-folder`
+   * instead — lists the subfolders directly inside `folderUid` (or every
+   * folder, when omitted; see searchDashboards' folderUid doc for the same
+   * "no folderUid means the whole estate, not just the root" caveat). Used by
+   * list_folder_dashboards to walk a folder's subfolder tree.
+   */
+  async searchFolders(params: { folderUid?: string; limit?: number; page?: number } = {}): Promise<SearchResultItem[]> {
+    const qs = new URLSearchParams();
+    qs.set('type', 'dash-folder');
+    if (params.folderUid) qs.set('folderUIDs', params.folderUid);
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.page) qs.set('page', String(params.page));
+    return this.request<SearchResultItem[]>('GET', `/api/search?${qs.toString()}`);
+  }
+
   async getDashboard(uid: string): Promise<DashboardGetResponse> {
     return this.request<DashboardGetResponse>('GET', `/api/dashboards/uid/${encodeURIComponent(uid)}`);
   }
@@ -169,6 +186,21 @@ export class GrafanaClient {
   /** Used to walk a folder's ancestor chain (Grafana has no single "chain" endpoint) when looking up a knowledge dashboard scoped to a parent folder. */
   async getFolder(uid: string): Promise<FolderInfo> {
     return this.request<FolderInfo>('GET', `/api/folders/${encodeURIComponent(uid)}`);
+  }
+
+  /**
+   * Resolves a Grafana share short-link's id (the `<uid>` in `/goto/<uid>`,
+   * produced by "Share -> Link -> Shorten URL") to the canonical relative path
+   * it stands for, via Grafana's short-URL API — the same lookup Grafana's own
+   * frontend performs when a `/goto/` link is opened, rather than following
+   * the `/goto/` redirect itself (which isn't under `/api` and isn't part of
+   * this client's JSON request() helper). Throws GrafanaApiError with
+   * status 404 for an unknown/expired uid (Grafana prunes short URLs
+   * server-side over time) — callers use that to distinguish a dead link from
+   * an unrecognized URL shape.
+   */
+  async resolveShortUrl(uid: string): Promise<ShortUrlInfo> {
+    return this.request<ShortUrlInfo>('GET', `/api/short-urls/${encodeURIComponent(uid)}`);
   }
 
   async listDatasources(): Promise<DatasourceInfo[]> {
