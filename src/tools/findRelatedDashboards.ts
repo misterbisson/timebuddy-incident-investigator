@@ -49,7 +49,16 @@ export function searchIndex(
   connectionId: string,
   opts: { metricName?: string; labels?: Record<string, string>; query?: string; excludeDashboardUid?: string },
 ): Candidate[] {
-  const candidates: Candidate[] = [];
+  // Keyed by dashboardUid|panelId, not pushed to an array directly: a panel
+  // with targets on more than one metric (e.g. http_requests_total and
+  // http_errors_total) has an entry under each matching metric in
+  // index.entriesByMetric — metricIndex.ts only dedups *within* one metric's
+  // entry list, not across metrics. Without this, a free-text `query` or
+  // `labels`-only search (opts.metricName unset, so every metric is scanned)
+  // would push the same panel once per metric it matches, duplicating it in
+  // matches/matchesTotal. When two metrics both match, keep whichever has the
+  // stronger label-overlap evidence.
+  const candidatesByPanel = new Map<string, Candidate>();
   const metricPool = opts.metricName
     ? { [opts.metricName]: index.entriesByMetric[opts.metricName] ?? [] }
     : index.entriesByMetric;
@@ -60,8 +69,11 @@ export function searchIndex(
       const overlap = opts.labels ? labelOverlap(opts.labels, entry.labels) : 0;
       const queryHit = opts.query ? queryMatches(opts.query, metric, entry) : false;
       if (opts.metricName || overlap > 0 || queryHit) {
+        const key = `${entry.dashboardUid}|${entry.panelId}`;
+        const existing = candidatesByPanel.get(key);
+        if (existing && existing.labelOverlapCount >= overlap) continue;
         const dashboardMeta = index.dashboardMeta?.[entry.dashboardUid];
-        candidates.push({
+        candidatesByPanel.set(key, {
           ...entry,
           matchedMetric: metric,
           labelOverlapCount: overlap,
@@ -73,7 +85,7 @@ export function searchIndex(
       }
     }
   }
-  return candidates;
+  return [...candidatesByPanel.values()];
 }
 
 /**

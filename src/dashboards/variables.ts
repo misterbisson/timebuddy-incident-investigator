@@ -100,19 +100,19 @@ function humanDuration(ms: number): string {
  * numbers, so the interval baked into query text was coarser than what the
  * request itself asked for).
  */
-function computeInterval(window: QueryWindow, maxDataPoints = DEFAULT_MAX_DATA_POINTS): string {
-  if (window.intervalMs) return humanDuration(window.intervalMs);
+function computeIntervalMs(window: QueryWindow, maxDataPoints = DEFAULT_MAX_DATA_POINTS): number {
+  if (window.intervalMs) return window.intervalMs;
   const spanMs = window.toMs - window.fromMs;
   const rawStepMs = spanMs / maxDataPoints;
   const steps = [1000, 5000, 10000, 30000, 60000, 300000, 600000, 1800000, 3600000, 21600000, 86400000];
-  const step = steps.find((s) => s >= rawStepMs) ?? steps.at(-1)!;
-  return humanDuration(step);
+  return steps.find((s) => s >= rawStepMs) ?? steps.at(-1)!;
 }
 
 /**
  * Substitutes `$name`, `${name}`, `${name:format}`, and `[[name]]` variable
- * references plus Grafana's built-in time macros (`$__interval`, `$__range`,
- * `$__from`, `$__to`, `$timeFilter`) in a query string.
+ * references plus Grafana's built-in time macros (`$__interval`,
+ * `$__interval_ms`, `$__range`, `$__range_s`, `$__range_ms`, `$__from`,
+ * `$__to`, `$timeFilter`) in a query string.
  */
 export function substituteVariables(
   query: string,
@@ -127,21 +127,36 @@ export function substituteVariables(
   // *function*, never a raw string. A string replacement reinterprets `$&`,
   // `$'`, `` $` `` and `$1` in the value as match-pattern references (the class
   // of bug fixed for user-variable values in #65). These built-in values are
-  // all `$`-free today — computeInterval/humanDuration return digits plus a
-  // unit letter, $__from/$__to are String() of a number, $timeFilter is built
-  // from those — so this is invariant-keeping, not a live fix. But "no
+  // all `$`-free today — computeIntervalMs/humanDuration return digits plus at
+  // most a unit letter, $__from/$__to are String() of a number, $timeFilter is
+  // built from those — so this is invariant-keeping, not a live fix. But "no
   // substitution here uses a string replacement" is a rule the next reader can
   // grep and trust, where re-checking each value's provenance by hand is
   // exactly the step skipped before #65. The one deliberate `$&` is
   // escapeRegex's, commented at its definition.
-  const interval = computeInterval(window, maxDataPoints);
-  const range = humanDuration(window.toMs - window.fromMs);
+  const intervalMs = computeIntervalMs(window, maxDataPoints);
+  const interval = humanDuration(intervalMs);
+  const rangeMs = window.toMs - window.fromMs;
+  const range = humanDuration(rangeMs);
   const from = String(window.fromMs);
   const to = String(window.toMs);
   const timeFilter = `time >= ${window.fromMs}ms and time <= ${window.toMs}ms`;
+  // Order matters: `$__interval` and `$__range` are literal-substring
+  // prefixes of `$__interval_ms` / `$__range_s` / `$__range_ms`. replaceAll
+  // does plain substring matching, not word-boundary matching, so running the
+  // shorter form first would replace the prefix inside the longer token and
+  // leave a mangled `<value>_ms` behind instead of ever reaching the
+  // `_ms`/`_s`-suffixed branch. Every suffixed variant is therefore replaced
+  // before its unsuffixed prefix.
   result = result
+    .replaceAll('$__interval_ms', () => String(intervalMs))
+    .replaceAll('${__interval_ms}', () => String(intervalMs))
     .replaceAll('$__interval', () => interval)
     .replaceAll('${__interval}', () => interval)
+    .replaceAll('$__range_ms', () => String(rangeMs))
+    .replaceAll('${__range_ms}', () => String(rangeMs))
+    .replaceAll('$__range_s', () => String(Math.round(rangeMs / 1000)))
+    .replaceAll('${__range_s}', () => String(Math.round(rangeMs / 1000)))
     .replaceAll('$__range', () => range)
     .replaceAll('${__range}', () => range)
     .replaceAll('$__from', () => from)
