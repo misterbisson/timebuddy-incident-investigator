@@ -65,7 +65,7 @@ export function registerCorrelateLogs(server: McpServer, { logRegistry, config, 
           // reached the backend" when it did). Refuse rather than answer
           // wrongly. Inner/`and` and `or` only under-count, so those stay a
           // surfaced `truncated` flag rather than a hard error.
-          const { joinType, rightSelectors } = joinShape(query);
+          const { joinType, rightSelectors } = await joinShape(query);
           const truncatedStreams = streams.filter((s) => s.truncated);
           if (joinType === 'unless' && truncatedStreams.length > 0) {
             const rightTruncated = rightSelectors.length

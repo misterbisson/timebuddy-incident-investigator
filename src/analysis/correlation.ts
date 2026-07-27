@@ -61,7 +61,21 @@ export function rankCorrelatedAnomalies(
     }
 
     const zScore = Number.isFinite(comparison.zScore) ? comparison.zScore : 0;
-    const score = Math.abs(zScore) * (1 + overlap) * (1 + timingScore);
+
+    // 'baseline-all-zero' is a presence change (see baseline.ts): every control
+    // window was flat zero and the incident window wasn't. zScore is NaN by
+    // design there — there's no baseline spread to be a sigma deviation from —
+    // and the fallback above collapses that to a literal 0, which would rank
+    // this identically to "nothing happened." That's wrong: baseline.ts's own
+    // doc comment says to judge this shape on magnitude instead of sigma, so
+    // score it on how much of the incident window actually saw activity,
+    // floored at zThreshold (the bar that would otherwise mean "statistically
+    // unusual") rather than at 0.
+    const magnitude =
+      comparison.classification === 'baseline-all-zero'
+        ? zThreshold * (comparison.incidentStats.nonZeroCount / Math.max(comparison.incidentStats.count, 1))
+        : zScore;
+    const score = Math.abs(magnitude) * (1 + overlap) * (1 + timingScore);
 
     return {
       dashboardUid: c.dashboardUid,
