@@ -104,6 +104,39 @@ describe('substituteVariables', () => {
     expect(omitted).toBe('step=1m');
   });
 
+  it('replaces $__interval_ms with the numeric millisecond interval, not a mangled $__interval + literal "_ms" (#148)', () => {
+    // Naive substring replacement of $__interval before $__interval_ms leaves
+    // "<unit-suffixed interval>_ms" behind (e.g. "30s_ms") instead of a number.
+    const result = substituteVariables('rate(x[$__interval_ms])', [], {}, dayWindow, DEFAULT_MAX_DATA_POINTS);
+    expect(result).toBe('rate(x[60000])');
+    expect(result).not.toContain('_ms');
+  });
+
+  it('replaces ${__interval_ms} the same way as the unbraced form', () => {
+    const result = substituteVariables('rate(x[${__interval_ms}])', [], {}, dayWindow, DEFAULT_MAX_DATA_POINTS);
+    expect(result).toBe('rate(x[60000])');
+  });
+
+  it('replaces $__range_ms and $__range_s with numeric values, not a mangled $__range + literal suffix (#148)', () => {
+    const resultMs = substituteVariables('span=$__range_ms', [], {}, window);
+    const resultS = substituteVariables('span=$__range_s', [], {}, window);
+    expect(resultMs).toBe(`span=${window.toMs - window.fromMs}`);
+    expect(resultS).toBe(`span=${Math.round((window.toMs - window.fromMs) / 1000)}`);
+  });
+
+  it('still replaces plain $__range and $__interval correctly alongside their _ms/_s siblings in the same query', () => {
+    const result = substituteVariables(
+      'range=$__range range_ms=$__range_ms range_s=$__range_s interval=$__interval interval_ms=$__interval_ms',
+      [],
+      {},
+      dayWindow,
+      DEFAULT_MAX_DATA_POINTS,
+    );
+    expect(result).toBe(
+      `range=1d range_ms=${dayWindow.toMs - dayWindow.fromMs} range_s=${(dayWindow.toMs - dayWindow.fromMs) / 1000} interval=1m interval_ms=60000`,
+    );
+  });
+
   it('replaces $timeFilter with an InfluxQL-style clause', () => {
     const result = substituteVariables('SELECT * FROM cpu WHERE $timeFilter', [], {}, window);
     expect(result).toBe(`SELECT * FROM cpu WHERE time >= ${window.fromMs}ms and time <= ${window.toMs}ms`);
