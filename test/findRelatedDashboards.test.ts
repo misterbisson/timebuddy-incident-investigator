@@ -100,6 +100,63 @@ describe('searchIndex', () => {
     const unbacked = searchIndex(index(), 'conn1', { query: 'checkout' });
     expect(unbacked[0]?.backingAlertRuleTitles).toEqual([]);
   });
+
+  // Finding #149: a panel with targets on more than one metric gets an entry
+  // under each matching metric in index.entriesByMetric (metricIndex.ts only
+  // dedups within one metric's own list). A free-text/label search with no
+  // metricName scans every metric, so without a dashboardUid+panelId dedup
+  // here, that one panel would surface twice in the results.
+  it('dedups a single panel that matches on more than one metric under a free-text query', () => {
+    const multiMetricIndex: MetricIndex = {
+      ...index(),
+      entriesByMetric: {
+        ...index().entriesByMetric,
+        http_errors_total: [
+          {
+            dashboardUid: 'checkout',
+            dashboardTitle: 'Checkout overview',
+            panelId: 2,
+            panelTitle: 'Request rate',
+            labels: { service: ['checkout'] },
+          },
+        ],
+      },
+    };
+    const results = searchIndex(multiMetricIndex, 'conn1', { query: 'checkout' });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.dashboardUid).toBe('checkout');
+    expect(results[0]?.panelId).toBe(2);
+  });
+
+  it('when deduping a multi-metric panel, keeps the entry with the stronger label overlap', () => {
+    const multiMetricIndex: MetricIndex = {
+      ...index(),
+      entriesByMetric: {
+        http_requests_total: [
+          {
+            dashboardUid: 'checkout',
+            dashboardTitle: 'Checkout overview',
+            panelId: 2,
+            panelTitle: 'Request rate',
+            labels: { service: ['checkout'] },
+          },
+        ],
+        http_errors_total: [
+          {
+            dashboardUid: 'checkout',
+            dashboardTitle: 'Checkout overview',
+            panelId: 2,
+            panelTitle: 'Request rate',
+            labels: { service: ['checkout'], region: ['us-east-1'] },
+          },
+        ],
+      },
+    };
+    const results = searchIndex(multiMetricIndex, 'conn1', { labels: { service: 'checkout', region: 'us-east-1' } });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.labelOverlapCount).toBe(2);
+    expect(results[0]?.matchedMetric).toBe('http_errors_total');
+  });
 });
 
 describe('compareCandidates', () => {
