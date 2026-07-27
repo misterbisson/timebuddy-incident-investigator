@@ -1,4 +1,4 @@
-import { CorrelationEngine, type CorrelatedEvent } from '@liquescent/log-correlator-core';
+import type { CorrelatedEvent } from '@liquescent/log-correlator-core';
 import type { GraylogClient } from '../graylog/client.js';
 import { HistoricalGraylogAdapter, type StreamFetchStat } from './adapter.js';
 
@@ -25,8 +25,19 @@ export interface CorrelateLogsParams {
  * so nothing about a correlation should persist between requests — and
  * always destroy()s the engine and adapter in `finally` to clear internal
  * timers that would otherwise keep the process alive.
+ *
+ * `@liquescent/log-correlator-core` is imported dynamically here rather than
+ * at module scope: this module sits on the static import chain every server
+ * startup runs (registerAll.ts -> correlateLogs.ts -> here), so a static
+ * import would throw at module-evaluation time and crash the whole MCP
+ * server — including every other tool — if this one optional dependency
+ * were missing or failed to install. Deferring resolution to the first
+ * actual correlate_logs call means a missing package only fails that one
+ * tool call (surfaced as a normal tool error via toolErrorResult), not the
+ * server (companion to #145).
  */
 export async function correlateLogs(params: CorrelateLogsParams): Promise<CorrelateLogsResult> {
+  const { CorrelationEngine } = await import('@liquescent/log-correlator-core');
   const engine = new CorrelationEngine({ defaultTimeWindow: '5m' });
   const adapter = new HistoricalGraylogAdapter(
     params.client,
