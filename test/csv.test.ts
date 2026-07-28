@@ -3,6 +3,7 @@ import {
   approximateResolution,
   buildSeriesColumnNames,
   frameToCsv,
+  headerHasTimeAxis,
   neutralizeCsvDocument,
   parseCsv,
   parseCsvLine,
@@ -401,5 +402,25 @@ describe('approximateResolution', () => {
   it('returns undefined when it cannot say anything useful', () => {
     expect(approximateResolution(1, 1000)).toBeUndefined();
     expect(approximateResolution(10, 0)).toBeUndefined();
+  });
+});
+
+describe('headerHasTimeAxis', () => {
+  it('recognizes Grafana time-series headers', () => {
+    expect(headerHasTimeAxis(['Time', 'Mean'])).toBe(true);
+    expect(headerHasTimeAxis(['time', 'value'])).toBe(true);
+    expect(headerHasTimeAxis(['Time (UTC)', 'Mean'])).toBe(true);
+    expect(headerHasTimeAxis([' Time ', 'Mean'])).toBe(true);
+  });
+
+  it('rejects tables with no leading time column', () => {
+    expect(headerHasTimeAxis(['Host', 'Count'])).toBe(false);
+    expect(headerHasTimeAxis(['Field', 'Mean'])).toBe(false);
+    // A time-ish word must be the whole first cell, not a substring, or a
+    // "Downtime"/"Response Time" data column would falsely read as an axis.
+    expect(headerHasTimeAxis(['Downtime', 'Count'])).toBe(false);
+    expect(headerHasTimeAxis(['Response Time', 'Count'])).toBe(false);
+    expect(headerHasTimeAxis(['Timestamp', 'value'])).toBe(false);
+    expect(headerHasTimeAxis([])).toBe(false);
   });
 });
