@@ -50,6 +50,34 @@ function isSingleAlert(value: unknown): value is AlertmanagerAlert {
   );
 }
 
+/**
+ * Parses a `__panelId__` annotation into a panel id, or undefined (with a
+ * warning) when it isn't a plain non-negative integer.
+ *
+ * A bare `Number.parseInt(annotation, 10)` yields NaN for a non-numeric value,
+ * and NaN flows all the way to findPanel(), where `p.panelId === NaN` is never
+ * true — so a malformed annotation surfaces as "panel not found" for a panel
+ * that plainly exists, pointing the investigation at Grafana instead of at the
+ * annotation. This is the same NaN trap urlParser.parsePanelId deliberately
+ * throws to avoid; here we warn and drop the panel id rather than throw, so a
+ * bad annotation doesn't fail the whole ingest (issue #152). parseInt is also
+ * too lenient in the other direction ("3abc" -> 3, silently investigating a
+ * real-but-wrong panel), which the strict digits check rejects too. An empty
+ * annotation is handled by the caller's truthiness guard and means "no panel",
+ * not "bad panel", so it produces no warning.
+ */
+function parsePanelIdAnnotation(raw: string, warnings: string[]): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    warnings.push(
+      `Ignored a __panelId__ annotation that isn't a numeric panel id: "${raw}". ` +
+        'Proceeding without a specific panel; use find_related_dashboards with the alert labels if the panel matters.',
+    );
+    return undefined;
+  }
+  return Number(trimmed);
+}
+
 function extractDashboardLink(alert: AlertmanagerAlert, warnings: string[]): {
   dashboardUid?: string;
   panelId?: number;
@@ -60,7 +88,7 @@ function extractDashboardLink(alert: AlertmanagerAlert, warnings: string[]): {
   if (dashUidAnnotation) {
     return {
       dashboardUid: dashUidAnnotation,
-      panelId: panelIdAnnotation ? Number.parseInt(panelIdAnnotation, 10) : undefined,
+      panelId: panelIdAnnotation ? parsePanelIdAnnotation(panelIdAnnotation, warnings) : undefined,
       variables: {},
     };
   }
@@ -206,7 +234,7 @@ export async function resolveAlertContext(
       labels: rule.labels ?? {},
       annotations: rule.annotations ?? {},
       dashboardUid: dashUid,
-      panelId: panelIdStr ? Number.parseInt(panelIdStr, 10) : undefined,
+      panelId: panelIdStr ? parsePanelIdAnnotation(panelIdStr, warnings) : undefined,
       variables: {},
       threshold: describeThreshold(rule),
       ruleQueries: rule.data,
