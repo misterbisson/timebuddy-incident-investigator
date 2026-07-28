@@ -38,6 +38,30 @@ describe('resolveAlertContext', () => {
     expect(ctx.warnings).toEqual([]);
   });
 
+  it('drops a non-numeric __panelId__ annotation with a warning instead of yielding NaN', async () => {
+    const ctx = await resolveAlertContext(
+      {
+        webhookPayload: {
+          alerts: [
+            {
+              fingerprint: 'fp1',
+              status: { state: 'firing' },
+              labels: { alertname: 'HighErrorRate' },
+              annotations: { __dashboardUid__: 'dash1', __panelId__: 'panel-7' },
+              startsAt: '2026-07-05T10:00:00Z',
+              endsAt: '0001-01-01T00:00:00Z',
+            },
+          ],
+        },
+      },
+      () => fakeClient(),
+    );
+    expect(ctx.dashboardUid).toBe('dash1');
+    // NaN would have flowed to findPanel() and surfaced as "panel not found".
+    expect(ctx.panelId).toBeUndefined();
+    expect(ctx.warnings.some((w) => w.includes('__panelId__') && w.includes('panel-7'))).toBe(true);
+  });
+
   it('selects an alert by fingerprint out of several in a webhook payload', async () => {
     const ctx = await resolveAlertContext(
       {
