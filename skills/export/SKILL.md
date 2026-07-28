@@ -41,6 +41,16 @@ yourself; don't just describe what could be done.
    - If the result's `files` array has more than one entry, say so and mention why - the `note` field
      explains it (this only happens in the direct-export fallback: more than one query feeding the
      panel, with no merge applied).
+   - **Check each file's `resolution`** (present when the file has a time axis):
+     `{points, effectiveBucketMs, spanMs, approximate}`. This is the bucket width of the exported
+     series - if it's coarser than the person needs (e.g. 30-min buckets when they want 5-min),
+     you can get finer data without chunking the window. For a panel *with* transformations
+     (`transformationsApplied: true`), pass `renderWidth` (px): the browser render's resolution is a
+     function of viewport width, not the time range, so a wider render yields finer buckets - aim for
+     roughly one pixel per point you want (28 days at 5-min ≈ 8064 points → `renderWidth: ~8100`). The
+     result echoes the `renderWidth` used and lists any `warnings` (e.g. it was clamped, or it had no
+     effect because the direct path was taken - `renderWidth` only steers the browser-render path).
+     For the direct path, resolution is governed by the server's `maxDataPoints`, not `renderWidth`.
    - `formulaNeutralized` is always `true`: every file this tool writes has cells beginning with `=`,
      `+`, `-`, or `@` prefixed with an apostrophe, so a spreadsheet displays them instead of executing
      them on open. On the captured path (`transformationsApplied: true`) that's done by re-serializing
