@@ -52,6 +52,27 @@ export function approximateResolution(dataRows: number, spanMs: number): ExportR
 }
 
 /**
+ * Whether a browser-captured CSV's header row signals a leading time axis, so
+ * `approximateResolution` should be reported for it at all. Grafana's "Download
+ * CSV" labels the time column `Time` (optionally with a parenthetical zone/unit,
+ * e.g. `Time (UTC)`) as the first column of a time-series export; a transformed
+ * table (Reduce, Group-by, Organize-fields, stat) has no such column — its first
+ * header is a category or field name.
+ *
+ * The header, not the values, is the reliable signal here: the timestamp *values*
+ * are locale-formatted and not reliably re-parseable (the very reason this path's
+ * resolution is `approximate`), but the `Time` header is locale-independent. The
+ * match is anchored to the whole cell so a data column like `Downtime` or
+ * `Response Time` doesn't read as a time axis. Without this guard the browser path
+ * hands a category table a meaningless bucket size — a `resolution` object the
+ * tool's own contract says must be omitted "for a file with no time column".
+ */
+export function headerHasTimeAxis(header: readonly string[]): boolean {
+  const first = header[0]?.trim();
+  return first !== undefined && /^time(\s*\(.*\))?$/i.test(first);
+}
+
+/**
  * A cell that a spreadsheet would evaluate rather than display. Excel,
  * LibreOffice, and Google Sheets all treat a leading =, +, -, or @ as the
  * start of a formula.

@@ -399,6 +399,34 @@ describe('export_panel_csv resolution + renderWidth (issues #109/#111)', () => {
     expect(parsed.files[0].resolution).toMatchObject({ points: 2, approximate: true });
   });
 
+  it('omits resolution for a browser-captured table with no time axis', async () => {
+    // A transformed table (Reduce/Group-by/Organize-fields) has no Time column,
+    // so it has no meaningful bucket size. Before the header-axis guard the
+    // browser path handed it `(toMs-fromMs)/(rows-1)` regardless — a fabricated
+    // "resolution" for time-less data, contradicting the field's own contract.
+    const client = fakeClient(timeseriesDashboard(), vi.fn(timeseriesQueryDsResponse));
+    const exportPanelCsv = vi.fn(async () => ({ csv: Buffer.from('Host,Count\r\nweb-1,50\r\nweb-2,30\r\nweb-3,10\r\n') }));
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, {
+      registry: fakeRegistry(connections, client),
+      config: config(),
+      screenshotter: fakeScreenshotter(exportPanelCsv),
+    });
+
+    const result = (await call('export_panel_csv', {
+      dashboardUid: 'reqs',
+      panelId: 2,
+      fromMs: 0,
+      toMs: 60000,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    expect(parsed.transformationsApplied).toBe(true);
+    expect(parsed.files[0].columns).toEqual(['Host', 'Count']);
+    expect(parsed.files[0].resolution).toBeUndefined();
+  });
+
   it('clamps an oversized renderWidth and warns', async () => {
     const client = fakeClient(timeseriesDashboard(), vi.fn(timeseriesQueryDsResponse));
     const exportPanelCsv = vi.fn(async (req: Parameters<Screenshotter['exportPanelCsv']>[0]) => {

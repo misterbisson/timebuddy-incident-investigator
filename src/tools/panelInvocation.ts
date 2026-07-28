@@ -26,6 +26,7 @@ import {
   approximateResolution,
   buildSeriesColumnNames,
   frameToCsv,
+  headerHasTimeAxis,
   neutralizeCsvDocument,
   neutralizeFormula,
   resolutionFromTimestamps,
@@ -417,8 +418,14 @@ export async function generatePanelCsv(
       columns: (rows[0] ?? []).map(neutralizeFormula),
       // Approximate: Grafana's captured CSV time column is locale-formatted and
       // not reliably re-parseable here, so derive the bucket from the row count
-      // over the requested window rather than from observed timestamps.
-      ...withResolution(approximateResolution(dataRows, inv.toMs - inv.fromMs)),
+      // over the requested window rather than from observed timestamps. Only when
+      // the header actually carries a time axis, though — a transformed *table*
+      // (no Time column) has no resolution to report, and handing it one would
+      // contradict this field's documented "omitted for a file with no time
+      // column" contract (the direct path below omits it the same way).
+      ...withResolution(
+        headerHasTimeAxis(rows[0] ?? []) ? approximateResolution(dataRows, inv.toMs - inv.fromMs) : undefined,
+      ),
     });
   } else if (inv.panel.mirrorsPanelIds) {
     // Grafana's built-in "-- Dashboard --" datasource: no backend to query at
