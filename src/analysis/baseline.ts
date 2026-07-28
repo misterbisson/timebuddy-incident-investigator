@@ -1,4 +1,5 @@
 import type { SeriesPoint } from '../query/executor.js';
+import { arrayMax, arrayMin } from '../util/minMax.js';
 import { findThresholdRuns, type ThresholdRun } from './runs.js';
 
 export interface SeriesStats {
@@ -21,8 +22,8 @@ export function computeStats(points: SeriesPoint[]): SeriesStats {
   return {
     mean,
     stddev: Math.sqrt(variance),
-    min: Math.min(...values),
-    max: Math.max(...values),
+    min: arrayMin(values),
+    max: arrayMax(values),
     count: values.length,
     nonZeroCount: values.filter((v) => v !== 0).length,
   };
