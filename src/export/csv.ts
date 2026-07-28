@@ -87,17 +87,30 @@ function seriesColumnName(series: Pick<QuerySeries, 'refId' | 'labels'>): string
 
 /**
  * Column names for a set of series, in order, with collisions (e.g. two
- * series sharing a refId and no labels) disambiguated by suffix — exported
- * separately from seriesToCsv so a caller can report "here's what's in the
- * file" without re-deriving the same dedupe logic.
+ * series sharing a refId and no labels) disambiguated by a numbered suffix —
+ * exported separately from seriesToCsv so a caller can report "here's what's in
+ * the file" without re-deriving the same dedupe logic.
+ *
+ * The suffix is checked against every name already emitted, not just a
+ * per-base counter, because the suffixed form can itself collide with a later
+ * series' literal name: `["A", "A", "A (2)"]` would otherwise disambiguate the
+ * second `A` to `A (2)` and then emit the third series' own `A (2)` verbatim —
+ * two identical headers (issue #155). Bumping the number until the candidate is
+ * unused guarantees distinct columns; the common case (pure duplicates) is
+ * unchanged (`A`, `A (2)`, `A (3)`, ...).
  */
 export function buildSeriesColumnNames(series: Array<Pick<QuerySeries, 'refId' | 'labels'>>): string[] {
-  const counts = new Map<string, number>();
+  const used = new Set<string>();
   return series.map((s) => {
-    const name = seriesColumnName(s);
-    const seen = counts.get(name) ?? 0;
-    counts.set(name, seen + 1);
-    return seen === 0 ? name : `${name} (${seen + 1})`;
+    const base = seriesColumnName(s);
+    let candidate = base;
+    let n = 1;
+    while (used.has(candidate)) {
+      n += 1;
+      candidate = `${base} (${n})`;
+    }
+    used.add(candidate);
+    return candidate;
   });
 }
 
