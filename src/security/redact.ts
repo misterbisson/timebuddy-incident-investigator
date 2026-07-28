@@ -1,4 +1,9 @@
-const SECRET_KEY_PATTERN = /(password|passwd|secret|token|apikey|api_key|authorization|bearer|private_key|privatekey)/i;
+// Separators are optional and either hyphen or underscore ([-_]?) so the
+// hyphenated header/field forms redact too: `x-api-key`, `api-key` and
+// `private-key` are exactly as secret-shaped as `apiKey`/`api_key`, but a
+// fixed-underscore alternation (`api_key`) is a substring match that never
+// reaches the hyphen form, leaking those values to the model (issue #150).
+const SECRET_KEY_PATTERN = /(password|passwd|secret|token|api[-_]?key|authorization|bearer|private[-_]?key)/i;
 
 const REDACTED = '[REDACTED]';
 
