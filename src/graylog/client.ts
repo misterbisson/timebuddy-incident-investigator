@@ -65,7 +65,7 @@ export class GraylogApiError extends Error {
  */
 export class GraylogClient {
   private readonly semaphore: Semaphore;
-  private tlsAgent: unknown;
+  private dispatcherPromise?: Promise<unknown>;
 
   constructor(
     private readonly connection: LogConnection,
@@ -82,12 +82,24 @@ export class GraylogClient {
     return buildGraylogAuthHeader(this.connection);
   }
 
-  private async getDispatcher(): Promise<unknown> {
+  private getDispatcher(): Promise<unknown> | undefined {
     if (this.tlsVerify) return undefined;
-    if (this.tlsAgent) return this.tlsAgent;
-    const { Agent } = await import('undici');
-    this.tlsAgent = new Agent({ connect: { rejectUnauthorized: false } });
-    return this.tlsAgent;
+    // Memoize the whole import-and-construct as one promise, assigned
+    // synchronously. The previous version awaited import('undici') *between*
+    // the "already built?" guard and the assignment, so under the semaphore's
+    // allowed concurrency several first requests all passed the guard, each
+    // constructed its own Agent, and all but the last were orphaned — an
+    // undici connection-pool leak (issue #154). Sharing one promise means one
+    // Agent, and concurrent callers all await the same construction. On failure
+    // the slot is cleared so a later call can retry rather than caching a
+    // rejected promise forever.
+    this.dispatcherPromise ??= import('undici')
+      .then(({ Agent }) => new Agent({ connect: { rejectUnauthorized: false } }))
+      .catch((err) => {
+        this.dispatcherPromise = undefined;
+        throw err;
+      });
+    return this.dispatcherPromise;
   }
 
   private async request<T>(path: string): Promise<T> {

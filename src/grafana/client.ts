@@ -75,7 +75,7 @@ export class GrafanaApiError extends Error {
  */
 export class GrafanaClient {
   private readonly semaphore: Semaphore;
-  private tlsAgent: unknown;
+  private dispatcherPromise?: Promise<unknown>;
 
   constructor(
     private readonly connection: GrafanaConnection,
@@ -92,15 +92,26 @@ export class GrafanaClient {
     return buildAuthHeader(this.connection);
   }
 
-  private async getDispatcher(): Promise<unknown> {
+  private getDispatcher(): Promise<unknown> | undefined {
     if (this.tlsVerify) return undefined;
-    if (this.tlsAgent) return this.tlsAgent;
-    // Only imported when explicitly opted out of TLS verification for a
-    // trusted internal instance (GRAFANA_TLS_VERIFY=false / a connection's
-    // per-instance tlsVerify override).
-    const { Agent } = await import('undici');
-    this.tlsAgent = new Agent({ connect: { rejectUnauthorized: false } });
-    return this.tlsAgent;
+    // Memoize the whole import-and-construct as one promise, assigned
+    // synchronously. The previous version awaited import('undici') *between*
+    // the "already built?" guard and the assignment, so under the semaphore's
+    // allowed concurrency several first requests all passed the guard, each
+    // constructed its own Agent, and all but the last were orphaned — an
+    // undici connection-pool leak (issue #154). Sharing one promise means one
+    // Agent, and concurrent callers all await the same construction. Only
+    // reached when TLS verification is explicitly disabled for a trusted
+    // internal instance (GRAFANA_TLS_VERIFY=false / a per-connection override).
+    // On failure the slot is cleared so a later call can retry rather than
+    // caching a rejected promise forever.
+    this.dispatcherPromise ??= import('undici')
+      .then(({ Agent }) => new Agent({ connect: { rejectUnauthorized: false } }))
+      .catch((err) => {
+        this.dispatcherPromise = undefined;
+        throw err;
+      });
+    return this.dispatcherPromise;
   }
 
   private async request<T>(
