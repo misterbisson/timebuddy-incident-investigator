@@ -32,4 +32,13 @@ describe('redact', () => {
     const input = { service: 'checkout', count: 5, ok: true, nothing: null };
     expect(redact(input)).toEqual(input);
   });
+
+  it('masks hyphenated secret-shaped keys (x-api-key, api-key, private-key)', () => {
+    const input = { 'x-api-key': 'k1', 'api-key': 'k2', 'private-key': 'k3', 'X-API-KEY': 'k4' };
+    const result = redact(input) as Record<string, string>;
+    expect(result['x-api-key']).toBe('[REDACTED]');
+    expect(result['api-key']).toBe('[REDACTED]');
+    expect(result['private-key']).toBe('[REDACTED]');
+    expect(result['X-API-KEY']).toBe('[REDACTED]');
+  });
 });
