@@ -1,4 +1,5 @@
 import type { SeriesPoint } from '../query/executor.js';
+import { arrayMax, arrayMin } from '../util/minMax.js';
 
 export interface ThresholdRun {
   /** Timestamp of the first sample in the run. */
@@ -58,8 +59,8 @@ export function findThresholdRuns(
       startMs: first.t,
       endMs: last.t,
       durationMs: last.t - first.t,
-      minValue: Math.min(...values),
-      maxValue: Math.max(...values),
+      minValue: arrayMin(values),
+      maxValue: arrayMax(values),
       pointCount: current.length,
     });
     current = [];
