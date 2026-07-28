@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.5.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.4.1...v0.5.0) (2026-07-28)
+
+
+### Features
+
+* add list_firing_alerts tool ([#141](https://github.com/misterbisson/timebuddy-incident-investigator/issues/141)) ([4790fdd](https://github.com/misterbisson/timebuddy-incident-investigator/commit/4790fdd82c7b5db6afbfcdd2df4648d3c31cf602))
+* **electron:** import connections from a metadata-only JSON manifest ([#140](https://github.com/misterbisson/timebuddy-incident-investigator/issues/140)) ([030aa90](https://github.com/misterbisson/timebuddy-incident-investigator/commit/030aa900a7d38516d4d1035678e27e8fc1b58d9e))
+* **export:** expose renderWidth and report effective CSV resolution ([#143](https://github.com/misterbisson/timebuddy-incident-investigator/issues/143)) ([ea287e0](https://github.com/misterbisson/timebuddy-incident-investigator/commit/ea287e02c781b5c38674d2ce0b0ba0355eb8f2fe))
+* follow Grafana /goto/ short-links and list folder dashboards ([#160](https://github.com/misterbisson/timebuddy-incident-investigator/issues/160)) ([84e3264](https://github.com/misterbisson/timebuddy-incident-investigator/commit/84e3264a33d179bfa22963caa2198b32a9e79620))
+
+
+### Bug Fixes
+
+* **alerts:** guard __panelId__ annotation against NaN ([#165](https://github.com/misterbisson/timebuddy-incident-investigator/issues/165)) ([0025f11](https://github.com/misterbisson/timebuddy-incident-investigator/commit/0025f1190e9d8c5bbfcdabdc8205a5c310a45119))
+* **analysis:** avoid Math.min/max spread RangeError on large series ([#166](https://github.com/misterbisson/timebuddy-incident-investigator/issues/166)) ([ae16105](https://github.com/misterbisson/timebuddy-incident-investigator/commit/ae161055abdee8bf0d45a313cc37a356d4b305ef))
+* **analysis:** correlation ranking zeroes out all-zero-baseline presence-change signals ([#157](https://github.com/misterbisson/timebuddy-incident-investigator/issues/157)) ([46d297b](https://github.com/misterbisson/timebuddy-incident-investigator/commit/46d297b41912d5c23172a416e069d547695bd84f))
+* bundle [@liquescent](https://github.com/liquescent) log-correlator deps into the Electron app ([#145](https://github.com/misterbisson/timebuddy-incident-investigator/issues/145)) ([b1a9521](https://github.com/misterbisson/timebuddy-incident-investigator/commit/b1a95217f0de6ea036d11962d5e612a861266105))
+* **ci:** backfill release assets via gh upload, not electron-builder publish ([#135](https://github.com/misterbisson/timebuddy-incident-investigator/issues/135)) ([5c0d0f4](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5c0d0f48107c271b8ba914765c5f363ce4b5b56e))
+* **client:** don't leak undici Agents on concurrent first requests ([#167](https://github.com/misterbisson/timebuddy-incident-investigator/issues/167)) ([19a29ab](https://github.com/misterbisson/timebuddy-incident-investigator/commit/19a29ab77c6aeaa886329efaa71021b81415b7fc))
+* **client:** semaphore can admit more than max concurrent requests ([#164](https://github.com/misterbisson/timebuddy-incident-investigator/issues/164)) ([5bc6891](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5bc6891b98c188681cfe24e380ebe4be4aa24c8a))
+* **dashboards:** variable substitution corrupts $__interval_ms/$__range_s/$__range_ms ([#158](https://github.com/misterbisson/timebuddy-incident-investigator/issues/158)) ([8d5940c](https://github.com/misterbisson/timebuddy-incident-investigator/commit/8d5940c23cf781911bf6ec9515e8188ba9f958d1))
+* **deps:** bump the minor-and-patch group with 4 updates ([#162](https://github.com/misterbisson/timebuddy-incident-investigator/issues/162)) ([2b3a735](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2b3a735eb1811cee34d2dd27cf04365154d7c61a))
+* **export:** omit CSV resolution for browser-captured time-less tables ([#169](https://github.com/misterbisson/timebuddy-incident-investigator/issues/169)) ([144cc70](https://github.com/misterbisson/timebuddy-incident-investigator/commit/144cc705571c20c449bdbbcc47dd33665efd20f8))
+* **export:** prevent duplicate CSV headers from re-colliding suffixes ([#168](https://github.com/misterbisson/timebuddy-incident-investigator/issues/168)) ([4424fea](https://github.com/misterbisson/timebuddy-incident-investigator/commit/4424feacd5218a671d021c65efc761622355273f))
+* **investigate:** make Graylog log evidence mandatory and link-traceable ([#137](https://github.com/misterbisson/timebuddy-incident-investigator/issues/137)) ([75a93ab](https://github.com/misterbisson/timebuddy-incident-investigator/commit/75a93ab81003838b461db5c71fccaa5e3d892db3))
+* **investigate:** require connection-scope check before claiming blast-radius containment ([#142](https://github.com/misterbisson/timebuddy-incident-investigator/issues/142)) ([5d3ffaa](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5d3ffaafcfbaaf67f1ef4aabfc430aec4448e5e8))
+* **logs:** lazy-load [@liquescent](https://github.com/liquescent) so a missing log dep can't crash the whole server ([#156](https://github.com/misterbisson/timebuddy-incident-investigator/issues/156)) ([31f944b](https://github.com/misterbisson/timebuddy-incident-investigator/commit/31f944b2f0d7fd3fc2e8d4f58f1387d218ff6d45))
+* **screenshot:** bound capture area, report observed size, cap concurrency ([#144](https://github.com/misterbisson/timebuddy-incident-investigator/issues/144)) ([6dea2ca](https://github.com/misterbisson/timebuddy-incident-investigator/commit/6dea2cab03231d68b8287aadc0043f15dccac918))
+* **security:** redact hyphenated secret-shaped keys (x-api-key) ([#163](https://github.com/misterbisson/timebuddy-incident-investigator/issues/163)) ([770a4c1](https://github.com/misterbisson/timebuddy-incident-investigator/commit/770a4c14602960f4357130b4d04e7a3b522a99c4))
+* **tools:** find_related_dashboards returns duplicate panels (no dedup) ([#159](https://github.com/misterbisson/timebuddy-incident-investigator/issues/159)) ([d64958a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/d64958a3e9adc7a37284205e34d6883aec89f3da))
+
 ## [0.4.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.4.0...v0.4.1) (2026-07-22)
 
 
