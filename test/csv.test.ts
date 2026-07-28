@@ -19,6 +19,22 @@ describe('buildSeriesColumnNames', () => {
   it('disambiguates duplicate names with a numbered suffix', () => {
     expect(buildSeriesColumnNames([series('A', {}, []), series('A', {}, [])])).toEqual(['A', 'A (2)']);
   });
+
+  it('keeps the (n) suffix numbering for three or more pure duplicates', () => {
+    expect(buildSeriesColumnNames([series('A', {}, []), series('A', {}, []), series('A', {}, [])])).toEqual([
+      'A',
+      'A (2)',
+      'A (3)',
+    ]);
+  });
+
+  it('does not re-collide when a disambiguating suffix equals a later literal name (issue #155)', () => {
+    // Second "A" -> "A (2)", which must not then duplicate the third series
+    // whose own name is literally "A (2)".
+    const names = buildSeriesColumnNames([series('A', {}, []), series('A', {}, []), series('A (2)', {}, [])]);
+    expect(new Set(names).size).toBe(names.length); // all distinct
+    expect(names).toEqual(['A', 'A (2)', 'A (2) (2)']);
+  });
 });
 
 describe('seriesToCsv', () => {
