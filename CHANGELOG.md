@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.5.0...v0.5.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **electron:** sign and notarize macOS builds with Developer ID ([f88fb13](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f88fb135fc2a07ed309addc1e5a38a6f73ec90d5))
+
 ## [0.5.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.4.1...v0.5.0) (2026-07-28)
 
 
