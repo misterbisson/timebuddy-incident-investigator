@@ -1,14 +1,14 @@
 name: Verify macOS Signing
 
 # Clean-room end-to-end check that the macOS build is genuinely Developer-ID
-# signed, notarized, and stapled — the exact release signing path (import cert ->
-# build -> afterSign codesign+notarize+staple) minus the publish step. Runs on a
-# fresh runner so it can't be fooled by a developer machine's cached
-# intermediates or pre-trusted keychain. Also uploads the signed .dmg so a human
-# can verify the real Gatekeeper open experience on a clean Mac.
+# signed, notarized, and stapled — the exact release signing path (electron-builder
+# native sign + notarize + staple) minus the publish step. Runs on a fresh runner
+# so it can't be fooled by a developer machine's cached intermediates or
+# pre-trusted keychain. Also uploads the signed .dmg so a human can verify the real
+# Gatekeeper open experience on a clean Mac.
 #
 # Same-repo PRs get repo secrets; fork PRs do not (MACOS_CERTIFICATE would be
-# empty and the import step fails fast) — that's intended, signing can't be
+# empty and the fail-fast step below trips) — that's intended, signing can't be
 # verified from a fork anyway.
 
 on:
@@ -40,46 +40,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Identical to the release job's import: create a throwaway keychain, import
-      # the .p12, and expose the identity's hash so afterSign signs with it
-      # directly (electron-builder's own discovery stays disabled).
-      - name: Import signing certificate
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+      - name: Fail fast if signing secret is unavailable (e.g. fork PR)
         run: |
-          if [[ -z "$MACOS_CERTIFICATE" ]]; then
+          if [[ -z "${{ secrets.MACOS_CERTIFICATE }}" ]]; then
             echo "::error::MACOS_CERTIFICATE is empty — signing cannot be verified (fork PR?)"
             exit 1
           fi
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PWD=$(openssl rand -base64 32)
-
-          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-
-          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
-          security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
-
-          IDENTITY_HASH=$(security find-identity "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
-          if [[ -z "$IDENTITY_HASH" ]]; then
-            echo "::error::No signing identity found in imported certificate"
-            exit 1
-          fi
-          echo "CODESIGN_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
-
-          rm certificate.p12
 
       - name: Build, sign, notarize, staple (no publish)
         working-directory: electron
         run: npm run build-mac -- --publish never
         shell: bash
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # Native electron-builder signing (imports CSC_LINK into its own
+          # keychain, signs inside-out) + notarization (mac.notarize in
+          # package.json) + auto-staple. CSC_FOR_PULL_REQUEST forces signing here:
+          # electron-builder skips signing on pull_request builds by default.
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          CSC_FOR_PULL_REQUEST: "true"
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
