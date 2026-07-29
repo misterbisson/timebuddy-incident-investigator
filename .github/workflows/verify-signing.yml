@@ -15,8 +15,14 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [ main ]
+    # Only when something that affects the built/signed app changes — not docs
+    # (electron/*.md) or tests, so a docs-only PR doesn't burn a macOS notary run.
     paths:
-      - 'electron/**'
+      - 'electron/src/**'
+      - 'electron/renderer/**'
+      - 'electron/scripts/**'
+      - 'electron/build/**'
+      - 'electron/package.json'
       - '.github/workflows/verify-signing.yml'
 
 concurrency:

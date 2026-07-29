@@ -135,10 +135,9 @@ minor/patch) for the root workspace, the `electron/` workspace, and GitHub Actio
 versions — on top of GitHub's always-on, config-independent Dependabot security-update
 PRs for vulnerability fixes.
 
-**macOS signing is currently a self-signed certificate**, not a real Apple Developer ID —
-see [`SELF_SIGNED_SETUP.md`](SELF_SIGNED_SETUP.md) for what that does and doesn't buy you
-(short version: `afterSign` runs `scripts/afterSign.js`, which signs but can't notarize
-without real Apple credentials, so downloaded builds still hit a Gatekeeper block — see
-the root [`README.md`](../README.md#installing-a-downloaded-build-macos) for the
-click-through).
-Windows and Linux builds are unsigned entirely, same as upstream Time Buddy.
+**macOS builds are Apple Developer ID signed and notarized** (electron-builder native
+signing via `CSC_LINK` + `mac.notarize`), so downloaded builds open without a Gatekeeper
+block — see [`SIGNING.md`](SIGNING.md) for the full setup, the required secrets, and the
+validate-before-store credential-rotation runbook. The `verify-signing.yml` workflow proves
+the whole sign → notarize → staple path on a clean runner for every PR that touches the
+app. Windows and Linux builds are unsigned entirely, same as upstream Time Buddy.
