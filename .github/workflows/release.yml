@@ -86,47 +86,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # macOS code signing: self-signed cert for now (no notarization until a real
-      # Apple Developer ID is set up — see electron/SELF_SIGNED_SETUP.md).
-      - name: Import signing certificate
-        if: matrix.os == 'macos-latest'
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PWD=$(openssl rand -base64 32)
-
-          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-
-          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
-          security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
-
-          # electron-builder/@electron/osx-sign only pick a signing identity via
-          # `security find-identity -v` (trusted identities only), and a self-signed
-          # cert's root isn't trusted by macOS by default. Trusting it requires
-          # `add-trusted-cert`, which needs the `com.apple.trust-settings.admin`
-          # authorization right — newer macOS runner images (macos-26-arm64) no
-          # longer let CI pre-authorize that right, so the step now fails outright
-          # (`NO (-60005)`) instead of the old hang. `codesign` itself doesn't care
-          # about trust, only Gatekeeper/verification does, so skip electron-builder's
-          # own signing entirely: look the identity up via the untrusted-inclusive
-          # `find-identity` (no `-v`) and pass its hash to the build step, which signs
-          # manually in `afterSign` (see electron/scripts/afterSign.js).
-          IDENTITY_HASH=$(security find-identity "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
-          if [[ -z "$IDENTITY_HASH" ]]; then
-            echo "::error::No signing identity found in imported certificate"
-            exit 1
-          fi
-          echo "CODESIGN_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
-
-          rm certificate.p12
-
       - name: Build and Publish
         working-directory: electron
         run: |
@@ -140,16 +99,16 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # electron-builder's own signing is trust-gated (see the "Import signing
-          # certificate" step above) and CODESIGN_IDENTITY_HASH already flows in via
-          # $GITHUB_ENV from that step, so tell electron-builder not to attempt its
-          # own (trust-gated) identity discovery — signing happens manually in
-          # afterSign (electron/scripts/afterSign.js) instead.
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are intentionally
-          # unset for now: scripts/afterSign.js no-ops the notarize step without them,
-          # so the mac build is signed but not notarized until a real Apple Developer
-          # ID is set up.
+          # Native electron-builder signing: it imports this base64 Developer ID
+          # .p12 into its own throwaway keychain and signs the app inside-out
+          # (helpers + frameworks with inherited entitlements + hardened runtime +
+          # secure timestamp) — the manual `codesign --deep` approach could not.
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          # Notarization (config: mac.notarize in package.json) + auto-staple.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
   republish:
     # Manual recovery job (workflow_dispatch, `tag` input). Rebuilds and uploads
@@ -187,34 +146,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Import signing certificate
-        if: matrix.os == 'macos-latest'
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PWD=$(openssl rand -base64 32)
-
-          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-
-          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
-          security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
-
-          IDENTITY_HASH=$(security find-identity "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
-          if [[ -z "$IDENTITY_HASH" ]]; then
-            echo "::error::No signing identity found in imported certificate"
-            exit 1
-          fi
-          echo "CODESIGN_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
-
-          rm certificate.p12
-
       - name: Build (no publish)
         working-directory: electron
         run: |
@@ -227,7 +158,13 @@ jobs:
           fi
         shell: bash
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # Native electron-builder signing + notarization (same as the release
+          # job), so backfilled installers match what a fresh release produces.
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       # Upload the built installers (+ blockmaps + electron-updater metadata) to
       # the existing release via the gh CLI, which — unlike electron-builder's

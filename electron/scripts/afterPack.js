@@ -4,8 +4,8 @@ const { execFileSync } = require("node:child_process");
 // strings for hardware this app never touches — unused permission entries that make
 // automated scanners (and reviewers) flag the app as requesting access it doesn't
 // need. Strip them here, in afterPack: this is the last file-mutation point before
-// code signing (see afterSign.js) — editing Info.plist after signing would invalidate
-// the signature.
+// electron-builder's own code signing — editing Info.plist after signing would
+// invalidate the signature.
 const UNUSED_USAGE_DESCRIPTION_KEYS = [
   "NSCameraUsageDescription",
   "NSMicrophoneUsageDescription",

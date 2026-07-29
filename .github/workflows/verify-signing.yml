@@ -1,0 +1,126 @@
+name: Verify macOS Signing
+
+# Clean-room end-to-end check that the macOS build is genuinely Developer-ID
+# signed, notarized, and stapled — the exact release signing path (electron-builder
+# native sign + notarize + staple) minus the publish step. Runs on a fresh runner
+# so it can't be fooled by a developer machine's cached intermediates or
+# pre-trusted keychain. Also uploads the signed .dmg so a human can verify the real
+# Gatekeeper open experience on a clean Mac.
+#
+# Same-repo PRs get repo secrets; fork PRs do not (MACOS_CERTIFICATE would be
+# empty and the fail-fast step below trips) — that's intended, signing can't be
+# verified from a fork anyway.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'electron/**'
+      - '.github/workflows/verify-signing.yml'
+
+concurrency:
+  group: verify-signing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-macos-signing:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fail fast if signing secret is unavailable (e.g. fork PR)
+        run: |
+          if [[ -z "${{ secrets.MACOS_CERTIFICATE }}" ]]; then
+            echo "::error::MACOS_CERTIFICATE is empty — signing cannot be verified (fork PR?)"
+            exit 1
+          fi
+
+      - name: Build, sign, notarize, staple (no publish)
+        working-directory: electron
+        run: npm run build-mac -- --publish never
+        shell: bash
+        env:
+          # Native electron-builder signing (imports CSC_LINK into its own
+          # keychain, signs inside-out) + notarization (mac.notarize in
+          # package.json) + auto-staple. CSC_FOR_PULL_REQUEST forces signing here:
+          # electron-builder skips signing on pull_request builds by default.
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          CSC_FOR_PULL_REQUEST: "true"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Assert signed + hardened + timestamped + notarized + stapled
+        shell: bash
+        run: |
+          set -uo pipefail
+          TEAM_ID="4HBULGLS48"
+          shopt -s nullglob
+          apps=(electron/dist/mac*/*.app)
+          if [[ ${#apps[@]} -eq 0 ]]; then
+            echo "::error::no .app produced under electron/dist"; exit 1
+          fi
+          fail=0
+          for app in "${apps[@]}"; do
+            echo "==================================================================="
+            echo "Verifying: $app"
+            info=$(codesign -dvvv "$app" 2>&1)
+            echo "$info"
+            echo "------ assertions ------"
+            grep -q "Authority=Developer ID Application:.*(${TEAM_ID})" <<<"$info" \
+              && echo "PASS  signed by Developer ID ($TEAM_ID)" \
+              || { echo "FAIL  not signed by expected Developer ID"; fail=1; }
+            grep -q "TeamIdentifier=${TEAM_ID}" <<<"$info" \
+              && echo "PASS  TeamIdentifier=$TEAM_ID" \
+              || { echo "FAIL  wrong/absent TeamIdentifier"; fail=1; }
+            grep -qE "flags=.*runtime" <<<"$info" \
+              && echo "PASS  hardened runtime" \
+              || { echo "FAIL  hardened-runtime flag absent"; fail=1; }
+            grep -q "^Timestamp=" <<<"$info" \
+              && echo "PASS  secure timestamp present" \
+              || { echo "FAIL  no secure timestamp (is --timestamp being passed?)"; fail=1; }
+
+            codesign --verify --deep --strict --verbose=2 "$app" \
+              && echo "PASS  signature verifies (--deep --strict)" \
+              || { echo "FAIL  signature verification failed"; fail=1; }
+
+            spctl -a -t exec -vvv "$app" 2>/tmp/spctl.txt; cat /tmp/spctl.txt
+            grep -q "accepted" /tmp/spctl.txt \
+              && echo "PASS  Gatekeeper accepts" \
+              || { echo "FAIL  Gatekeeper did not accept"; fail=1; }
+            grep -q "source=Notarized Developer ID" /tmp/spctl.txt \
+              && echo "PASS  notarized" \
+              || { echo "FAIL  not notarized"; fail=1; }
+
+            xcrun stapler validate "$app" \
+              && echo "PASS  notarization ticket stapled" \
+              || { echo "FAIL  no stapled ticket"; fail=1; }
+          done
+          if [[ $fail -ne 0 ]]; then
+            echo "::error::macOS signing/notarization verification FAILED"; exit 1
+          fi
+          echo "All macOS signing / notarization / stapling checks passed."
+
+      - name: Upload signed installers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-signed-dmg
+          path: |
+            electron/dist/*.dmg
+            electron/dist/*.dmg.blockmap
+          if-no-files-found: warn
+          retention-days: 7

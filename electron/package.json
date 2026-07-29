@@ -72,7 +72,7 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": false,
+      "notarize": true,
       "target": [
         {
           "target": "dmg",
@@ -84,7 +84,6 @@
       ]
     },
     "afterPack": "./scripts/afterPack.js",
-    "afterSign": "./scripts/afterSign.js",
     "win": {
       "icon": "build/icon.ico",
       "target": [
