@@ -23,6 +23,12 @@ const codesignApp = appPath => {
     "--force",
     "--deep",
     "--options", "runtime",
+    // A secure timestamp is *mandatory* for notarization — Apple's notary
+    // service rejects any signature without one. It was omitted while the app
+    // was self-signed (that path never notarized, and a self-signed cert can't
+    // be notarized anyway), so this was latent until a real Developer ID landed.
+    // Requires network access to Apple's timestamp server at sign time.
+    "--timestamp",
     "--entitlements", path.resolve(__dirname, "../build/entitlements.mac.plist"),
     "--sign", identityHash,
     appPath,
@@ -48,6 +54,15 @@ const notarizeMacos = async (appPath) => {
     appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD,
   });
   console.log("--- notarization completed ---");
+
+  // Staple the notarization ticket into the .app so Gatekeeper validates it
+  // *offline*. @electron/notarize only submits and polls; it does not staple.
+  // Stapling here — after notarize, before electron-builder assembles the DMG —
+  // means the DMG ships a pre-stapled .app, so a downloaded copy opens with no
+  // network round-trip to Apple. (The .app is the notarized unit; stapling it is
+  // sufficient — the DMG is just a container for the already-stapled bundle.)
+  execFileSync("xcrun", ["stapler", "staple", appPath], { stdio: "inherit" });
+  console.log("--- stapled notarization ticket ---");
 };
 
 const afterSign = async context => {

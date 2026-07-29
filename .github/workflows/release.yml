@@ -146,10 +146,12 @@ jobs:
           # own (trust-gated) identity discovery — signing happens manually in
           # afterSign (electron/scripts/afterSign.js) instead.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are intentionally
-          # unset for now: scripts/afterSign.js no-ops the notarize step without them,
-          # so the mac build is signed but not notarized until a real Apple Developer
-          # ID is set up.
+          # Presence of these three is what turns notarization on in
+          # scripts/afterSign.js (it no-ops the notarize+staple step when any is
+          # missing). Now set from repo secrets since a real Developer ID exists.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
   republish:
     # Manual recovery job (workflow_dispatch, `tag` input). Rebuilds and uploads
@@ -228,6 +230,11 @@ jobs:
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # Notarize backfilled installers too, so re-uploaded assets match what a
+          # fresh release now produces (see the release job's build step).
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       # Upload the built installers (+ blockmaps + electron-updater metadata) to
       # the existing release via the gh CLI, which — unlike electron-builder's

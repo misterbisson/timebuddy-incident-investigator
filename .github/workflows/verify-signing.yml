@@ -1,0 +1,147 @@
+name: Verify macOS Signing
+
+# Clean-room end-to-end check that the macOS build is genuinely Developer-ID
+# signed, notarized, and stapled — the exact release signing path (import cert ->
+# build -> afterSign codesign+notarize+staple) minus the publish step. Runs on a
+# fresh runner so it can't be fooled by a developer machine's cached
+# intermediates or pre-trusted keychain. Also uploads the signed .dmg so a human
+# can verify the real Gatekeeper open experience on a clean Mac.
+#
+# Same-repo PRs get repo secrets; fork PRs do not (MACOS_CERTIFICATE would be
+# empty and the import step fails fast) — that's intended, signing can't be
+# verified from a fork anyway.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'electron/**'
+      - '.github/workflows/verify-signing.yml'
+
+concurrency:
+  group: verify-signing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-macos-signing:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Identical to the release job's import: create a throwaway keychain, import
+      # the .p12, and expose the identity's hash so afterSign signs with it
+      # directly (electron-builder's own discovery stays disabled).
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE" ]]; then
+            echo "::error::MACOS_CERTIFICATE is empty — signing cannot be verified (fork PR?)"
+            exit 1
+          fi
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PWD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security import certificate.p12 -P "$MACOS_CERTIFICATE_PWD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
+
+          IDENTITY_HASH=$(security find-identity "$KEYCHAIN_PATH" | grep -Eo '[0-9A-F]{40}' | head -1)
+          if [[ -z "$IDENTITY_HASH" ]]; then
+            echo "::error::No signing identity found in imported certificate"
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
+
+          rm certificate.p12
+
+      - name: Build, sign, notarize, staple (no publish)
+        working-directory: electron
+        run: npm run build-mac -- --publish never
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Assert signed + hardened + timestamped + notarized + stapled
+        shell: bash
+        run: |
+          set -uo pipefail
+          TEAM_ID="4HBULGLS48"
+          shopt -s nullglob
+          apps=(electron/dist/mac*/*.app)
+          if [[ ${#apps[@]} -eq 0 ]]; then
+            echo "::error::no .app produced under electron/dist"; exit 1
+          fi
+          fail=0
+          for app in "${apps[@]}"; do
+            echo "==================================================================="
+            echo "Verifying: $app"
+            info=$(codesign -dvvv "$app" 2>&1)
+            echo "$info"
+            echo "------ assertions ------"
+            grep -q "Authority=Developer ID Application:.*(${TEAM_ID})" <<<"$info" \
+              && echo "PASS  signed by Developer ID ($TEAM_ID)" \
+              || { echo "FAIL  not signed by expected Developer ID"; fail=1; }
+            grep -q "TeamIdentifier=${TEAM_ID}" <<<"$info" \
+              && echo "PASS  TeamIdentifier=$TEAM_ID" \
+              || { echo "FAIL  wrong/absent TeamIdentifier"; fail=1; }
+            grep -qE "flags=.*runtime" <<<"$info" \
+              && echo "PASS  hardened runtime" \
+              || { echo "FAIL  hardened-runtime flag absent"; fail=1; }
+            grep -q "^Timestamp=" <<<"$info" \
+              && echo "PASS  secure timestamp present" \
+              || { echo "FAIL  no secure timestamp (is --timestamp being passed?)"; fail=1; }
+
+            codesign --verify --deep --strict --verbose=2 "$app" \
+              && echo "PASS  signature verifies (--deep --strict)" \
+              || { echo "FAIL  signature verification failed"; fail=1; }
+
+            spctl -a -t exec -vvv "$app" 2>/tmp/spctl.txt; cat /tmp/spctl.txt
+            grep -q "accepted" /tmp/spctl.txt \
+              && echo "PASS  Gatekeeper accepts" \
+              || { echo "FAIL  Gatekeeper did not accept"; fail=1; }
+            grep -q "source=Notarized Developer ID" /tmp/spctl.txt \
+              && echo "PASS  notarized" \
+              || { echo "FAIL  not notarized"; fail=1; }
+
+            xcrun stapler validate "$app" \
+              && echo "PASS  notarization ticket stapled" \
+              || { echo "FAIL  no stapled ticket"; fail=1; }
+          done
+          if [[ $fail -ne 0 ]]; then
+            echo "::error::macOS signing/notarization verification FAILED"; exit 1
+          fi
+          echo "All macOS signing / notarization / stapling checks passed."
+
+      - name: Upload signed installers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-signed-dmg
+          path: |
+            electron/dist/*.dmg
+            electron/dist/*.dmg.blockmap
+          if-no-files-found: warn
+          retention-days: 7
