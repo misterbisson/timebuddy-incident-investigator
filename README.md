@@ -53,8 +53,8 @@ separate server process, no env vars to hand-edit, no plaintext credential file 
 
 1. **Download & install** the latest build for your platform from
    [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
-   On macOS the first launch hits a Gatekeeper block (the build isn't notarized yet) — see
-   the [one-time click-through](#installing-a-downloaded-build-macos) below.
+   The macOS build is Developer ID signed and notarized, so it opens normally — just drag
+   it to Applications (see [Installing a downloaded build](#installing-a-downloaded-build-macos)).
 2. **Add a connection** for each Grafana or Graylog endpoint (one per region/tier) — Bearer
    token or Basic auth for Grafana, API token or login for Graylog. Hit **Test connection**,
    then **Save**. See [Configuring connections](#configuring-connections).
@@ -86,42 +86,15 @@ above chain them. **See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.
 
 ## Installing a downloaded build (macOS)
 
-The macOS build is signed with a self-signed certificate, not a real Apple Developer ID
+The macOS build is signed with an Apple Developer ID certificate and **notarized** by Apple
 (see [`electron/CONTRIBUTING.md`](electron/CONTRIBUTING.md#building-signing-and-releasing)),
-so Gatekeeper blocks it as unverified on first launch. On Sequoia and later the old
-"right-click → Open" bypass no longer works — it has to be allowed from System Settings.
-This is a one-time click-through per downloaded build.
+so it opens normally — no Gatekeeper block, no `xattr` or "Open Anyway" workaround. Open the
+`.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
 
-Fastest path — clear the quarantine flag from the terminal, then open the app normally:
+<img src="docs/images/macos-install-1-drag-to-applications.png" width="500" alt="Drag the app into the Applications folder">
 
-```bash
-xattr -d com.apple.quarantine "/Applications/Timebuddy Incident Investigator.app"
-```
-
-<details>
-<summary>Prefer clicking through the dialogs? Step-by-step with screenshots.</summary>
-
-1. Open the `.dmg` and drag `Timebuddy Incident Investigator.app` into **Applications**.
-
-   <img src="docs/images/macos-install-1-drag-to-applications.png" width="500" alt="Drag the app into the Applications folder">
-
-2. Double-click the app. macOS refuses to open it — click **Done** (not "Move to Trash").
-
-   <img src="docs/images/macos-install-2-not-opened.png" width="380" alt="“Timebuddy Incident Investigator.app” Not Opened">
-
-3. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open
-   Anyway** next to the app's entry.
-
-   <img src="docs/images/macos-install-3-privacy-security-open-anyway.png" width="360" alt="Privacy & Security showing the blocked app with an Open Anyway button">
-
-4. Confirm **Open Anyway** in the dialog, then authenticate with Touch ID or your password.
-
-   <img src="docs/images/macos-install-4-confirm-open-anyway.png" width="360" alt="Open “Timebuddy Incident Investigator.app”? confirmation dialog">
-
-</details>
-
-The app opens normally afterward and won't be re-blocked — until a rebuilt or re-downloaded
-`.app` is quarantined again and needs it repeated.
+The first time Claude launches the app as a server, macOS shows a one-time keychain prompt
+(it's decrypting your saved connection credentials) — click **Allow**.
 
 ## Configuring connections
 
@@ -409,9 +382,9 @@ would race the listener's own appends.
   datasource UID. Extraction is a best-effort regex scan, not a full parser.
 - **`detect_correlated_anomalies`** ranks candidates with a heuristic (z-score magnitude ×
   label overlap × onset-timing proximity), not a statistical correlation/causation test.
-- **Not notarized yet:** downloaded builds hit a Gatekeeper block on macOS (see
-  [above](#installing-a-downloaded-build-macos)) or SmartScreen warnings on Windows until
-  signed with a real developer identity — a prerequisite for wider rollout, not a code fix.
+- **Windows/Linux unsigned:** the macOS build is Developer ID signed and notarized (opens
+  normally), but Windows builds still trip SmartScreen and Linux builds are unsigned —
+  signing those is a packaging/credentials task, not a code fix.
 - **`export_panel_csv`'s Grafana-side transformation capture** is Electron-only and depends on
   Grafana's Inspect-drawer DOM rather than a published API, so it's more version-sensitive than
   the rest of the integration. See [`docs/TOOLS.md`](docs/TOOLS.md#csv-export-behavior).
