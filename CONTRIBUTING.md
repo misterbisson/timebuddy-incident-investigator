@@ -77,6 +77,24 @@ and optionally `GRAYLOG_STREAM_ID`/`GRAYLOG_TAGS`. See `.env.example` for the fu
 Like the Grafana vars, these are the dev/CI convenience path only — the distributed app
 sources log connections from its own encrypted store instead.
 
+## Using the local build in Claude Code
+
+This repo ships a checked-in [`.mcp.json`](.mcp.json) that points the
+`timebuddy-incident-investigator` MCP server at the **locally-built Electron binary** in
+`--mcp-server` mode (`node node_modules/electron/cli.js electron --mcp-server`). So when you
+open Claude Code *in this repo* it drives your in-progress code — with your real
+`safeStorage` connections, exactly like the installed app — and because it shares the server
+name, it overrides the user-scope **distribution** app just for this repo. Every other
+project keeps using the installed release build.
+
+Because it runs the built app, the repo must be built first: `npm install` at the root and
+in `electron/` (see [Commands](#commands)), and the engine's `dist/` must exist. After
+changing engine code, rebuild (`npm run build`) and restart the MCP server so the change is
+picked up. Claude Code asks you to approve the project server the first time it appears.
+
+This differs from the standalone-CLI snippet above, which talks to Grafana/Graylog via
+env-var connections and never touches Electron or the encrypted store.
+
 ## Webhook listener
 
 A separate, optional process (`src/webhook/listener.ts`) — not part of the MCP server

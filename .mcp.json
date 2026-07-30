@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "timebuddy-incident-investigator": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["node_modules/electron/cli.js", "electron", "--mcp-server"]
+    }
+  }
+}
