@@ -130,9 +130,9 @@ describe('applyTagBreakout — unsupported targets hard-error (never silent no-o
     expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(TagBreakoutError);
   });
 
-  it('throws for a Prometheus target (has expr), pointing at issue #127', () => {
+  it('throws for a Prometheus target (has expr), pointing at issue #131', () => {
     const t = target({ expr: 'sum(rate(http_requests_total[5m]))' });
-    expect(() => applyTagBreakout(t, { key: 'instance' })).toThrow(/#127/);
+    expect(() => applyTagBreakout(t, { key: 'instance' })).toThrow(/#131/);
   });
 
   it('throws when neither a builder measurement nor a PromQL expr is present', () => {
