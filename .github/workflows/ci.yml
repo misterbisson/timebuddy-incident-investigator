@@ -89,8 +89,17 @@ jobs:
       # on; xvfb-run gives Electron a display. Piping an empty password to
       # --unlock both creates and unlocks a throwaway keyring on first use, so
       # this needs no interactive prompt or pre-existing keyring file.
+      #
+      # ELECTRON_DISABLE_SANDBOX: the npm-installed Electron binary's
+      # chrome-sandbox helper isn't root-owned/setuid here (unlike a real
+      # package install), so Chromium's SUID sandbox refuses to run rather
+      # than silently proceed unsandboxed. This is CI-only — it doesn't affect
+      # how the packaged app (built by release.yml/electron-builder) runs for
+      # end users.
       - name: Run mcpServerMode integration test
         working-directory: electron
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
         run: |
           dbus-run-session -- bash -c '
             eval "$(printf "\n" | gnome-keyring-daemon --unlock --components=secrets)"
