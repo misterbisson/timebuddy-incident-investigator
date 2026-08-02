@@ -32,12 +32,12 @@ export class TagBreakoutError extends Error {
  * add structured `tags`/`groupBy` fields to the target and let Grafana's own
  * InfluxDB backend build and escape the query (the same path
  * execute_query_window already trusts to run builder-mode targets). Raw-mode
- * InfluxQL would mean string-rewriting live query text; PromQL/Loki is #127.
+ * InfluxQL would mean string-rewriting live query text; PromQL/Loki is #131.
  */
 function assertBreakoutSupported(t: PanelTarget): void {
   if (typeof t.expr === 'string') {
     throw new TagBreakoutError(
-      `refId ${t.refId}: tagBreakout isn't supported for Prometheus/PromQL targets yet (tracked in issue #127). ` +
+      `refId ${t.refId}: tagBreakout isn't supported for Prometheus/PromQL targets yet (tracked in issue #131). ` +
         'It currently applies only to builder-mode InfluxQL targets.',
     );
   }
