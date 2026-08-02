@@ -82,6 +82,12 @@ th, td {
   border-bottom: 1px solid #2d2d30;
 }
 
+/* The actions column (Edit/Duplicate/Delete): keep the row's buttons on one
+   line rather than wrapping when the URL column eats the available width. */
+td:last-child {
+  white-space: nowrap;
+}
+
 th {
   color: #9c9c9c;
   font-weight: 500;

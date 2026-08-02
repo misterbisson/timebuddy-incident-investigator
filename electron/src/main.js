@@ -47,7 +47,7 @@ function openOrFocusConnectionsWindow() {
     return connectionsWindow;
   }
   connectionsWindow = new BrowserWindow({
-    width: 760,
+    width: 900,
     height: 640,
     title: 'Timebuddy Connection Manager',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
