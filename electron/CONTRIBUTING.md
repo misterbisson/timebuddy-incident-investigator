@@ -49,12 +49,14 @@ No live Grafana instance is required; the seeded connection points at a placehol
 specifically so the test can assert the call got *past* connection resolution, not that it
 succeeded against a real Grafana.
 
-**This test is manual-only — no CI job runs it.** `ci.yml` deliberately installs with
-`--workspaces=false`, so there's no Electron binary there, and `release.yml`'s build jobs
-run `electron-builder` but never invoke this script. Run it yourself before merging
-anything that changes the tool set, connection storage, or `--mcp-server` startup; a green
-CI says nothing about any of them. Tracked in
-[#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
+`ci.yml`'s `electron-mcp-server` job runs this on every PR, under `xvfb-run` with a
+throwaway `gnome-keyring` session (Linux `safeStorage` needs a running Secret Service to
+encrypt/decrypt the seeded connection). It's a separate job from `ci.yml`'s fast
+fixture-based `test` job — this one needs the full workspace install (the real Electron
+binary) plus those system packages, so it's split out rather than slowing down the fast
+signal. `release.yml`'s build jobs still don't invoke it; they package with
+`electron-builder` but never run the packaged binary. Formerly untested in CI at all —
+see [#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
 
 `test/connectionStore.test.js` covers `connectionStore.js` directly (same
 bypass-the-renderer approach as `seedConnection.js`): both the `grafana` and `graylog`
