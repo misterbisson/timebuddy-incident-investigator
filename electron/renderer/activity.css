@@ -1,4 +1,4 @@
-/* Activity window layout — same dark palette as styles.css, laid out as a sidebar + detail pane instead of a table. */
+/* Activity window layout — same theme variables as styles.css (see its :root/light-media block), laid out as a sidebar + detail pane instead of a table. */
 
 .activity-body {
   padding: 0;
@@ -14,8 +14,8 @@
 .activity-sidebar {
   width: 300px;
   flex-shrink: 0;
-  border-right: 1px solid #2d2d30;
-  background-color: #1e1e1e;
+  border-right: 1px solid var(--color-border);
+  background-color: var(--color-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -40,32 +40,32 @@
 
 .activity-list .empty-row {
   padding: 24px 16px;
-  color: #9c9c9c;
+  color: var(--color-fg-muted);
   font-size: 12px;
 }
 
 .activity-item {
   padding: 8px 16px;
-  border-bottom: 1px solid #2d2d30;
+  border-bottom: 1px solid var(--color-border);
   cursor: pointer;
 }
 
 .activity-item:hover {
-  background-color: #2a2d2e;
+  background-color: var(--color-hover-bg);
 }
 
 .activity-item.selected {
-  background-color: #094771;
+  background-color: var(--color-selected-bg);
 }
 
 .activity-item-time {
   font-size: 11px;
-  color: #9c9c9c;
+  color: var(--color-fg-muted);
 }
 
 .activity-item-title {
   font-size: 13px;
-  color: #d4d4d4;
+  color: var(--color-fg);
   margin: 2px 0;
   white-space: nowrap;
   overflow: hidden;
@@ -74,7 +74,7 @@
 
 .activity-item-meta {
   font-size: 11px;
-  color: #9c9c9c;
+  color: var(--color-fg-muted);
 }
 
 /* Small tag distinguishing a Grafana panel row from a Graylog log row. */
@@ -87,15 +87,15 @@
   margin-right: 6px;
   border-radius: 3px;
   vertical-align: middle;
-  color: #d4d4d4;
+  color: var(--color-tag-fg);
 }
 
 .activity-kind-panel {
-  background-color: #37373d;
+  background-color: var(--color-tag-panel-bg);
 }
 
 .activity-kind-log {
-  background-color: #3a2f4d;
+  background-color: var(--color-tag-log-bg);
 }
 
 .activity-detail {
@@ -107,7 +107,7 @@
 }
 
 .activity-empty-state {
-  color: #9c9c9c;
+  color: var(--color-fg-muted);
   font-size: 13px;
   margin-top: 40px;
   text-align: center;
@@ -142,7 +142,7 @@
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  color: #d4d4d4;
+  color: var(--color-fg);
 }
 
 .export-status.hidden {
@@ -150,14 +150,14 @@
 }
 
 #exportStatusText {
-  color: #9c9c9c;
+  color: var(--color-fg-muted);
 }
 
 .activity-detail-view {
   flex: 1;
   overflow: auto;
-  background-color: #101010;
-  border: 1px solid #2d2d30;
+  background-color: var(--color-bg-deep);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   display: flex;
   align-items: flex-start;
@@ -194,18 +194,18 @@
   display: flex;
   gap: 12px;
   padding: 6px 0;
-  border-bottom: 1px solid #2d2d30;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .log-summary-row dt {
   flex-shrink: 0;
   width: 72px;
-  color: #9c9c9c;
+  color: var(--color-fg-muted);
 }
 
 .log-summary-row dd {
   margin: 0;
-  color: #d4d4d4;
+  color: var(--color-fg);
   word-break: break-word;
   white-space: pre-wrap;
 }
