@@ -68,9 +68,15 @@ const transport = new StdioClientTransport({
 
 const client = new Client({ name: 'mcp-server-mode-test', version: '0.0.1' });
 
+// Attached before connect(), not after: StdioClientTransport's stderr
+// PassThrough exists immediately on construction specifically so early
+// output isn't lost — a startup crash (before the MCP handshake even
+// completes) would otherwise fail client.connect() itself with no listener
+// ever attached, silently losing the one place the real error appears.
+transport.stderr?.on('data', (chunk) => process.stderr.write(`[electron stderr] ${chunk}`));
+
 try {
   await client.connect(transport);
-  transport.stderr?.on('data', (chunk) => process.stderr.write(`[electron stderr] ${chunk}`));
 
   const { tools } = await client.listTools();
   const expectedNames = [
