@@ -2,7 +2,14 @@
 // connectionStore.js (bypassing the renderer/IPC layer) so integration tests
 // can run headlessly. Run with:
 //   electron test/seedConnection.js --user-data-dir=<dir>
-const { app } = require('electron');
+const { app, safeStorage } = require('electron');
+
+// Belt-and-suspenders alongside the --password-store=basic CLI switch: a CI
+// run with that switch passed on the command line still saw
+// isEncryptionAvailable() return false, so this calls the same Electron API
+// its own docs recommend, in case the raw CLI switch isn't taking effect for
+// some reason this environment-specific.
+app.commandLine.appendSwitch('password-store', 'basic');
 
 // Must match main.js's app.setName() call — safeStorage's encryption key is
 // scoped to the app identity, so seeding under a different name here would
@@ -10,8 +17,12 @@ const { app } = require('electron');
 app.setName('timebuddy-connection-manager');
 
 console.log('[seed] requiring electron done, waiting for whenReady()');
+console.log('[seed] argv:', process.argv);
+console.log('[seed] XDG_CURRENT_DESKTOP=%s DESKTOP_SESSION=%s DISPLAY=%s', process.env.XDG_CURRENT_DESKTOP, process.env.DESKTOP_SESSION, process.env.DISPLAY);
+
 app.whenReady().then(() => {
   console.log('[seed] whenReady() resolved');
+  console.log('[seed] safeStorage.isEncryptionAvailable() =', safeStorage.isEncryptionAvailable());
   const store = require('../src/connectionStore.js');
   console.log('[seed] connectionStore required, upserting grafana connection');
   store.upsertConnection({
@@ -31,4 +42,11 @@ app.whenReady().then(() => {
   });
   console.log('[seed] graylog connection upserted, exiting');
   app.exit(0);
+}).catch((err) => {
+  // Without this, a throw in the block above is an unhandled rejection that
+  // Electron logs a warning for but does NOT exit on — the process (and any
+  // parent spawnSync waiting on it) then hangs indefinitely instead of
+  // failing fast.
+  console.error('[seed] FAILED:', err);
+  app.exit(1);
 });
