@@ -130,11 +130,6 @@ describe('applyTagBreakout — unsupported targets hard-error (never silent no-o
     expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(TagBreakoutError);
   });
 
-  it('throws for a Prometheus target (has expr), pointing at issue #131', () => {
-    const t = target({ expr: 'sum(rate(http_requests_total[5m]))' });
-    expect(() => applyTagBreakout(t, { key: 'instance' })).toThrow(/#131/);
-  });
-
   it('throws when neither a builder measurement nor a PromQL expr is present', () => {
     const t = target({ query: 'SELECT 1', rawQuery: false });
     expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(/couldn't identify a supported query type/);
@@ -143,5 +138,31 @@ describe('applyTagBreakout — unsupported targets hard-error (never silent no-o
   it('names the offending refId in the error', () => {
     const t = target({ refId: 'B', expr: 'up' });
     expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(/refId B/);
+  });
+});
+
+describe('applyTagBreakout — PromQL targets (dispatch + error wrapping; rewrite logic itself is in promqlBreakout.test.ts)', () => {
+  it('dispatches a target with expr to the PromQL rewrite path', () => {
+    const t = target({ expr: 'sum(rate(http_requests_total[5m]))' });
+    const out = applyTagBreakout(t, { key: 'instance', value: 'web-07' });
+    expect(out.raw.expr).toBe('sum(rate(http_requests_total{instance="web-07"}[5m]))');
+  });
+
+  it('does the group-by (no value) rewrite too', () => {
+    const t = target({ expr: 'sum(rate(http_requests_total[5m]))' });
+    const out = applyTagBreakout(t, { key: 'instance' });
+    expect(out.raw.expr).toBe('sum by (instance) (rate(http_requests_total[5m]))');
+  });
+
+  it('wraps a PromQL rewrite failure as a refId-tagged TagBreakoutError, not a bare RewriteFailure', () => {
+    const t = target({ refId: 'B', expr: 'up' });
+    expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(TagBreakoutError);
+    expect(() => applyTagBreakout(t, { key: 'host' })).toThrow(/couldn't safely rewrite this PromQL query/);
+  });
+
+  it('does not mutate the input target', () => {
+    const input = target({ expr: 'sum(rate(x[5m]))' });
+    applyTagBreakout(input, { key: 'instance', value: 'web-07' });
+    expect(input.raw.expr).toBe('sum(rate(x[5m]))');
   });
 });
