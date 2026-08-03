@@ -49,12 +49,15 @@ No live Grafana instance is required; the seeded connection points at a placehol
 specifically so the test can assert the call got *past* connection resolution, not that it
 succeeded against a real Grafana.
 
-`ci.yml`'s `electron-mcp-server` job runs this on every PR, under `xvfb-run` with a
-throwaway `gnome-keyring` session (Linux `safeStorage` needs a running Secret Service to
-encrypt/decrypt the seeded connection). It's a separate job from `ci.yml`'s fast
-fixture-based `test` job — this one needs the full workspace install (the real Electron
-binary) plus those system packages, so it's split out rather than slowing down the fast
-signal. `release.yml`'s build jobs still don't invoke it; they package with
+`ci.yml`'s `electron-mcp-server` job runs this on every PR, under a directly-started `Xvfb`
+(Electron needs a display even with no window shown). The spawned Electron processes get
+`--password-store=basic` so Linux `safeStorage` never touches a real Secret Service — a
+real D-Bus/`gnome-keyring` session works too, but can hang indefinitely on a headless
+runner waiting on an unlock prompt nothing will ever answer; `--password-store=basic` is
+documented Chromium behavior, not a workaround specific to this repo. It's a separate job
+from `ci.yml`'s fast fixture-based `test` job — this one needs the full workspace install
+(the real Electron binary) plus those system packages, so it's split out rather than
+slowing down the fast signal. `release.yml`'s build jobs still don't invoke it; they package with
 `electron-builder` but never run the packaged binary. Formerly untested in CI at all —
 see [#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
 

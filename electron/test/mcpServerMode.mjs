@@ -28,17 +28,26 @@ function fail(message) {
   process.exit(1);
 }
 
-const seed = spawnSync(electronBin, ['test/seedConnection.js', `--user-data-dir=${userDataDir}`], {
-  cwd: electronRoot,
-  encoding: 'utf8',
-});
+// --password-store=basic is a Chromium switch (documented as a safeStorage
+// override for Linux): it skips the OS keyring/Secret Service entirely,
+// which on a headless CI runner can otherwise hang indefinitely waiting on
+// an unlock prompt nothing will ever answer. A no-op on macOS/Windows, where
+// safeStorage always uses Keychain/DPAPI regardless of this flag.
+const seed = spawnSync(
+  electronBin,
+  ['test/seedConnection.js', `--user-data-dir=${userDataDir}`, '--password-store=basic'],
+  {
+    cwd: electronRoot,
+    encoding: 'utf8',
+  },
+);
 if (seed.status !== 0) {
   fail(`seed script exited ${seed.status} (spawn error: ${seed.error})\nstderr: ${seed.stderr}\nstdout: ${seed.stdout}`);
 }
 
 const transport = new StdioClientTransport({
   command: electronBin,
-  args: ['.', '--mcp-server', `--user-data-dir=${userDataDir}`],
+  args: ['.', '--mcp-server', `--user-data-dir=${userDataDir}`, '--password-store=basic'],
   cwd: electronRoot,
   stderr: 'pipe',
 });

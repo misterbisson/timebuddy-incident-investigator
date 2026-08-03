@@ -87,31 +87,28 @@ jobs:
         run: node -e "require('electron')"
 
       # Electron needs a display even in --mcp-server mode, where no window is
-      # ever shown. safeStorage's Linux backend also needs a running Secret
-      # Service (gnome-keyring here) to encrypt/decrypt the seeded connection —
-      # without one, isEncryptionAvailable() is false and the seed step fails.
+      # ever shown.
       - name: Install Electron runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb dbus-x11 gnome-keyring \
+          sudo apt-get install -y xvfb \
             libnss3 libgbm1 libasound2t64 libgtk-3-0 libxss1 libxkbcommon0 \
             libatk-bridge2.0-0 libcups2 libdrm2
 
-      # Xvfb gives Electron a display; gnome-keyring-daemon gives safeStorage a
-      # Secret Service. Both started directly rather than through the
-      # xvfb-run/dbus-run-session wrapper scripts: an earlier attempt hung
-      # indefinitely inside xvfb-run's own X-server-readiness wait, before it
-      # ever got to exec anything — confirmed because the runner's orphan-
-      # process cleanup showed xvfb-run and Xvfb had started but neither
-      # gnome-keyring-daemon nor node ever did. Starting each primitive
-      # ourselves removes that wrapper-script layer entirely.
+      # Started directly rather than through the xvfb-run wrapper script: an
+      # earlier attempt hung indefinitely inside xvfb-run's own X-server-
+      # readiness wait, before it ever got to exec anything — confirmed
+      # because the runner's orphan-process cleanup showed xvfb-run and Xvfb
+      # had started but node never did.
       #
-      # The keyring daemon's env output is redirected to a file and sourced,
-      # NOT captured via `$(...)`: it forks a persistent child that inherits
-      # the stdout pipe, so command substitution never sees EOF and hangs
-      # forever waiting for output that already arrived. `dbus-launch` (unlike
-      # dbus-run-session) forks dbus-daemon into the background and returns
-      # immediately, so capturing its two export lines via `$(...)` is safe.
+      # test/mcpServerMode.mjs passes --password-store=basic to the spawned
+      # Electron processes, so safeStorage never touches a real Secret
+      # Service — an earlier attempt wired up dbus-launch + gnome-keyring-
+      # daemon instead, which got further (Electron actually launched and
+      # touched the X server) but then hung for 4+ minutes with no further
+      # output, consistent with libsecret waiting on an unlock prompt nothing
+      # in this headless setup will ever answer. --password-store=basic is
+      # documented Chromium behavior, not a workaround specific to this repo.
       #
       # ELECTRON_DISABLE_SANDBOX: the npm-installed Electron binary's
       # chrome-sandbox helper isn't root-owned/setuid here (unlike a real
@@ -124,26 +121,7 @@ jobs:
         env:
           ELECTRON_DISABLE_SANDBOX: '1'
         run: |
-          echo "::group::Xvfb"
           Xvfb :99 -screen 0 1280x1024x24 &
           export DISPLAY=:99
           sleep 2
-          echo "Xvfb started, DISPLAY=$DISPLAY"
-          echo "::endgroup::"
-
-          echo "::group::dbus-launch"
-          eval "$(dbus-launch --sh-syntax)"
-          echo "dbus-launch done: DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
-          echo "::endgroup::"
-
-          echo "::group::gnome-keyring-daemon"
-          printf "\n" | gnome-keyring-daemon --unlock --components=secrets > /tmp/keyring-env.sh
-          echo "gnome-keyring-daemon done, wrote:"
-          cat /tmp/keyring-env.sh
-          source /tmp/keyring-env.sh
-          echo "::endgroup::"
-
-          echo "::group::node test/mcpServerMode.mjs"
           node test/mcpServerMode.mjs
-          echo "node exited $?"
-          echo "::endgroup::"
