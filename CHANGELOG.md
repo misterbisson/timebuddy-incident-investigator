@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.0...v0.6.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* bound screenshot backing store to the device-pixel scale factor ([#187](https://github.com/misterbisson/timebuddy-incident-investigator/issues/187)) ([5ba31ce](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5ba31ce44d711bdb73d9fb9ca063ad940be17daf))
+
 ## [0.6.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.5.2...v0.6.0) (2026-08-03)
 
 
