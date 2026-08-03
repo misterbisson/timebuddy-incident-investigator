@@ -64,6 +64,13 @@ const transport = new StdioClientTransport({
   args: ['.', '--mcp-server', `--user-data-dir=${userDataDir}`, '--password-store=basic', '--disable-gpu'],
   cwd: electronRoot,
   stderr: 'pipe',
+  // Unlike the seed step's spawnSync above (which inherits the full parent
+  // environment by default), StdioClientTransport only inherits a small,
+  // fixed allowlist (HOME/LOGNAME/PATH/SHELL/TERM/USER) unless env is given
+  // explicitly here — so CI's ELECTRON_DISABLE_SANDBOX never reached this
+  // process, and it hit the exact same SUID sandbox fatal error the seed
+  // step needed that variable to avoid.
+  env: process.env,
 });
 
 const client = new Client({ name: 'mcp-server-mode-test', version: '0.0.1' });
