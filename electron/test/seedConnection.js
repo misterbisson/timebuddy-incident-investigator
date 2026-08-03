@@ -22,6 +22,17 @@ console.log('[seed] XDG_CURRENT_DESKTOP=%s DESKTOP_SESSION=%s DISPLAY=%s', proce
 
 app.whenReady().then(() => {
   console.log('[seed] whenReady() resolved');
+  // The missing piece, Linux-only (these methods don't exist at all on
+  // macOS/Windows): selecting the basic_text backend (--password-store=
+  // basic) alone does NOT make isEncryptionAvailable() true. Electron's
+  // native IsEncryptionAvailable() on Linux is:
+  //   OSCrypt::IsEncryptionAvailable() || (use_password_v10_ && backend == "basic_text")
+  // — that use_password_v10_ flag is a separate opt-in, set via this call
+  // (added in Electron 25.5.0), acknowledging the weaker guarantee.
+  if (process.platform === 'linux') {
+    safeStorage.setUsePlainTextEncryption(true);
+    console.log('[seed] safeStorage.getSelectedStorageBackend() =', safeStorage.getSelectedStorageBackend());
+  }
   console.log('[seed] safeStorage.isEncryptionAvailable() =', safeStorage.isEncryptionAvailable());
   const store = require('../src/connectionStore.js');
   console.log('[seed] connectionStore required, upserting grafana connection');
