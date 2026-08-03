@@ -1,5 +1,5 @@
 import type { GrafanaClient } from '../grafana/client.js';
-import type { AlertmanagerAlert, RulerAlertRule } from '../grafana/types.js';
+import type { AlertmanagerAlert, RulerAlertRule, RulerRuleEntry } from '../grafana/types.js';
 import { parseGrafanaUrl } from './urlParser.js';
 
 export interface AlertContext {
@@ -23,6 +23,26 @@ export interface AlertContext {
   threshold?: string;
   /** The alert rule's query targets, when resolved via ruleUid. */
   ruleQueries?: RulerAlertRule['data'];
+  /**
+   * ISO 8601 timestamp of the rule's last edit, when resolved via ruleUid.
+   * Prefers the ruler API's value (see GrafanaClient.getRulerRuleByUid),
+   * falling back to the provisioning API's if the ruler call didn't
+   * succeed — either way, undefined means neither API returned one (see
+   * #177), not that the rule has never been edited.
+   */
+  ruleLastModified?: string;
+  /**
+   * Who last edited the rule — Grafana 11.5+'s ruler API only. Undefined
+   * means this Grafana instance (or the ruler API call) didn't return the
+   * field at all; null means Grafana returned it but couldn't attribute the
+   * edit to anyone (e.g. one made before this field existed) — keep that
+   * distinction rather than treating both as "unknown".
+   */
+  ruleLastModifiedBy?: { uid: string; name: string } | null;
+  /** Increments on every edit. Grafana 11.5+ ruler API only — undefined on older instances. */
+  ruleVersion?: number;
+  /** 'none' means hand-edited in the Grafana UI; any other value means provisioned/managed outside it (so UI edits wouldn't stick). Provisioning-API-only; undefined if that call didn't succeed. */
+  ruleProvenance?: string;
   warnings: string[];
 }
 
@@ -141,6 +161,23 @@ function fromAlertmanagerAlert(alert: AlertmanagerAlert, source: AlertContext['s
   };
 }
 
+/**
+ * Best-effort: the ruler API's single-rule endpoint is a second,
+ * undocumented call (see GrafanaClient.getRulerRuleByUid) whose failure —
+ * older Grafana without it, permissions, or simply not being implemented on
+ * a test double — must degrade to "no ruler enrichment" rather than fail
+ * alert-context resolution. A plain `.catch()` on the call wouldn't cover a
+ * missing method throwing synchronously (no promise to attach to), so this
+ * wraps the call itself in try/catch.
+ */
+async function tryGetRulerRule(client: GrafanaClient, uid: string): Promise<RulerRuleEntry | undefined> {
+  try {
+    return await client.getRulerRuleByUid(uid);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Extracts a best-effort human-readable threshold description from a rule's condition. */
 function describeThreshold(rule: RulerAlertRule): string | undefined {
   const conditionQuery = rule.data.find((q) => q.refId === rule.condition);
@@ -227,6 +264,12 @@ export async function resolveAlertContext(
         `Alert rule "${rule.title}" has no linked dashboard panel. Use find_related_dashboards with the rule's labels to locate relevant dashboards.`,
       );
     }
+    // Best-effort enrichment (#177): the ruler API has updated_by/version
+    // (Grafana 11.5+) that the provisioning API above never returns; this is
+    // a second, undocumented endpoint (see GrafanaClient.getRulerRuleByUid),
+    // so its failure — older Grafana, permissions, anything — degrades to
+    // just the provisioning API's own "updated", not a failed investigation.
+    const rulerRule = await tryGetRulerRule(client, rule.uid);
     return {
       source: 'url',
       alertName: rule.title,
@@ -238,6 +281,10 @@ export async function resolveAlertContext(
       variables: {},
       threshold: describeThreshold(rule),
       ruleQueries: rule.data,
+      ruleLastModified: rulerRule?.grafana_alert.updated ?? rule.updated,
+      ruleLastModifiedBy: rulerRule?.grafana_alert.updated_by,
+      ruleVersion: rulerRule?.grafana_alert.version,
+      ruleProvenance: rule.provenance,
       warnings,
     };
   }

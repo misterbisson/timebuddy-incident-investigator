@@ -221,26 +221,52 @@ export interface RulerAlertRule {
   annotations?: Record<string, string>;
   labels?: Record<string, string>;
   for?: string;
+  /** Last-edit timestamp (ISO 8601). Present on the provisioning API since it's always tracked this internally, even though it wasn't exposed here until recently. */
+  updated?: string;
+  /**
+   * 'none' means hand-edited in the Grafana UI; any other value (e.g.
+   * 'api'/'file'/'terraform') means the rule is provisioned/managed outside
+   * the UI, so editing it there wouldn't stick. Provisioning-API-only —
+   * never present on the bulk/single ruler API shapes below (see #177).
+   */
+  provenance?: string;
+}
+
+/**
+ * The bulk ruler API (`/api/ruler/grafana/api/v1/rules`, see
+ * GrafanaClient.getRuleGroups) and the single-rule ruler API
+ * (`/api/ruler/grafana/api/v1/rule/{uid}`, see GrafanaClient.getRulerRuleByUid)
+ * both nest a rule differently from the provisioning API above:
+ * annotations/labels are siblings of grafana_alert, not fields on it —
+ * grafana_alert itself only carries uid/title/condition/data/... Confirmed
+ * against a real Grafana instance; getting this wrong means every rule's
+ * annotations read as undefined with no error, which is exactly what
+ * happened before this was fixed.
+ */
+export interface RulerRuleEntry {
+  grafana_alert: Omit<RulerAlertRule, 'annotations' | 'labels' | 'for' | 'provenance'> & {
+    /**
+     * Grafana 11.5+ only (absent on older instances, and on the
+     * provisioning API at any version) — {uid, name} of whoever last edited
+     * the rule, or null when Grafana itself can't attribute the edit (e.g.
+     * one made before this field existed). Undefined (the field missing
+     * entirely) means "this Grafana can't tell us", which is a different
+     * fact than a genuinely-attributionless edit — keep that distinction
+     * rather than collapsing both to null.
+     */
+    updated_by?: { uid: string; name: string } | null;
+    /** Increments on every edit. Grafana 11.5+ ruler API only — see updated_by. */
+    version?: number;
+  };
+  annotations?: Record<string, string>;
+  labels?: Record<string, string>;
+  for?: string;
 }
 
 export interface RulerRuleGroup {
   name: string;
   folderUid?: string;
-  /**
-   * The bulk ruler API (`/api/ruler/grafana/api/v1/rules`, see
-   * GrafanaClient.getRuleGroups) nests each rule differently from the
-   * provisioning API above: annotations/labels are siblings of
-   * grafana_alert, not fields on it — grafana_alert itself only carries
-   * uid/title/condition/data/... Confirmed against a real Grafana instance;
-   * getting this wrong means every rule's annotations read as undefined
-   * with no error, which is exactly what happened before this was fixed.
-   */
-  rules: Array<{
-    grafana_alert: Omit<RulerAlertRule, 'annotations' | 'labels' | 'for'>;
-    annotations?: Record<string, string>;
-    labels?: Record<string, string>;
-    for?: string;
-  }>;
+  rules: RulerRuleEntry[];
 }
 
 export interface GrafanaAnnotation {

@@ -9,6 +9,7 @@ import type {
   GrafanaAnnotation,
   LabelValuesResponse,
   RulerAlertRule,
+  RulerRuleEntry,
   RulerRuleGroup,
   SearchResultItem,
   ShortUrlInfo,
@@ -262,6 +263,20 @@ export class GrafanaClient {
 
   async getAlertRuleByUid(uid: string): Promise<RulerAlertRule> {
     return this.request<RulerAlertRule>('GET', `/api/v1/provisioning/alert-rules/${encodeURIComponent(uid)}`);
+  }
+
+  /**
+   * Single-rule counterpart to getRuleGroups() — same RulerRuleEntry shape
+   * (including updated_by/version on Grafana 11.5+), one fixed rule instead
+   * of every rule in every group. Unlike getAlertRuleByUid's provisioning
+   * endpoint, this one is undocumented on Grafana's public HTTP API
+   * reference (shipped in 11.1.0, grafana/grafana#86845) — used here only as
+   * a best-effort enrichment (see alerts/ingest.ts), never as the sole
+   * source of rule data, since an undocumented endpoint can change shape or
+   * disappear without the usual deprecation notice.
+   */
+  async getRulerRuleByUid(uid: string): Promise<RulerRuleEntry> {
+    return this.request<RulerRuleEntry>('GET', `/api/ruler/grafana/api/v1/rule/${encodeURIComponent(uid)}`);
   }
 
   async getAnnotations(params: {

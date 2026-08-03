@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { resolveAlertContext } from '../src/alerts/ingest.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
-import type { RulerAlertRule } from '../src/grafana/types.js';
+import type { RulerAlertRule, RulerRuleEntry } from '../src/grafana/types.js';
 
-function fakeClient(rule?: RulerAlertRule): GrafanaClient {
+function fakeClient(rule?: RulerAlertRule, rulerRule?: RulerRuleEntry): GrafanaClient {
   return {
     getAlertRuleByUid: async (uid: string) => {
       if (!rule) throw new Error(`no rule stubbed for ${uid}`);
       return rule;
     },
+    // Omitted (rather than stubbed to reject) when rulerRule isn't passed, so
+    // tests can exercise the "endpoint doesn't exist on this client at all"
+    // path — the same shape a real GrafanaClient would present against an
+    // older Grafana that 404s it, and what tryGetRulerRule must degrade from.
+    ...(rulerRule ? { getRulerRuleByUid: async () => rulerRule } : {}),
   } as unknown as GrafanaClient;
 }
 
@@ -198,6 +203,56 @@ describe('resolveAlertContext', () => {
     expect(ctx.panelId).toBe(2);
     expect(ctx.threshold).toBe('gt 0.9');
     expect(ctx.labels.service).toBe('checkout');
+  });
+
+  it('surfaces ruleLastModified/ruleProvenance from the provisioning API when the ruler API is unavailable (#177)', async () => {
+    const rule: RulerAlertRule = {
+      uid: 'rule1',
+      title: 'High latency',
+      condition: 'A',
+      data: [{ refId: 'A', model: {} }],
+      updated: '2026-07-01T12:00:00Z',
+      provenance: 'none',
+    };
+    const ctx = await resolveAlertContext(
+      { url: 'https://grafana.example.com/alerting/grafana/rule1/view' },
+      () => fakeClient(rule), // no rulerRule stubbed => getRulerRuleByUid absent, mirroring a 404 on an older Grafana
+    );
+    expect(ctx.ruleLastModified).toBe('2026-07-01T12:00:00Z');
+    expect(ctx.ruleProvenance).toBe('none');
+    expect(ctx.ruleLastModifiedBy).toBeUndefined();
+    expect(ctx.ruleVersion).toBeUndefined();
+  });
+
+  it('prefers the ruler API\'s updated/updated_by/version over the provisioning API\'s when both are available (#177)', async () => {
+    const rule: RulerAlertRule = {
+      uid: 'rule1',
+      title: 'High latency',
+      condition: 'A',
+      data: [{ refId: 'A', model: {} }],
+      updated: '2026-07-01T12:00:00Z',
+      provenance: 'api',
+    };
+    const rulerRule: RulerRuleEntry = {
+      grafana_alert: {
+        uid: 'rule1',
+        title: 'High latency',
+        condition: 'A',
+        data: [{ refId: 'A', model: {} }],
+        updated: '2026-07-05T09:30:00Z',
+        updated_by: { uid: 'u1', name: 'Jamie' },
+        version: 4,
+      },
+    };
+    const ctx = await resolveAlertContext(
+      { url: 'https://grafana.example.com/alerting/grafana/rule1/view' },
+      () => fakeClient(rule, rulerRule),
+    );
+    expect(ctx.ruleLastModified).toBe('2026-07-05T09:30:00Z');
+    expect(ctx.ruleLastModifiedBy).toEqual({ uid: 'u1', name: 'Jamie' });
+    expect(ctx.ruleVersion).toBe(4);
+    // provenance only ever comes from the provisioning API — the ruler API doesn't return it.
+    expect(ctx.ruleProvenance).toBe('api');
   });
 
   it('warns when an alert rule has no linked dashboard', async () => {

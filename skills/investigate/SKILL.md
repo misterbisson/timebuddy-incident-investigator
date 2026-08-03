@@ -47,6 +47,14 @@ skill exists to handle for them.
      fold it into your verdict in step 7. Absent means nothing's been published for this alert's
      product, not an error; don't go looking for it yourself (`get_product_context` exists for
      that, but `get_alert_context` already tried).
+   - When resolved from an alert-rule URL, the response may also include `ruleLastModified`/
+     `ruleLastModifiedBy`/`ruleVersion` and `ruleProvenance` (`"none"` = hand-edited in the Grafana
+     UI, anything else = provisioned/managed elsewhere). If the rule was edited shortly before the
+     incident started, that's worth calling out explicitly in step 7's verdict — "was this a recent
+     config change or pre-existing config" is a common incident-review question this answers
+     directly, without you having to ask the person to go check Grafana's UI by hand. Absent fields
+     mean this Grafana instance/API version didn't return them (common on pre-11.5 Grafana), not
+     that the rule has never been edited — don't read the absence itself as a finding.
 
 2. **Note the resolved connection.** The response includes `resolvedConnectionId` when it could
    determine which Grafana connection the alert belongs to. Pass that same id as the `connection`
