@@ -97,6 +97,7 @@ try {
     'export_panel_csv',
     'screenshot_panel',
     'find_related_dashboards',
+    'list_folder_dashboards',
     'detect_correlated_anomalies',
     'validate_baseline',
     'summarize_findings',
