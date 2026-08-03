@@ -1,4 +1,4 @@
-const { BrowserWindow, session } = require('electron');
+const { BrowserWindow, screen, session } = require('electron');
 const { mkdtemp, readFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
@@ -75,6 +75,24 @@ function createScreenshotter() {
       const targetOrigin = originOf(url);
       attachAuthHeaders(ses, (origin) => (origin === targetOrigin ? headers : null));
 
+      // capturePage() bakes the display's actual device pixels into the
+      // returned image (getScaleFactors() reports only a single "1x"
+      // representation at that resolution — there's no separate lower-res
+      // rep to prefer) - measured on real Retina hardware (scaleFactor 2):
+      // a useContentSize BrowserWindow requested at 800x450 produced a
+      // 1600x900 capture, exactly 4x the pixel area (2x per axis). The
+      // engine's MAX_SCREENSHOT_AREA_PX (src/security/limits.ts) exists to
+      // bound that allocation, so width/height here - already clamped to
+      // that cap - are the *backing-store* pixels this call is willing to
+      // allocate, not raw CSS pixels for BrowserWindow. Dividing by the
+      // display's scaleFactor before sizing the window compensates: at
+      // scaleFactor 1 (the common case, including most CI runners) this is a
+      // no-op. See issue #179 (the scale-factor half of #96 left
+      // unverified at the time).
+      const scaleFactor = screen.getPrimaryDisplay().scaleFactor || 1;
+      const winWidth = Math.max(1, Math.round(width / scaleFactor));
+      const winHeight = Math.max(1, Math.round(height / scaleFactor));
+
       const activity = trackNetworkActivity(ses);
       const win = new BrowserWindow({
         show: false,
@@ -85,8 +103,8 @@ function createScreenshotter() {
         // Grafana rendered the panel into a viewport shorter than the
         // caller asked for and the capture came out silently cropped.
         useContentSize: true,
-        width,
-        height,
+        width: winWidth,
+        height: winHeight,
         webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
       });
 

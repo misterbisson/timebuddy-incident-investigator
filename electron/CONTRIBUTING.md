@@ -84,6 +84,20 @@ secret field keeps the previously stored one. **Always pass `--user-data-dir`** 
 electron test/connectionStore.test.js --user-data-dir=/tmp/timebuddy-connection-store-test
 ```
 
+`test/screenshotter.test.js` covers `screenshotter.js`'s `capturePanel` against a real
+(offscreen) `BrowserWindow` — a mock can't exercise this, since the behavior in question is
+Electron's own `capturePage()`/`toPNG()` baking the host display's actual device pixels into
+the captured image. It asserts that a capture's backing-store area tracks the *requested*
+width/height regardless of the display's `scaleFactor`, rather than blowing up by
+`scaleFactor^2` on a hi-dpi display (see [#179](https://github.com/misterbisson/timebuddy-incident-investigator/issues/179),
+verified against a real 2x Retina display: a request for 1600x900 captured at 3200x1800
+before the fix, 1600x900 after). On a 1x display — most CI runners — the compensation is a
+no-op, so this test passes trivially there; it's most meaningful run on real hi-dpi hardware:
+
+```bash
+electron test/screenshotter.test.js --user-data-dir=/tmp/timebuddy-screenshotter-test
+```
+
 ## Building, signing, and releasing
 
 Packaging is `electron-builder`, configured in this package's `build` field in

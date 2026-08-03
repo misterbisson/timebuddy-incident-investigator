@@ -104,14 +104,16 @@ export function clampRunList<T>(runs: T[]): { list: T[]; total: number; truncate
  * issue #96; 1.6e7 is the value that issue settled on as binding gently (it's
  * ~the old 3840x3840 square worst case, just redistributable between the axes).
  *
- * These are all *logical* pixels, not device pixels: screenshotter.js passes them
- * to BrowserWindow with useContentSize, so on a 2x display the backing bitmap is
- * 4x the pixel count these numbers suggest. A 1.6e7-px capture is ~16 Mpx here
- * but ~64 Mpx of backing store there. The area cap bounds the *logical* worst
- * case; the backing store on top of it stays scale-factor-dependent, so don't
- * read these as a byte budget. Fully bounding the device-pixel backing store
- * (dividing by screen.getPrimaryDisplay().scaleFactor) is the open, unverified
- * half of #96 — it needs measurement on real hi-dpi Electron hardware first.
+ * These bound the *backing-store* pixel count screenshotter.js's capturePanel
+ * ends up allocating, not the raw CSS size handed to BrowserWindow: measured
+ * on real Retina hardware, a useContentSize window sized at WxH captures at
+ * 2Wx2H on a 2x display — capturePage()'s returned image bakes the display's
+ * device pixels straight into its one "1x" representation, there's no
+ * lower-res rep to prefer instead. screenshotter.js compensates by dividing
+ * the window's CSS width/height by screen.getPrimaryDisplay().scaleFactor
+ * before creating it, so the resulting capture lands back at ~WxH regardless
+ * of the host's scale factor (a no-op at scaleFactor 1, the common case).
+ * See issue #179 — the scale-factor half of #96 this settled.
  */
 export const MIN_SCREENSHOT_PX = 200;
 export const MAX_SCREENSHOT_PX = 8192;
