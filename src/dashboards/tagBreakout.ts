@@ -1,5 +1,6 @@
 import type { PanelTarget } from '../grafana/types.js';
 import type { ResolvedTarget } from './panelQueries.js';
+import { applyPromqlFilter, applyPromqlGroupBy, RewriteFailure } from './promqlBreakout.js';
 
 export interface TagBreakout {
   /** Tag key to break out on, e.g. "host" / "instance" / "target_host". */
@@ -27,20 +28,17 @@ export class TagBreakoutError extends Error {
 }
 
 /**
- * v1 supports builder-mode InfluxQL only. That isn't just a scope cut — it's
- * what keeps the breakout injection-free: we never assemble InfluxQL text, we
- * add structured `tags`/`groupBy` fields to the target and let Grafana's own
- * InfluxDB backend build and escape the query (the same path
- * execute_query_window already trusts to run builder-mode targets). Raw-mode
- * InfluxQL would mean string-rewriting live query text; PromQL/Loki is #131.
+ * Builder-mode InfluxQL targets support the breakout injection-free: we
+ * never assemble InfluxQL text, we add structured `tags`/`groupBy` fields to
+ * the target and let Grafana's own InfluxDB backend build and escape the
+ * query (the same path execute_query_window already trusts to run
+ * builder-mode targets). Raw-mode InfluxQL would mean string-rewriting live
+ * query text, so it's refused below. PromQL targets go through
+ * promqlBreakout.ts instead, which does rewrite query text — see its own
+ * doc comment for how it keeps that safe. Loki (LogQL) breakout is a further
+ * generalization, scoped separately if/when needed (#131's notes).
  */
 function assertBreakoutSupported(t: PanelTarget): void {
-  if (typeof t.expr === 'string') {
-    throw new TagBreakoutError(
-      `refId ${t.refId}: tagBreakout isn't supported for Prometheus/PromQL targets yet (tracked in issue #131). ` +
-        'It currently applies only to builder-mode InfluxQL targets.',
-    );
-  }
   // Any truthy rawQuery means raw mode — a genuine builder target always has
   // rawQuery false/absent. Guarding on `=== true` would let a non-standard
   // dashboard that stored rawQuery as a truthy non-boolean (e.g. "true") with
@@ -57,7 +55,7 @@ function assertBreakoutSupported(t: PanelTarget): void {
   if (typeof t.measurement !== 'string' || t.measurement.length === 0) {
     throw new TagBreakoutError(
       `refId ${t.refId}: tagBreakout couldn't identify a supported query type on this target (no builder-mode ` +
-        'InfluxQL "measurement", no PromQL "expr"). Only builder-mode InfluxQL targets are supported.',
+        'InfluxQL "measurement", no PromQL "expr"). Only builder-mode InfluxQL and PromQL targets are supported.',
     );
   }
 }
@@ -131,6 +129,7 @@ function addGroupByTag(existing: PanelTarget['groupBy'], key: string): unknown[]
  * the execute path (datasource resolution, maxDataPoints, etc.) is unchanged.
  */
 export function applyTagBreakout(target: ResolvedTarget, breakout: TagBreakout): ResolvedTarget {
+  if (typeof target.raw.expr === 'string') return applyPromqlTagBreakout(target, breakout);
   assertBreakoutSupported(target.raw);
   const raw: PanelTarget = { ...target.raw };
   if (breakout.value !== undefined) {
@@ -139,4 +138,24 @@ export function applyTagBreakout(target: ResolvedTarget, breakout: TagBreakout):
     raw.groupBy = addGroupByTag(raw.groupBy, breakout.key);
   }
   return { ...target, raw };
+}
+
+/**
+ * promqlBreakout.ts's rewrite functions throw a plain RewriteFailure with no
+ * knowledge of which refId they're operating on (they only ever see the
+ * `expr` string) — wrapped here into the same TagBreakoutError/refId-tagged
+ * contract every other unsupported-target error already uses, so a caller
+ * can't tell PromQL and InfluxQL refusals apart by exception shape.
+ */
+function applyPromqlTagBreakout(target: ResolvedTarget, breakout: TagBreakout): ResolvedTarget {
+  const t = target.raw;
+  try {
+    const expr = breakout.value !== undefined
+      ? applyPromqlFilter(t.expr!, breakout.key, breakout.value)
+      : applyPromqlGroupBy(t.expr!, breakout.key);
+    return { ...target, raw: { ...t, expr } };
+  } catch (err) {
+    if (!(err instanceof RewriteFailure)) throw err;
+    throw new TagBreakoutError(`refId ${t.refId}: tagBreakout couldn't safely rewrite this PromQL query — ${err.message}`);
+  }
 }
