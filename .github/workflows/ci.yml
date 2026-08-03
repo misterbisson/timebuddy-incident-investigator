@@ -97,15 +97,21 @@ jobs:
             libnss3 libgbm1 libasound2t64 libgtk-3-0 libxss1 libxkbcommon0 \
             libatk-bridge2.0-0 libcups2 libdrm2
 
-      # dbus-run-session gives gnome-keyring-daemon a session bus to register
-      # on; xvfb-run gives Electron a display. Piping an empty password to
-      # --unlock both creates and unlocks a throwaway keyring on first use, so
-      # this needs no interactive prompt or pre-existing keyring file.
+      # Xvfb gives Electron a display; gnome-keyring-daemon gives safeStorage a
+      # Secret Service. Both started directly rather than through the
+      # xvfb-run/dbus-run-session wrapper scripts: an earlier attempt hung
+      # indefinitely inside xvfb-run's own X-server-readiness wait, before it
+      # ever got to exec anything — confirmed because the runner's orphan-
+      # process cleanup showed xvfb-run and Xvfb had started but neither
+      # gnome-keyring-daemon nor node ever did. Starting each primitive
+      # ourselves removes that wrapper-script layer entirely.
       #
-      # The daemon's env output is redirected to a file and sourced, NOT
-      # captured via `$(...)`: gnome-keyring-daemon forks a persistent child
-      # that inherits the stdout pipe, so command substitution never sees EOF
-      # and hangs forever waiting for output that already arrived.
+      # The keyring daemon's env output is redirected to a file and sourced,
+      # NOT captured via `$(...)`: it forks a persistent child that inherits
+      # the stdout pipe, so command substitution never sees EOF and hangs
+      # forever waiting for output that already arrived. `dbus-launch` (unlike
+      # dbus-run-session) forks dbus-daemon into the background and returns
+      # immediately, so capturing its two export lines via `$(...)` is safe.
       #
       # ELECTRON_DISABLE_SANDBOX: the npm-installed Electron binary's
       # chrome-sandbox helper isn't root-owned/setuid here (unlike a real
@@ -118,8 +124,10 @@ jobs:
         env:
           ELECTRON_DISABLE_SANDBOX: '1'
         run: |
-          dbus-run-session -- bash -c '
-            printf "\n" | gnome-keyring-daemon --unlock --components=secrets > /tmp/keyring-env.sh
-            source /tmp/keyring-env.sh
-            xvfb-run -a node test/mcpServerMode.mjs
-          '
+          Xvfb :99 -screen 0 1280x1024x24 &
+          export DISPLAY=:99
+          eval "$(dbus-launch --sh-syntax)"
+          printf "\n" | gnome-keyring-daemon --unlock --components=secrets > /tmp/keyring-env.sh
+          source /tmp/keyring-env.sh
+          sleep 2
+          node test/mcpServerMode.mjs
