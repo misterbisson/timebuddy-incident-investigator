@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.5.2...v0.6.0) (2026-08-03)
+
+
+### Features
+
+* follow host OS light/dark theme setting ([#186](https://github.com/misterbisson/timebuddy-incident-investigator/issues/186)) ([16e3ae9](https://github.com/misterbisson/timebuddy-incident-investigator/commit/16e3ae993e1beb02a56c3c5f091e51a9c7d4ea8c))
+* generalize tagBreakout to PromQL targets ([#183](https://github.com/misterbisson/timebuddy-incident-investigator/issues/183)) ([bae5445](https://github.com/misterbisson/timebuddy-incident-investigator/commit/bae544503b51832fd5b3da2463b43d610720bac4))
+* surface alert rule last-modified/provenance in get_alert_context ([#184](https://github.com/misterbisson/timebuddy-incident-investigator/issues/184)) ([4ae751b](https://github.com/misterbisson/timebuddy-incident-investigator/commit/4ae751b5027bcb81e4e25b4485f264aeb8d56e93))
+
 ## [0.5.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.5.1...v0.5.2) (2026-08-03)
 
 
