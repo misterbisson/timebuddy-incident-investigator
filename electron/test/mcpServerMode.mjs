@@ -28,26 +28,62 @@ function fail(message) {
   process.exit(1);
 }
 
-const seed = spawnSync(electronBin, ['test/seedConnection.js', `--user-data-dir=${userDataDir}`], {
-  cwd: electronRoot,
-  encoding: 'utf8',
-});
+// --password-store=basic is a Chromium switch (documented as a safeStorage
+// override for Linux): it skips the OS keyring/Secret Service entirely,
+// which on a headless CI runner can otherwise hang indefinitely waiting on
+// an unlock prompt nothing will ever answer. A no-op on macOS/Windows, where
+// safeStorage always uses Keychain/DPAPI regardless of this flag.
+//
+// --disable-gpu: a bare Xvfb has no real GPU/GL driver behind it, and
+// Electron's GPU process can hang negotiating hardware acceleration against
+// it rather than falling back cleanly. Neither script here ever creates a
+// BrowserWindow, so no rendering is lost by disabling it.
+//
+// stdio: 'inherit' (not the previous encoding:'utf8' capture) so this
+// script's own console.log checkpoints are visible in CI in real time,
+// rather than being silently buffered until — or unless — the process exits.
+const seed = spawnSync(
+  electronBin,
+  [
+    'test/seedConnection.js',
+    `--user-data-dir=${userDataDir}`,
+    '--password-store=basic',
+    '--disable-gpu',
+  ],
+  {
+    cwd: electronRoot,
+    stdio: 'inherit',
+  },
+);
 if (seed.status !== 0) {
-  fail(`seed script exited ${seed.status} (spawn error: ${seed.error})\nstderr: ${seed.stderr}\nstdout: ${seed.stdout}`);
+  fail(`seed script exited ${seed.status} (spawn error: ${seed.error})`);
 }
 
 const transport = new StdioClientTransport({
   command: electronBin,
-  args: ['.', '--mcp-server', `--user-data-dir=${userDataDir}`],
+  args: ['.', '--mcp-server', `--user-data-dir=${userDataDir}`, '--password-store=basic', '--disable-gpu'],
   cwd: electronRoot,
   stderr: 'pipe',
+  // Unlike the seed step's spawnSync above (which inherits the full parent
+  // environment by default), StdioClientTransport only inherits a small,
+  // fixed allowlist (HOME/LOGNAME/PATH/SHELL/TERM/USER) unless env is given
+  // explicitly here — so CI's ELECTRON_DISABLE_SANDBOX never reached this
+  // process, and it hit the exact same SUID sandbox fatal error the seed
+  // step needed that variable to avoid.
+  env: process.env,
 });
 
 const client = new Client({ name: 'mcp-server-mode-test', version: '0.0.1' });
 
+// Attached before connect(), not after: StdioClientTransport's stderr
+// PassThrough exists immediately on construction specifically so early
+// output isn't lost — a startup crash (before the MCP handshake even
+// completes) would otherwise fail client.connect() itself with no listener
+// ever attached, silently losing the one place the real error appears.
+transport.stderr?.on('data', (chunk) => process.stderr.write(`[electron stderr] ${chunk}`));
+
 try {
   await client.connect(transport);
-  transport.stderr?.on('data', (chunk) => process.stderr.write(`[electron stderr] ${chunk}`));
 
   const { tools } = await client.listTools();
   const expectedNames = [
@@ -61,6 +97,7 @@ try {
     'export_panel_csv',
     'screenshot_panel',
     'find_related_dashboards',
+    'list_folder_dashboards',
     'detect_correlated_anomalies',
     'validate_baseline',
     'summarize_findings',
