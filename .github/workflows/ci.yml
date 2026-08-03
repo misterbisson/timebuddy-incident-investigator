@@ -74,6 +74,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # main.js's --mcp-server mode dynamically imports the built engine
+      # package (`import('timebuddy-incident-investigator')`, resolving via
+      # the npm workspace symlink to dist/server.js at the repo root) — `npm
+      # ci` alone never runs this, so without it the process crashes with
+      # ERR_MODULE_NOT_FOUND the first time anything tries to start the MCP
+      # server, which is every real invocation of --mcp-server mode.
+      - name: Build engine
+        run: npm run build
+
       # `npm ci` alone does NOT fetch the Electron binary — the `electron`
       # package's own postinstall only writes a path.txt; the ~100MB binary is
       # fetched lazily, synchronously, the first time something does
