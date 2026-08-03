@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.5.1...v0.5.2) (2026-08-03)
+
+
+### Bug Fixes
+
+* point tagBreakout's PromQL-unsupported reference at [#131](https://github.com/misterbisson/timebuddy-incident-investigator/issues/131), not [#127](https://github.com/misterbisson/timebuddy-incident-investigator/issues/127) ([#178](https://github.com/misterbisson/timebuddy-incident-investigator/issues/178)) ([f01e2cd](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f01e2cd42596674002768852ca28a55db3b2cf4b))
+* widen Connection Manager window and stop its action buttons wrapping ([#181](https://github.com/misterbisson/timebuddy-incident-investigator/issues/181)) ([f30dc5d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f30dc5d602c1b2bfc6eca7090848d535654ade00))
+
 ## [0.5.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.5.0...v0.5.1) (2026-07-29)
 
 
