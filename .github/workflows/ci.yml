@@ -37,10 +37,10 @@ jobs:
       # Electron-specific test (electron/test/mcpServerMode.mjs) needs that
       # binary and a display server, so it doesn't belong here.
       #
-      # It doesn't currently run anywhere else either: release.yml's
-      # build-pr/release jobs run electron-builder but never invoke it, so it
-      # only runs when someone types it by hand. Tracked in #97 — don't read a
-      # green CI as evidence that the packaged app still lists the right tools.
+      # release.yml's build-pr/release jobs run electron-builder but never
+      # invoke electron/test/mcpServerMode.mjs either — that's the separate
+      # electron-mcp-server job below, which does the full install this one
+      # deliberately skips.
       - name: Install dependencies
         run: npm ci --workspaces=false --include-workspace-root
 
@@ -49,3 +49,88 @@ jobs:
 
       - name: Test
         run: npm test
+
+  # Runs the one check neither the `test` job above (engine-only install, no
+  # Electron binary) nor release.yml (packages but never invokes this script)
+  # covers: that the packaged app's --mcp-server mode actually boots and lists
+  # the full expected tool set. Split into its own job (rather than folded
+  # into `test`) so its slower full-workspace install + system deps don't
+  # block the fast fixture-based signal above. Tracked in #97.
+  electron-mcp-server:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      # Full workspace install (unlike the `test` job's --workspaces=false) —
+      # this job needs the real Electron binary that install skips.
+      - name: Install dependencies
+        run: npm ci
+
+      # main.js's --mcp-server mode dynamically imports the built engine
+      # package (`import('timebuddy-incident-investigator')`, resolving via
+      # the npm workspace symlink to dist/server.js at the repo root) — `npm
+      # ci` alone never runs this, so without it the process crashes with
+      # ERR_MODULE_NOT_FOUND the first time anything tries to start the MCP
+      # server, which is every real invocation of --mcp-server mode.
+      - name: Build engine
+        run: npm run build
+
+      # `npm ci` alone does NOT fetch the Electron binary — the `electron`
+      # package's own postinstall only writes a path.txt; the ~100MB binary is
+      # fetched lazily, synchronously, the first time something does
+      # `require('electron')` (see node_modules/electron/index.js). Forcing
+      # that here, in a plain unwrapped step, means any download slowness or
+      # failure shows up on its own rather than three shells deep inside the
+      # dbus-run-session/xvfb-run wrapping below, where a hang and buffered-
+      # but-actually-fine output look identical from the log.
+      - name: Pre-fetch Electron binary
+        working-directory: electron
+        run: node -e "require('electron')"
+
+      # Electron needs a display even in --mcp-server mode, where no window is
+      # ever shown.
+      - name: Install Electron runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb \
+            libnss3 libgbm1 libasound2t64 libgtk-3-0 libxss1 libxkbcommon0 \
+            libatk-bridge2.0-0 libcups2 libdrm2
+
+      # Started directly rather than through the xvfb-run wrapper script: an
+      # earlier attempt hung indefinitely inside xvfb-run's own X-server-
+      # readiness wait, before it ever got to exec anything — confirmed
+      # because the runner's orphan-process cleanup showed xvfb-run and Xvfb
+      # had started but node never did.
+      #
+      # test/mcpServerMode.mjs passes --password-store=basic to the spawned
+      # Electron processes, so safeStorage never touches a real Secret
+      # Service — an earlier attempt wired up dbus-launch + gnome-keyring-
+      # daemon instead, which got further (Electron actually launched and
+      # touched the X server) but then hung for 4+ minutes with no further
+      # output, consistent with libsecret waiting on an unlock prompt nothing
+      # in this headless setup will ever answer. --password-store=basic is
+      # documented Chromium behavior, not a workaround specific to this repo.
+      #
+      # ELECTRON_DISABLE_SANDBOX: the npm-installed Electron binary's
+      # chrome-sandbox helper isn't root-owned/setuid here (unlike a real
+      # package install), so Chromium's SUID sandbox refuses to run rather
+      # than silently proceed unsandboxed. This is CI-only — it doesn't affect
+      # how the packaged app (built by release.yml/electron-builder) runs for
+      # end users.
+      - name: Run mcpServerMode integration test
+        working-directory: electron
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 &
+          export DISPLAY=:99
+          sleep 2
+          node test/mcpServerMode.mjs

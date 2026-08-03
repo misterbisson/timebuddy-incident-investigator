@@ -49,12 +49,26 @@ No live Grafana instance is required; the seeded connection points at a placehol
 specifically so the test can assert the call got *past* connection resolution, not that it
 succeeded against a real Grafana.
 
-**This test is manual-only — no CI job runs it.** `ci.yml` deliberately installs with
-`--workspaces=false`, so there's no Electron binary there, and `release.yml`'s build jobs
-run `electron-builder` but never invoke this script. Run it yourself before merging
-anything that changes the tool set, connection storage, or `--mcp-server` startup; a green
-CI says nothing about any of them. Tracked in
-[#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
+`ci.yml`'s `electron-mcp-server` job runs this on every PR, under a directly-started `Xvfb`
+(Electron needs a display even with no window shown) and `--disable-gpu` (a bare Xvfb has
+no real GPU/GL driver, and neither script here ever creates a `BrowserWindow`). The spawned
+Electron processes get `--password-store=basic` so Linux `safeStorage` never touches a real
+Secret Service — a real D-Bus/`gnome-keyring` session works too, but can hang indefinitely
+on a headless runner waiting on an unlock prompt nothing will ever answer;
+`--password-store=basic` is documented Chromium behavior, not a workaround specific to this
+repo. That alone isn't sufficient, though: selecting the `basic_text` backend doesn't make
+`safeStorage.isEncryptionAvailable()` true by itself — both `seedConnection.js` and
+`main.js` also call `safeStorage.setUsePlainTextEncryption(true)` (Linux-only, Electron
+25.5.0+), the separate opt-in Electron's own native `IsEncryptionAvailable()` requires
+alongside the `basic_text` backend. In `main.js` this is a real fix, not just a CI
+accommodation: without it, a real Linux desktop with no working keyring couldn't store any
+connection at all. It's a separate job from `ci.yml`'s fast fixture-based `test` job — this
+one needs a full workspace install (the real Electron binary), an explicit `npm run build`
+(main.js dynamically imports the *built* engine package, which `npm ci` alone never
+produces), and those system packages, so it's split out rather than slowing down the fast
+signal. `release.yml`'s build jobs still don't invoke it; they package with
+`electron-builder` but never run the packaged binary. Formerly untested in CI at all —
+see [#97](https://github.com/misterbisson/timebuddy-incident-investigator/issues/97).
 
 `test/connectionStore.test.js` covers `connectionStore.js` directly (same
 bypass-the-renderer approach as `seedConnection.js`): both the `grafana` and `graylog`

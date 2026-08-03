@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { writeToDir, isWithinDirectory } = require('./downloads.js');
@@ -26,6 +26,20 @@ let connectionsWindow = null;
 // installed app) — a mismatch here means secrets encrypted in one launch
 // can't be decrypted in another.
 app.setName('timebuddy-connection-manager');
+
+// Linux only (this method doesn't exist on macOS/Windows, where safeStorage
+// always uses Keychain/DPAPI): not every Linux desktop has a working secret
+// store (gnome-libsecret/kwallet), and without this call, safeStorage on
+// such a system reports encryption as entirely unavailable — no connection
+// can be added or read at all. This does NOT force the weaker backend: per
+// Electron's own safeStorage source, IsEncryptionAvailable() on Linux is
+// `OSCrypt::IsEncryptionAvailable() || (usePlainTextEncryption && backend == "basic_text")`
+// — it only takes effect if Electron's own auto-detection already selected
+// "basic_text" (no secure backend found), which OSCrypt::IsEncryptionAvailable()
+// alone still reports as false unless this flag is also set.
+if (process.platform === 'linux') {
+  safeStorage.setUsePlainTextEncryption(true);
+}
 
 // Dual-mode: launched normally, this opens the connection-manager GUI.
 // Launched with --mcp-server (by Claude Code/Desktop spawning this same
