@@ -169,3 +169,11 @@ block — see [`SIGNING.md`](SIGNING.md) for the full setup, the required secret
 validate-before-store credential-rotation runbook. The `verify-signing.yml` workflow proves
 the whole sign → notarize → staple path on a clean runner for every PR that touches the
 app. Windows and Linux builds are unsigned entirely, same as upstream Time Buddy.
+
+`mac.target[0].arch` builds both `x64` and `arm64` dmgs, and `mac.artifactName` is set
+explicitly (`${productName}-${version}-${arch}.${ext}`) so both always carry their arch in
+the filename. Without it, electron-builder's own default silently drops the arch suffix for
+whichever one it treats as "default" — `x64`, unless `mac.defaultArch` says otherwise, for
+backward-compat reasons that predate Apple Silicon — so the release page showed an
+`arm64`-labeled dmg next to a bare, unlabeled one that was actually the (little-used) Intel
+build. See [#190](https://github.com/misterbisson/timebuddy-incident-investigator/issues/190).
