@@ -22,6 +22,11 @@ function summarize(ctx: Awaited<ReturnType<typeof resolveAlertContext>>): string
     parts.push('no linked dashboard panel found');
   }
   if (ctx.threshold) parts.push(`threshold: ${ctx.threshold}`);
+  if (ctx.ruleLastModified) {
+    const by = ctx.ruleLastModifiedBy ? ` by ${ctx.ruleLastModifiedBy.name}` : '';
+    parts.push(`rule last modified ${ctx.ruleLastModified}${by}`);
+  }
+  if (ctx.ruleProvenance) parts.push(`provisioning: ${ctx.ruleProvenance}`);
   return parts.join('; ');
 }
 
@@ -41,7 +46,12 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
         'share this link when referencing the dashboard, even if the alert itself already carried a URL. When a ' +
         'folder in this Grafana estate publishes a "Timebuddy knowledge" dashboard (see README), also returns ' +
         '"knowledge" - product-specific context (matched via the resolved dashboard\'s tags or the alert\'s own ' +
-        'labels) worth folding into your answer. Absent when nothing was published; this is purely additive.',
+        'labels) worth folding into your answer. Absent when nothing was published; this is purely additive. ' +
+        'When resolved from an alert-rule URL, also returns "ruleLastModified"/"ruleLastModifiedBy"/"ruleVersion" ' +
+        '(when Grafana\'s API returns them - Grafana 11.5+ for lastModifiedBy/version, best-effort and often absent ' +
+        'on older instances) and "ruleProvenance" ("none" means hand-edited in the Grafana UI; anything else means ' +
+        'provisioned/managed outside it) - useful for "was this rule recently touched by a person, or is this ' +
+        'stale config" during an incident review.',
       inputSchema: {
         webhookPayload: z.unknown().optional().describe('A full Grafana Alertmanager webhook JSON body (has an "alerts" array)'),
         alertJson: z.unknown().optional().describe('A single pasted alert object (labels/annotations/status/...)'),
