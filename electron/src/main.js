@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, session, shell, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { writeToDir, isWithinDirectory } = require('./downloads.js');
@@ -49,6 +49,19 @@ if (process.platform === 'linux') {
 const isMcpMode = process.argv.includes('--mcp-server');
 
 /**
+ * Matches renderer/styles.css's --color-bg for each theme (#176) — set as
+ * BrowserWindow's own backgroundColor so the native window paints the right
+ * color immediately, rather than flashing Electron's default white before
+ * the stylesheet loads on a dark-preferring system. nativeTheme.themeSource
+ * defaults to 'system', so this tracks the OS setting the same way the
+ * renderer's prefers-color-scheme media query does; it's read-only here,
+ * never set, so it doesn't override that default.
+ */
+function windowBackgroundColor() {
+  return nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#ffffff';
+}
+
+/**
  * Singleton: called both from normal GUI startup and from the "Connections…"
  * menu item, so a click while the window is already open should focus it
  * rather than spawn a duplicate — most relevant in --mcp-server mode, where
@@ -65,6 +78,7 @@ function openOrFocusConnectionsWindow() {
     height: 640,
     title: 'Timebuddy Connection Manager',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    backgroundColor: windowBackgroundColor(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -137,6 +151,7 @@ function getOrCreateActivityWindow() {
     height: 680,
     title: 'Timebuddy Activity',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    backgroundColor: windowBackgroundColor(),
     webPreferences: {
       preload: path.join(__dirname, 'preload-activity.js'),
       contextIsolation: true,
