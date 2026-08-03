@@ -33,21 +33,35 @@ function fail(message) {
 // which on a headless CI runner can otherwise hang indefinitely waiting on
 // an unlock prompt nothing will ever answer. A no-op on macOS/Windows, where
 // safeStorage always uses Keychain/DPAPI regardless of this flag.
+//
+// --disable-gpu: a bare Xvfb has no real GPU/GL driver behind it, and
+// Electron's GPU process can hang negotiating hardware acceleration against
+// it rather than falling back cleanly. Neither script here ever creates a
+// BrowserWindow, so no rendering is lost by disabling it.
+//
+// stdio: 'inherit' (not the previous encoding:'utf8' capture) so this
+// script's own console.log checkpoints are visible in CI in real time,
+// rather than being silently buffered until — or unless — the process exits.
 const seed = spawnSync(
   electronBin,
-  ['test/seedConnection.js', `--user-data-dir=${userDataDir}`, '--password-store=basic'],
+  [
+    'test/seedConnection.js',
+    `--user-data-dir=${userDataDir}`,
+    '--password-store=basic',
+    '--disable-gpu',
+  ],
   {
     cwd: electronRoot,
-    encoding: 'utf8',
+    stdio: 'inherit',
   },
 );
 if (seed.status !== 0) {
-  fail(`seed script exited ${seed.status} (spawn error: ${seed.error})\nstderr: ${seed.stderr}\nstdout: ${seed.stdout}`);
+  fail(`seed script exited ${seed.status} (spawn error: ${seed.error})`);
 }
 
 const transport = new StdioClientTransport({
   command: electronBin,
-  args: ['.', '--mcp-server', `--user-data-dir=${userDataDir}`, '--password-store=basic'],
+  args: ['.', '--mcp-server', `--user-data-dir=${userDataDir}`, '--password-store=basic', '--disable-gpu'],
   cwd: electronRoot,
   stderr: 'pipe',
 });

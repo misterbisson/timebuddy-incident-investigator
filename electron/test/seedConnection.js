@@ -9,8 +9,11 @@ const { app } = require('electron');
 // produce a secret main.js's --mcp-server mode can't decrypt.
 app.setName('timebuddy-connection-manager');
 
+console.log('[seed] requiring electron done, waiting for whenReady()');
 app.whenReady().then(() => {
+  console.log('[seed] whenReady() resolved');
   const store = require('../src/connectionStore.js');
+  console.log('[seed] connectionStore required, upserting grafana connection');
   store.upsertConnection({
     name: 'test-connection',
     kind: 'grafana',
@@ -18,6 +21,7 @@ app.whenReady().then(() => {
     authType: 'bearer',
     token: 'test-token-12345',
   });
+  console.log('[seed] grafana connection upserted, upserting graylog connection');
   store.upsertConnection({
     name: 'test-log-connection',
     kind: 'graylog',
@@ -25,5 +29,6 @@ app.whenReady().then(() => {
     authType: 'token',
     token: 'test-graylog-token-12345',
   });
+  console.log('[seed] graylog connection upserted, exiting');
   app.exit(0);
 });
