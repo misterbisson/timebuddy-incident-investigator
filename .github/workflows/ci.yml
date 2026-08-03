@@ -74,6 +74,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # `npm ci` alone does NOT fetch the Electron binary — the `electron`
+      # package's own postinstall only writes a path.txt; the ~100MB binary is
+      # fetched lazily, synchronously, the first time something does
+      # `require('electron')` (see node_modules/electron/index.js). Forcing
+      # that here, in a plain unwrapped step, means any download slowness or
+      # failure shows up on its own rather than three shells deep inside the
+      # dbus-run-session/xvfb-run wrapping below, where a hang and buffered-
+      # but-actually-fine output look identical from the log.
+      - name: Pre-fetch Electron binary
+        working-directory: electron
+        run: node -e "require('electron')"
+
       # Electron needs a display even in --mcp-server mode, where no window is
       # ever shown. safeStorage's Linux backend also needs a running Secret
       # Service (gnome-keyring here) to encrypt/decrypt the seeded connection —
