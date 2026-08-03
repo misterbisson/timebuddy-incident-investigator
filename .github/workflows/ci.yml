@@ -124,10 +124,26 @@ jobs:
         env:
           ELECTRON_DISABLE_SANDBOX: '1'
         run: |
+          echo "::group::Xvfb"
           Xvfb :99 -screen 0 1280x1024x24 &
           export DISPLAY=:99
-          eval "$(dbus-launch --sh-syntax)"
-          printf "\n" | gnome-keyring-daemon --unlock --components=secrets > /tmp/keyring-env.sh
-          source /tmp/keyring-env.sh
           sleep 2
+          echo "Xvfb started, DISPLAY=$DISPLAY"
+          echo "::endgroup::"
+
+          echo "::group::dbus-launch"
+          eval "$(dbus-launch --sh-syntax)"
+          echo "dbus-launch done: DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
+          echo "::endgroup::"
+
+          echo "::group::gnome-keyring-daemon"
+          printf "\n" | gnome-keyring-daemon --unlock --components=secrets > /tmp/keyring-env.sh
+          echo "gnome-keyring-daemon done, wrote:"
+          cat /tmp/keyring-env.sh
+          source /tmp/keyring-env.sh
+          echo "::endgroup::"
+
+          echo "::group::node test/mcpServerMode.mjs"
           node test/mcpServerMode.mjs
+          echo "node exited $?"
+          echo "::endgroup::"
