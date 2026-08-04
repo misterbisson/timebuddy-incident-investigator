@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.1...v0.6.2) (2026-08-04)
+
+
+### Bug Fixes
+
+* always label macOS dmg filenames with their architecture ([#191](https://github.com/misterbisson/timebuddy-incident-investigator/issues/191)) ([ea4830d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/ea4830dd21802ca8c3b750789f484fcffc95c775))
+* **deps:** bump actions/upload-artifact from 4 to 7 ([#196](https://github.com/misterbisson/timebuddy-incident-investigator/issues/196)) ([2b47bd6](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2b47bd61b81a453236a510a7aabc88973f278c1a))
+* **deps:** bump fast-uri from 3.1.4 to 3.1.5 ([#199](https://github.com/misterbisson/timebuddy-incident-investigator/issues/199)) ([6371e40](https://github.com/misterbisson/timebuddy-incident-investigator/commit/6371e40927c2a94387d7f0751d8e8481b5d5b745))
+* **deps:** bump ip-address from 10.2.0 to 10.4.0 ([#193](https://github.com/misterbisson/timebuddy-incident-investigator/issues/193)) ([ef5aa6b](https://github.com/misterbisson/timebuddy-incident-investigator/commit/ef5aa6bf338e40d8f2fe075b80ff4fdfde66da02))
+* **deps:** bump postcss from 8.5.19 to 8.5.25 ([#189](https://github.com/misterbisson/timebuddy-incident-investigator/issues/189)) ([91aa3a3](https://github.com/misterbisson/timebuddy-incident-investigator/commit/91aa3a36ee9568e24e1ee35573f8f0b67bd07878))
+* **deps:** bump undici from 8.9.0 to 8.10.0 ([#195](https://github.com/misterbisson/timebuddy-incident-investigator/issues/195)) ([36cf55f](https://github.com/misterbisson/timebuddy-incident-investigator/commit/36cf55f489a9b010c59f63d25877bffb9fa2f749))
+* **electron:** auto-update the packaged GUI via electron-updater ([#197](https://github.com/misterbisson/timebuddy-incident-investigator/issues/197)) ([9384e03](https://github.com/misterbisson/timebuddy-incident-investigator/commit/9384e03c48a20fd15bbe2528f0c43c2cd2dcda74))
+* **electron:** make macOS auto-update work by shipping a zip target ([#198](https://github.com/misterbisson/timebuddy-incident-investigator/issues/198)) ([2b324d2](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2b324d2d266d1fbd058217630604593e68c6802d))
+
 ## [0.6.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.0...v0.6.1) (2026-08-03)
 
 
