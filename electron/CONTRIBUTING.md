@@ -145,7 +145,11 @@ published, checked out at that new tag, and does the actual platform builds +
 `electron-builder --publish always`, uploading the installers **and** the
 `latest-*.yml` update manifests that `electron-updater` reads. Those manifests are what
 `src/updater.js` (wired into `main.js`'s GUI startup) checks on launch to auto-download and
-install newer releases; it no-ops in dev and in `--mcp-server` mode. release-please creates the `vX.Y.Z`
+install newer releases; it no-ops in dev and in `--mcp-server` mode. This is why
+`build.mac.target` lists a `zip` alongside the `dmg`: Squirrel.Mac (via electron-updater)
+can only consume a zip, so a dmg-only mac release would publish a `latest-mac.yml` the
+updater then chokes on (`ERR_UPDATER_ZIP_FILE_NOT_FOUND`) — the dmg is for first installs,
+the zip is what auto-update actually downloads. release-please creates the `vX.Y.Z`
 tag *and* the GitHub Release object together (it is **not** run with `skip-github-release`
 — that would skip the tag too; see the note in `.github/workflows/release.yml`), so the
 release already exists as a *published* release by the time `electron-builder` runs. That
