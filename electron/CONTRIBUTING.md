@@ -142,8 +142,10 @@ the version string `src/server.ts` reports to MCP clients in the `initialize` ha
 since a `.ts` file can't take a `jsonpath` entry), updates `CHANGELOG.md`, and tags the
 merge commit `vX.Y.Z`. The `release` job then only runs if a version was actually
 published, checked out at that new tag, and does the actual platform builds +
-`electron-builder --publish always` (so `electron-updater` — not yet wired into `main.js`
-— can eventually point at those release artifacts). release-please creates the `vX.Y.Z`
+`electron-builder --publish always`, uploading the installers **and** the
+`latest-*.yml` update manifests that `electron-updater` reads. Those manifests are what
+`src/updater.js` (wired into `main.js`'s GUI startup) checks on launch to auto-download and
+install newer releases; it no-ops in dev and in `--mcp-server` mode. release-please creates the `vX.Y.Z`
 tag *and* the GitHub Release object together (it is **not** run with `skip-github-release`
 — that would skip the tag too; see the note in `.github/workflows/release.yml`), so the
 release already exists as a *published* release by the time `electron-builder` runs. That
