@@ -180,7 +180,12 @@ jobs:
         run: |
           shopt -s nullglob
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            files=(*.dmg *.dmg.blockmap latest-mac.yml)
+            # *.zip / *.zip.blockmap are load-bearing: latest-mac.yml points at
+            # the zip (electron-updater's Squirrel.Mac path only consumes a zip,
+            # not the dmg), so omitting them here would republish a manifest
+            # referencing assets that aren't in the release — 404 on every mac
+            # auto-update. The dmg stays for first-install downloads.
+            files=(*.dmg *.dmg.blockmap *.zip *.zip.blockmap latest-mac.yml)
           elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             files=(*.exe *.exe.blockmap latest.yml)
           else

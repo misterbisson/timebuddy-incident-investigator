@@ -27,8 +27,9 @@ const { app, dialog } = require('electron');
 // Platform note: macOS auto-update (Squirrel.Mac) needs BOTH a code-signed app
 // AND a `zip` artifact in the release — a `dmg` alone is not updater-consumable
 // (electron-updater's MacUpdater throws ERR_UPDATER_ZIP_FILE_NOT_FOUND). The
-// release pipeline signs + notarizes via the afterSign step, and
-// package.json's build.mac.target emits the zip that latest-mac.yml points at;
+// release pipeline signs + notarizes via electron-builder's built-in
+// mac.notarize, and package.json's build.mac.target emits the zip that
+// latest-mac.yml points at;
 // do not remove that zip target or macOS updates silently break. Windows
 // (nsis) and Linux (AppImage) auto-update work here too — though build.win is
 // not yet code-signing configured, so a Windows update currently installs an
