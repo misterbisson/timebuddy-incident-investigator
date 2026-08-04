@@ -27,6 +27,7 @@
     "@liquescent/log-correlator-core": "0.0.7",
     "@liquescent/log-correlator-query-parser": "0.0.7",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "electron-updater": "^6.6.2",
     "undici": "^8.9.0",
     "zod": "^4.4.3"
   },

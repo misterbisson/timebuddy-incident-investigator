@@ -7,6 +7,7 @@ const { testConnection } = require('./grafanaTest.js');
 const { testGraylogConnection } = require('./graylogTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
 const { attachAuthHeaders } = require('./authGuard.js');
+const { setupAutoUpdater } = require('./updater.js');
 
 // Populated once runMcpServer() has dynamically imported the engine package —
 // null in the normal (non --mcp-server) GUI launch, since there's no
@@ -233,6 +234,11 @@ app.whenReady().then(async () => {
     return;
   }
   openOrFocusConnectionsWindow();
+  // Check GitHub Releases for a newer build and, if found, download it and
+  // offer a restart. No-ops in dev (unpackaged) and never runs in --mcp-server
+  // mode — see updater.js for why both guards matter. Passing isMcpMode is
+  // belt-and-suspenders: this branch only runs when it's false anyway.
+  setupAutoUpdater({ isMcpMode });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openOrFocusConnectionsWindow();
   });
