@@ -24,12 +24,16 @@ const { app, dialog } = require('electron');
 // both here so the module is safe to call unconditionally and self-documents
 // its own preconditions.
 //
-// Platform note: on macOS, Squirrel.Mac only applies updates to a
-// code-signed app, and on Windows the installer must likewise be signed. Both
-// are already handled by the release pipeline (electron-builder + the
-// afterSign notarization step), so no additional work is needed here — an
-// unsigned local build simply never finds a valid update and no-ops via the
-// error handler below.
+// Platform note: macOS auto-update (Squirrel.Mac) needs BOTH a code-signed app
+// AND a `zip` artifact in the release — a `dmg` alone is not updater-consumable
+// (electron-updater's MacUpdater throws ERR_UPDATER_ZIP_FILE_NOT_FOUND). The
+// release pipeline signs + notarizes via the afterSign step, and
+// package.json's build.mac.target emits the zip that latest-mac.yml points at;
+// do not remove that zip target or macOS updates silently break. Windows
+// (nsis) and Linux (AppImage) auto-update work here too — though build.win is
+// not yet code-signing configured, so a Windows update currently installs an
+// unsigned build. An unsigned local dev build simply never finds a valid
+// update and no-ops via the error handler below.
 function setupAutoUpdater({ isMcpMode = false } = {}) {
   if (isMcpMode || !app.isPackaged) return null;
 
@@ -75,11 +79,21 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
     }
   });
 
-  // Fire-and-forget. checkForUpdates() both emits 'error' (handled above) and
-  // rejects on failure, so swallow the rejection here to avoid an unhandled
-  // promise rejection — the 'error' listener is the single place failures are
-  // reported.
-  autoUpdater.checkForUpdates().catch(() => {});
+  // Fire-and-forget. Two independent promises can reject here, and BOTH must
+  // be caught or Electron logs an unhandledRejection (the 'error' listener
+  // above is where failures are actually reported — these catches only stop
+  // the noise):
+  //   1. checkForUpdates() itself, on a failed check.
+  //   2. the result's downloadPromise — because autoDownload is true,
+  //      checkForUpdates() kicks off a *separate* background download whose
+  //      promise nothing else consumes (unlike checkForUpdatesAndNotify). On
+  //      macOS with no zip, or any mid-download network failure, it rejects.
+  autoUpdater
+    .checkForUpdates()
+    .then((result) => {
+      if (result && result.downloadPromise) result.downloadPromise.catch(() => {});
+    })
+    .catch(() => {});
 
   return autoUpdater;
 }
