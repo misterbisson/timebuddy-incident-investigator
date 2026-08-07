@@ -183,3 +183,16 @@ whichever one it treats as "default" — `x64`, unless `mac.defaultArch` says ot
 backward-compat reasons that predate Apple Silicon — so the release page showed an
 `arm64`-labeled dmg next to a bare, unlabeled one that was actually the (little-used) Intel
 build. See [#190](https://github.com/misterbisson/timebuddy-incident-investigator/issues/190).
+
+The macOS leg of the `release` job also bumps the Homebrew cask (see
+[README.md's Homebrew section](../README.md#installing-via-homebrew-macos)) once its
+`build-mac` step finishes: it hashes the two just-built dmg's (`arm64`/`x64`) directly
+rather than re-downloading them, then pushes a `version`/`sha256` update straight to
+`main` of the separate [`misterbisson/homebrew-timebuddy`](https://github.com/misterbisson/homebrew-timebuddy)
+tap repo — a single-maintainer tap with no branch protection, so a direct push stands in
+for a PR round-trip. This needs a repo secret the default `GITHUB_TOKEN` can't provide,
+since that token is scoped to *this* repo only: `HOMEBREW_TAP_TOKEN`, a fine-grained
+GitHub PAT scoped to `misterbisson/homebrew-timebuddy` with **Contents: read/write** and
+nothing else. Generate it under Settings → Developer settings → Fine-grained tokens on
+the account that owns the tap repo, then add it as a repository secret here (Settings →
+Secrets and variables → Actions) — same place as the signing secrets in `SIGNING.md`.

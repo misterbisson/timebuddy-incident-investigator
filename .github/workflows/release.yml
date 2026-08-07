@@ -110,6 +110,44 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Bump Homebrew cask
+        # Runs only on the macOS leg — the only one that just produced the two
+        # dmg's the cask serves (arm64 + x64). Hashes those local files directly
+        # rather than re-downloading from the release that was just published
+        # (same bytes, one less round-trip and one less thing that could 404 on
+        # a slow CDN propagation), then pushes the version + sha256 bump
+        # straight to misterbisson/homebrew-timebuddy's main branch — a
+        # single-maintainer tap with no branch protection, so no PR round-trip
+        # is needed there either. Requires HOMEBREW_TAP_TOKEN: a fine-grained
+        # PAT scoped to Contents: read/write on that one repo only (the default
+        # GITHUB_TOKEN above is scoped to this repo and can't push elsewhere).
+        if: matrix.os == 'macos-latest'
+        working-directory: electron/dist
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          ARM_SHA=$(shasum -a 256 "Timebuddy-Incident-Investigator-${VERSION}-arm64.dmg" | awk '{print $1}')
+          INTEL_SHA=$(shasum -a 256 "Timebuddy-Incident-Investigator-${VERSION}-x64.dmg" | awk '{print $1}')
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/misterbisson/homebrew-timebuddy.git" tap
+          cd tap
+
+          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/timebuddy.rb
+          sed -i '' "s/arm:   \".*\"/arm:   \"${ARM_SHA}\",/" Casks/timebuddy.rb
+          sed -i '' "s/intel: \".*\"/intel: \"${INTEL_SHA}\"/" Casks/timebuddy.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/timebuddy.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date, nothing to commit."
+          else
+            git commit -m "chore: bump timebuddy cask to ${VERSION}"
+            git push origin HEAD:main
+          fi
+
   republish:
     # Manual recovery job (workflow_dispatch, `tag` input). Rebuilds and uploads
     # the installers for an existing, already-published release whose assets are

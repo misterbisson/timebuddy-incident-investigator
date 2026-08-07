@@ -53,6 +53,21 @@ real, shipped code that this pipeline can't see: no version bump, no changelog e
 though `main` moved. See `electron/CONTRIBUTING.md`'s "Building, signing, and releasing"
 section for the full release flow.
 
+**A freshly created, empty sibling repo has no conventions of its own yet — that's not
+permission to do anything there you wouldn't do here.** The absence of an established
+pattern (no branch protection configured, no CLAUDE.md written, no CI wired up) means
+"inherit this repo's defaults," not "anything goes until told otherwise." Concretely:
+this repo's PR-only convention (no direct pushes to `main`) extends to any sibling repo
+created for this project — e.g. [misterbisson/homebrew-timebuddy](https://github.com/misterbisson/homebrew-timebuddy),
+the Homebrew tap this project publishes to (see `electron/CONTRIBUTING.md`'s release
+section). Apply it there by default, from that repo's very first commit, even though
+nothing in that empty repo would have stopped a direct push — don't wait to be told again
+just because the convention lives in a codebase you're not currently editing. The one
+deliberate exception is the release workflow's own automated cask-version bump, which
+pushes straight to the tap's `main` (see `electron/CONTRIBUTING.md`) — that's a narrow,
+machine-verified exception documented as such in that sibling repo's own `CLAUDE.md`, not
+a precedent for anything else.
+
 ## Architecture
 
 This is an MCP server (`@modelcontextprotocol/sdk`, stdio transport) that gives an AI
@@ -170,6 +185,13 @@ end to end, with no separate server process that would need a plaintext credenti
 disk. See `README.md`'s "How connections are stored" section for the storage format and
 `electron/test/mcpServerMode.mjs` for how it's tested (spawns the real binary in
 `--mcp-server` mode via the actual MCP SDK client/transport; no live Grafana needed).
+
+macOS users can also install this app via Homebrew, from a separate single-cask tap repo
+([misterbisson/homebrew-timebuddy](https://github.com/misterbisson/homebrew-timebuddy) —
+see `README.md`'s "Installing via Homebrew" section for the user-facing side and
+`electron/CONTRIBUTING.md`'s release section for the automation that keeps its cask's
+`version`/`sha256` current on every release). See the "Pull requests" section above for
+the one convention from this repo that carries over to that one.
 
 `skills/explore/SKILL.md`, `skills/investigate/SKILL.md`, and `skills/export/SKILL.md`
 (packaged as a Claude Code plugin via `.claude-plugin/plugin.json`, invoked as
