@@ -76,6 +76,21 @@ Three things shape almost every module here and are easy to miss from a partial 
    is what makes the read-only guarantee real rather than just a description. Don't add a generic
    proxy method to this client.
 
+   One tool now sends *model-authored* query text through this allowlist, and it's worth
+   understanding why that doesn't contradict the above. `execute_adhoc_query` still goes
+   through the already-allowlisted `POST /api/ds/query` — the endpoint boundary is untouched.
+   What changes is **query provenance**, and that matters because the endpoint guarantee was
+   quietly leaning on it: `/api/ds/query` is read-only *for the queries the other tools send*,
+   not in general (InfluxQL over it accepts `DROP MEASUREMENT`, `DELETE FROM`,
+   `SELECT … INTO`; SQL datasources execute `rawSql` verbatim; `DsQueryTarget` is
+   `[key: string]: unknown`). So the guard moves from *which endpoint* to *which statement,
+   on which datasource type*: `query/adhocGuard.ts` allowlists SELECT/SHOW statement heads
+   (never blocklists destructive verbs) and refuses anything it can't classify, and the tool
+   refuses any datasource type it has no guard for — raw SQL included — even when a workspace
+   authorized it. Authorization itself is per-workspace, not per-connection: see
+   `config.ts`'s `AdhocQueryPolicy`. Don't widen `GUARDABLE_TYPES` without writing a real
+   guard for that query language.
+
 2. **Every tool's structured output is redacted before it reaches the model.** `security/redact.ts`
    masks secret-shaped keys and configured customer-identifier patterns; tools call it on
    their result just before returning `content`. `security/limits.ts` enforces the
@@ -83,10 +98,24 @@ Three things shape almost every module here and are easy to miss from a partial 
    `security/audit.ts` logs every tool invocation to a local JSONL file. New tools should
    follow the same `withAudit(...) { ...; return { content: [...] } }` /
    `redact(result, config.redactionPatterns)` pattern used in `src/tools/*.ts` rather than
-   returning raw data. The one exception is image bytes: `screenshot_panel` redacts its JSON
-   payload like everything else, but the PNG content block goes to the model as rendered,
-   since redaction only understands text. Don't generalize that into a second exception —
-   any new *text* output belongs behind `redact()`.
+   returning raw data. There are exactly **two** exceptions, both narrow and both justified by
+   redaction being unable to help rather than by convenience:
+
+   - **Image bytes.** `screenshot_panel` redacts its JSON payload like everything else, but the
+     PNG content block goes to the model as rendered, since redaction only understands text.
+   - **`exploreUrl`.** `execute_adhoc_query` passes its replayable Grafana link through
+     `redact()`'s `exempt` allowlist (see `security/redact.ts`'s `RedactOptions`, and the same
+     waiver in `security/audit.ts` so the URL survives into `audit.jsonl`). `redactString`
+     rewrites *inside* strings, so a matched pattern would return a **broken link** rather than
+     a masked one — and it would mask nothing the model doesn't already have, because the model
+     wrote that query, so any identifier in the query text was in its context before the URL
+     existed. Note this reasoning is specific to model-authored query text: a dashboard query's
+     *results* come from Grafana and the model hasn't seen them, which is why series data on the
+     same response stays fully redacted.
+
+   Don't add a third. `redact()`'s waiver is a key allowlist rather than a naming convention
+   precisely so each exemption is a deliberate, greppable act — any new *text* output belongs
+   behind `redact()` unless masking it would destroy the thing that makes it useful.
 
 3. **A tool call doesn't target one fixed Grafana — it resolves a connection first.**
    `src/grafana/registry.ts`'s `ConnectionRegistry` lazily builds and caches one

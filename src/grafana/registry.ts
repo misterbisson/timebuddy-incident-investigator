@@ -1,4 +1,5 @@
 import type { Config, GrafanaConnection } from '../config.js';
+import { hostMatchesConnection } from '../connections/resolve.js';
 import { GrafanaClient } from './client.js';
 
 /**
@@ -49,5 +50,35 @@ export class ConnectionRegistry {
     this.clients.set(id, client);
     this.builtFrom.set(id, connection);
     return client;
+  }
+
+  /**
+   * Which datasource types (if any) this connection is authorized to run
+   * model-authored queries against — see config.ts's AdhocQueryPolicy for where
+   * that authorization comes from and why it's workspace-scoped rather than
+   * stored per connection.
+   *
+   * Matching goes through hostMatchesConnection, the same matcher that maps an
+   * inbound alert link's hostname to a connection, so a policy naming a
+   * `matchHosts` alias authorizes the connection that alias belongs to. That's
+   * deliberate: the alternative is naming connections by their
+   * `crypto.randomUUID()` id in a checked-in `.mcp.json`, which is unreadable
+   * and changes per install.
+   *
+   * Returns an empty array for "not authorized", never undefined, so a caller
+   * can't accidentally treat a missing policy as permissive. Types from multiple
+   * matching policies are unioned — two flags naming the same host by different
+   * aliases should add up rather than one silently winning.
+   */
+  adhocDatasourceTypes(connectionId: string): string[] {
+    const connection = this.list().find((c) => c.id === connectionId);
+    if (!connection) return [];
+    const types = new Set<string>();
+    for (const policy of this.config.adhocQueries ?? []) {
+      if (hostMatchesConnection(policy.host, connection)) {
+        for (const type of policy.datasourceTypes) types.add(type.toLowerCase());
+      }
+    }
+    return [...types];
   }
 }

@@ -171,7 +171,25 @@ async function runMcpServer() {
   const startupConnections = store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
-  const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection, createPanelActions } = await import('timebuddy-incident-investigator');
+  const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection, createPanelActions, parseAdhocQueryFlags } =
+    await import('timebuddy-incident-investigator');
+
+  // Ad-hoc (model-authored) queries are authorized per *workspace*, not per
+  // connection and not per machine: the authorization arrives as one or more
+  // --allow-adhoc-queries=<host>:<datasourceType> flags, which in practice live
+  // in a project-scoped .mcp.json checked into the repo where the dashboards
+  // themselves are authored. Reading it from argv here — rather than from env or
+  // from connections.json — is what gives it that scope: it's on in the repo
+  // that declared it and absent everywhere else, with no stored state that could
+  // be left switched on after the fact.
+  //
+  // Malformed flags are reported and skipped rather than fatal. A typo in a
+  // checked-in .mcp.json should leave the capability off (its safe state), not
+  // take the whole MCP server — and therefore every other tool — down with it.
+  const { policies: adhocQueries, problems: adhocProblems } = parseAdhocQueryFlags(process.argv);
+  for (const problem of adhocProblems) {
+    console.error(`Ignoring ad-hoc query flag: ${problem}`);
+  }
 
   activityLog = createActivityLog();
   activityLog.onEntry((entry) => {
@@ -204,7 +222,7 @@ async function runMcpServer() {
   // one Claude Code/Desktop is already talking to over stdio).
   await startMcpServer(
     connectionsSource,
-    { dataDir },
+    { dataDir, adhocQueries },
     screenshotter,
     activityLog,
     // Same re-read-on-every-call thunk as the Grafana source above, backed
@@ -218,7 +236,13 @@ async function runMcpServer() {
   const startupLogConnections = store.getLogConnectionsForEngine();
   console.error(
     `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')}` +
-      `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})`,
+      `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})` +
+      // Logged loudly when on, silent when off: this is the one flag that
+      // widens what the agent may run, so its state should be visible in the
+      // startup line someone checks when a session behaves unexpectedly.
+      (adhocQueries.length > 0
+        ? `; ad-hoc queries ENABLED for ${adhocQueries.map((p) => `${p.host} (${p.datasourceTypes.join('/')})`).join(', ')}`
+        : ''),
   );
 }
 

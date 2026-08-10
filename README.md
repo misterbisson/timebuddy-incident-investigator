@@ -320,16 +320,79 @@ limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LO
 - The Grafana and Graylog clients are **fixed allowlists of read-only endpoints**. There is
   no "make an arbitrary request" tool — nothing built on top can reach a mutating endpoint,
   even if asked to.
+- Queries normally come from a dashboard someone authored, never from the model. The one
+  exception is **`execute_adhoc_query`**, which is **absent unless you explicitly turn it on
+  for a specific workspace and endpoint** — see [Ad-hoc queries](#ad-hoc-queries-off-by-default)
+  below. When it is on, only single-statement `SELECT`/`SHOW` queries run, only against
+  datasource types you named, and every query (including refused ones) is recorded with a
+  Grafana Explore URL that replays it.
 - `security/limits.ts` caps query time-range span, max data points, and concurrent outgoing
   requests.
 - `security/redact.ts` masks secret-shaped fields and configured customer-identifier
-  patterns before any data returns to the model. (The one gap: `screenshot_panel`'s rendered
-  image — see [`docs/TOOLS.md`](docs/TOOLS.md#screenshot-redaction-exception).)
+  patterns before any data returns to the model. (Two narrow exceptions, both because masking
+  would destroy the thing rather than protect it: `screenshot_panel`'s rendered image, and
+  `execute_adhoc_query`'s Explore URL — see
+  [`docs/TOOLS.md`](docs/TOOLS.md#redaction-exceptions).)
 - `security/audit.ts` appends every tool invocation to a local JSONL audit log.
 - A per-user token or login carries whatever Grafana role that person actually has — it drops
   the "Viewer-role service account" defense-in-depth a shared token gave you, so the read-only
   guarantee then rests entirely on the client allowlist. A Viewer-scoped service-account token
   is still the safer choice for a shared/CI connection.
+
+### Ad-hoc queries (off by default)
+
+Every other query tool replays a query a human already put on a dashboard. `execute_adhoc_query`
+runs query text the model wrote instead. It does not exist unless you ask for it, and you ask
+for it **per workspace** — not per machine and not per connection — by adding a launch flag to a
+project-scoped `.mcp.json` in the repo where you author dashboards:
+
+```json
+{
+  "mcpServers": {
+    "timebuddy": {
+      "command": "timebuddy",
+      "args": ["--mcp-server", "--allow-adhoc-queries=metrics.staging.example.com:influxdb"]
+    }
+  }
+}
+```
+
+The flag is `--allow-adhoc-queries=<host>:<datasourceType>[,<datasourceType>]`, repeatable once
+per endpoint. `<host>` is matched against each connection's URL host and its `matchHosts`
+aliases, so you name endpoints the way you'd say them out loud rather than by internal id. The
+datasource type is **required** — a bare host would authorize every datasource the connection
+can reach, including raw-SQL ones.
+
+Why a launch flag rather than a setting in the app: this way the capability is on in the one
+repo that declared it, absent everywhere else, versioned in git, and visible in a pull request.
+There is no stored state that can be left switched on, and no way for an imported connection
+manifest to enable it.
+
+What holds when it's on:
+
+- **Only reads.** Single-statement `SELECT`/`SHOW` only. Statement heads are allowlisted rather
+  than destructive verbs blocklisted, so `DROP`/`DELETE`/`ALTER`/`CREATE` — and anything
+  InfluxDB adds later — are refused by not being on the list. `SELECT … INTO` is refused
+  separately, since it writes despite starting with `SELECT`. Anything unclassifiable is
+  refused.
+- **Only datasource types with a guard.** InfluxQL today. A type you authorize but that has no
+  read-only guard yet (raw SQL, for instance) is still refused — being willing isn't the same
+  as being verifiable.
+- **The same caps as everything else.** `MAX_LOOKBACK_HOURS`, `MAX_DATA_POINTS`, concurrency.
+- **A replayable audit trail.** Every call records a Grafana Explore URL that re-runs exactly
+  that query over exactly that window (absolute timestamps, never `now-1h`), in `audit.jsonl`
+  and in the app's Activity window. Refused and failed queries are recorded too — those are the
+  ones worth reproducing. Requires Grafana 10.2+ for the link to open pre-filled.
+- **Marked provenance.** Results carry `provenance: "adhoc"`, and it flows into
+  `summarize_findings`' evidence, so a verdict resting on a hand-written query says so instead
+  of reading like one resting on a panel a service owner maintains.
+
+The trade you're accepting: a dashboard query encodes choices someone made and validated —
+aggregation, retention policy, which field actually means what. A hand-written query can look
+right and be subtly wrong, and the analysis here will compute a confident z-score on it anyway.
+Prefer `find_related_dashboards` → `resolve_panel_queries` → `execute_query_window`, and reach
+for this when that path comes up empty or when you're iterating on a query you intend to put on
+a dashboard.
 
 ## Local data and disk usage
 
