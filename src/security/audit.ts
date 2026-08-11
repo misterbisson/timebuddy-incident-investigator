@@ -15,6 +15,18 @@ export interface AuditRecord {
 /**
  * Key names in an argsSummary whose values survive redaction verbatim.
  *
+ * Scope caveat, because it differs from the tool layer's: this waiver is
+ * **process-wide over every tool's argsSummary**, while the matching exemption
+ * in tools/executeAdhocQuery.ts is scoped to that one `redact()` call. The
+ * asymmetry is forced — appendAuditRecord redacts centrally precisely so a
+ * guarantee doesn't depend on every call site remembering — but it does mean
+ * `security/redact.ts`'s "a deliberate, greppable act at the call site" framing
+ * is only literally true there, not here. Consequence to know about: any future
+ * tool that puts an `exploreUrl` key in its argsSummary inherits this exemption
+ * silently. Only execute_adhoc_query does today. Keep this list to keys whose
+ * value is a URL the model itself authored the contents of — the justification
+ * below doesn't transfer to a URL built from data the model hasn't seen.
+ *
  * `exploreUrl` is a replayable Grafana link recording a model-authored query
  * (see tools/executeAdhocQuery.ts). Redacting it wouldn't mask anything the
  * model doesn't already have — it *wrote* the query, so any identifier in the
