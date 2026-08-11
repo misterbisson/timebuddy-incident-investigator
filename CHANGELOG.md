@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.2...v0.7.0) (2026-08-11)
+
+
+### Features
+
+* add execute_adhoc_query, gated per-workspace, with a replayable Explore URL trail ([#207](https://github.com/misterbisson/timebuddy-incident-investigator/issues/207)) ([71e649a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/71e649a842f5b397f9ef6e3a1b235c8d1b6f4a2f))
+
 ## [0.6.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.1...v0.6.2) (2026-08-04)
 
 
