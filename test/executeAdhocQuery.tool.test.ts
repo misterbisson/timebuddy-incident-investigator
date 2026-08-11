@@ -104,6 +104,26 @@ describe('execute_adhoc_query registration', () => {
     return expect(call('execute_adhoc_query', {})).rejects.toThrow('No tool registered');
   });
 
+  it('warns at startup when a policy host matches no connection', () => {
+    // The likeliest .mcp.json typo. Without this it surfaces only as a per-call
+    // "not authorized" refusal, which reads like a broken feature.
+    const cfg = config([{ host: 'typo.example.com', datasourceTypes: ['influxdb'] }]);
+    const { client } = fakeClient(INFLUX);
+    const registry = registryFor(cfg, client);
+    expect(registry.unmatchedAdhocHosts()).toEqual(['typo.example.com']);
+
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { server } = fakeServer();
+    registerAllTools(server, { registry, logRegistry: undefined as never, config: cfg });
+    expect(warn.mock.calls.flat().join(' ')).toContain('typo.example.com');
+  });
+
+  it('does not warn when every policy host matches a connection', () => {
+    const cfg = config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
+    const { client } = fakeClient(INFLUX);
+    expect(registryFor(cfg, client).unmatchedAdhocHosts()).toEqual([]);
+  });
+
   it('is registered once some workspace authorized it', async () => {
     const { server, call } = fakeServer();
     const cfg = config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
@@ -326,6 +346,47 @@ describe('execute_adhoc_query audit and redaction', () => {
     const [record] = await auditLines();
     expect(record!.outcome).toBe('error');
     expect(record!.argsSummary.exploreUrl).toContain('/explore');
+  });
+
+  it('replays the statement that actually ran, not the raw input', async () => {
+    // docs/TOOLS.md promises the URL "re-runs exactly that query". The tool
+    // executes verdict.statement (comments collapsed), so a URL built from the
+    // raw text would replay something subtly different from what ran.
+    const cfg = authorized();
+    const { client, queryDs } = fakeClient(INFLUX);
+    const result = await callTool(cfg, client, {
+      query: 'SELECT mean("value") /* note */ FROM "cpu"',
+      datasourceUid: 'influx1',
+      fromMs: FROM,
+      toMs: TO,
+      connection: 'staging',
+    });
+    const sent = queryDs.mock.calls[0]![0].queries[0]!.query;
+    const inUrl = JSON.parse(
+      new URL(payload(result).exploreUrl).searchParams.get('panes')!,
+    ).timebuddy.queries[0].query;
+    expect(inUrl).toBe(sent);
+    expect(inUrl).not.toContain('/* note */');
+  });
+
+  it('replays what was asked when the query is refused', async () => {
+    // Refusal path deliberately keeps the raw text: the scanned form of a
+    // refused query may not stand alone, and what an auditor wants to reproduce
+    // is what was attempted.
+    const cfg = authorized();
+    const { client } = fakeClient(INFLUX);
+    await callTool(cfg, client, {
+      query: 'DROP MEASUREMENT "cpu"',
+      datasourceUid: 'influx1',
+      fromMs: FROM,
+      toMs: TO,
+      connection: 'staging',
+    });
+    const [record] = await auditLines();
+    const inUrl = JSON.parse(
+      new URL(record!.argsSummary.exploreUrl).searchParams.get('panes')!,
+    ).timebuddy.queries[0].query;
+    expect(inUrl).toBe('DROP MEASUREMENT "cpu"');
   });
 
   it('leaves the Explore URL intact when a redaction pattern matches inside it', async () => {

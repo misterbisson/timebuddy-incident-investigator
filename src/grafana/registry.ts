@@ -70,6 +70,28 @@ export class ConnectionRegistry {
    * matching policies are unioned — two flags naming the same host by different
    * aliases should add up rather than one silently winning.
    */
+  /**
+   * Policy hosts that match no configured connection — the most likely
+   * `.mcp.json` typo (wrong hostname, or a connection that hasn't been added
+   * yet). Without this, such a policy still registers the tool (the gate only
+   * asks whether *any* policy exists) and then fails every call with "not
+   * authorized for ad-hoc queries", which reads like a bug in the feature rather
+   * than a typo in one line of config. Callers report it at startup, while
+   * someone is still looking at the terminal and can fix it.
+   *
+   * Deliberately a warning rather than a registration veto: connections are
+   * re-read from the store on every tool call, so a host that matches nothing
+   * at startup may match once someone adds that connection in the GUI. Refusing
+   * to register would turn a recoverable state into one needing a restart, for
+   * no safety gain — an unmatched policy authorizes nothing either way.
+   */
+  unmatchedAdhocHosts(): string[] {
+    const connections = this.list();
+    return (this.config.adhocQueries ?? [])
+      .map((policy) => policy.host)
+      .filter((host) => !connections.some((connection) => hostMatchesConnection(host, connection)));
+  }
+
   adhocDatasourceTypes(connectionId: string): string[] {
     const connection = this.list().find((c) => c.id === connectionId);
     if (!connection) return [];

@@ -69,5 +69,19 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   // Note the asymmetry with the connections thunk: this is a startup decision,
   // because an MCP server advertises one tool list per session. Adding the flag
   // needs a session restart, unlike adding a connection.
-  if ((ctx.config.adhocQueries ?? []).length > 0) registerExecuteAdhocQuery(server, ctx);
+  if ((ctx.config.adhocQueries ?? []).length > 0) {
+    // Warn about policy hosts matching no connection before registering, so the
+    // "wrong hostname in .mcp.json" case surfaces here rather than as a
+    // confusing per-call refusal later. stderr, never stdout: stdout is the MCP
+    // JSON-RPC channel once the transport connects.
+    const unmatched = ctx.registry.unmatchedAdhocHosts();
+    if (unmatched.length > 0) {
+      console.error(
+        `Warning: --allow-adhoc-queries names ${unmatched.length} host(s) matching no configured Grafana ` +
+          `connection: ${unmatched.join(', ')}. Ad-hoc queries will be refused for them until a connection ` +
+          'with that hostname (or matchHosts alias) exists.',
+      );
+    }
+    registerExecuteAdhocQuery(server, ctx);
+  }
 }
