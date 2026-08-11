@@ -128,19 +128,29 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
             const authorizedTypes = registry.adhocDatasourceTypes(connectionId);
             const datasource = await resolveAuthorizedDatasource(client, datasourceUid, authorizedTypes);
 
+            // Classify before building the URL, so the link can replay the text
+            // that actually ran. The guard returns the *scanned* statement
+            // (comments collapsed to separators), and that — not `query` — is
+            // what gets executed below, so a URL built from `query` would not be
+            // the "re-runs exactly that query" link docs/TOOLS.md promises.
+            const verdict = GUARDABLE_TYPES[datasource.type]!(query);
+
             const baseUrl = registry.list().find((c) => c.id === connectionId)?.url;
             if (baseUrl) {
               exploreUrl = buildExploreUrl(baseUrl, {
                 datasourceUid: datasource.uid,
                 datasourceType: datasource.type,
-                query,
+                // Success path: replay exactly what ran. Refusal path: replay
+                // what was *asked*, since that's the thing an auditor wants to
+                // reproduce — the scanned form of a refused query may not even
+                // be valid on its own.
+                query: verdict.allowed ? verdict.statement : query,
                 fromMs,
                 toMs,
               });
               auditArgs.exploreUrl = exploreUrl;
             }
 
-            const verdict = GUARDABLE_TYPES[datasource.type]!(query);
             if (!verdict.allowed) {
               throw new Error(`Query refused: ${verdict.reason}`);
             }

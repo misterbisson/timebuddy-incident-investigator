@@ -91,6 +91,17 @@ Three things shape almost every module here and are easy to miss from a partial 
    `config.ts`'s `AdhocQueryPolicy`. Don't widen `GUARDABLE_TYPES` without writing a real
    guard for that query language.
 
+   Two invariants in there that a partial read will miss, both load-bearing. **The tool
+   executes `verdict.statement`, the text the guard scanned — never the caller's raw input.**
+   Every claim the guard makes is about the string it inspected, so running the raw input
+   instead would mean checking one string and executing another, and no test would notice.
+   And **the scanner is one quote-aware pass** (`scanInfluxQL`) rather than a comment-strip
+   followed by a split: an earlier version stripped comments with a regex first, which
+   truncated any query with `--` inside a string literal and — because the scanned text is
+   what runs — silently executed a rewritten query. It was fail-safe rather than fail-open
+   (the truncation became a datasource syntax error), but "neither refused nor preserved" is
+   the outcome the guard's own refuse-by-default rule exists to forbid.
+
 2. **Every tool's structured output is redacted before it reaches the model.** `security/redact.ts`
    masks secret-shaped keys and configured customer-identifier patterns; tools call it on
    their result just before returning `content`. `security/limits.ts` enforces the
