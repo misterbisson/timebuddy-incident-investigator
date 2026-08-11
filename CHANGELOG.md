@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.7.0...v0.7.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump the minor-and-patch group across 1 directory with 3 updates ([#206](https://github.com/misterbisson/timebuddy-incident-investigator/issues/206)) ([83cb19f](https://github.com/misterbisson/timebuddy-incident-investigator/commit/83cb19fccc9dec4e35e341224169d267fe526019))
+* **deps:** bump js-yaml from 4.3.0 to 4.3.1 ([#209](https://github.com/misterbisson/timebuddy-incident-investigator/issues/209)) ([f338497](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f3384976b8844fe15345249ccba7560b04a869b7))
+* make the ad-hoc InfluxQL guard literal-aware, and stop silent flag drops ([#211](https://github.com/misterbisson/timebuddy-incident-investigator/issues/211)) ([5d75f9a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5d75f9aacc626eb385c42f60b679f74e859b6d9c))
+
 ## [0.7.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.2...v0.7.0) (2026-08-11)
 
 
