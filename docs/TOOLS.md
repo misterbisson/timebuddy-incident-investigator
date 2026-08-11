@@ -5,9 +5,13 @@ three [skills](../README.md#skills) chain them for you. This page is for
 driving them directly (Claude Desktop or another MCP client without skill support), or for
 understanding exactly what a call returns.
 
-20 tools total. 19 are always registered; `screenshot_panel` is only present in the
-Electron app (it needs a browser to drive). Every tool takes an optional `connection`
-parameter — see [Multiple connections](../README.md#multiple-connections).
+21 tools total, of which 19 are always registered. Two are conditional: `screenshot_panel` is
+only present in the Electron app (it needs a browser to drive), and `execute_adhoc_query` is
+only present when a workspace explicitly authorized it with a `--allow-adhoc-queries` launch
+flag (see [Ad-hoc queries](../README.md#ad-hoc-queries-off-by-default)) — with no flag anywhere,
+the tool list is identical to what it was before that feature existed. Every tool takes an
+optional `connection` parameter — see
+[Multiple connections](../README.md#multiple-connections).
 
 Every text payload is [redacted](../README.md#security) before it reaches the model, and
 every call is audit-logged.
@@ -36,6 +40,7 @@ was not found") from an unrecognized URL shape. None of them accept a folder lin
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed. Optional `tagBreakout` re-runs the panel broken out by a tag: `{ key }` adds a `GROUP BY`/`by (...)` for that key (one series per value — surfaces which host is hot when a cross-host aggregate hides it), `{ key, value }` filters to that one value (to isolate a host before feeding it into `search_logs`). Supports builder-mode InfluxQL and PromQL targets (raw-query InfluxQL and Loki/LogQL still hard-error rather than silently returning the un-broken-out query — see [`src/dashboards/tagBreakout.ts`](../src/dashboards/tagBreakout.ts)/[`promqlBreakout.ts`](../src/dashboards/promqlBreakout.ts)); pair with `discover_influxdb_schema`/`discover_label_values` to get the real tag/label keys and values. `includePoints: false` drops raw points (stats/runs still returned) for a wide window that would otherwise overflow. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` → `resolve_panel_queries` → `execute_query_window` per panel. `includePoints: false` gives a compact, stats-only survey. A panel mirroring another via Grafana's "-- Dashboard --" datasource (see [`BEHAVIOR.md`](BEHAVIOR.md)) is reported with `mirrorsPanelIds`, never executed or errored. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
+| `execute_adhoc_query` | *Only registered when authorized — see [Ad-hoc queries](../README.md#ad-hoc-queries-off-by-default).* Run query text **you** wrote against a datasource over an explicit window, rather than replaying a query from a dashboard. Returns series plus `provenance: "adhoc"` plus a Grafana Explore URL that re-runs exactly that query (absolute window, so it stays truthful when opened later; recorded in `audit.jsonl` even when the query is refused or fails). Read-only by construction: single-statement `SELECT`/`SHOW` only, statement heads allowlisted rather than destructive verbs blocklisted, `SELECT … INTO` refused separately, anything unclassifiable refused — and only against datasource types both authorized *and* guardable (InfluxQL today; raw SQL refused regardless). Subject to the same `MAX_LOOKBACK_HOURS`/`MAX_DATA_POINTS` caps as every other query. Prefer the dashboard path (`find_related_dashboards` → `resolve_panel_queries` → `execute_query_window`) first: a dashboard query encodes aggregation and retention choices a service owner validated, and a hand-written one can look right while being subtly wrong. |
 | `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle. It does **not** generate prose — the calling agent writes the human-readable note from this bundle, which is why it returns `reasons`/`evidence` arrays rather than a paragraph. |
 
 ## Correlate & discover
@@ -53,7 +58,7 @@ was not found") from an unrecognized URL shape. None of them accept a folder lin
 | Tool | What it does |
 | --- | --- |
 | `export_panel_csv` | Write one panel's data to a CSV file, for archiving/reporting/presentations. See [CSV export behavior](#csv-export-behavior) below. |
-| `screenshot_panel` | *Electron app only.* Capture a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed content isn't in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). See [the redaction exception](#screenshot-redaction-exception) below. |
+| `screenshot_panel` | *Electron app only.* Capture a real screenshot of one panel exactly as Grafana renders it, via a hidden browser window — for seeing a chart's actual shape, or reading a table/matrix panel whose transformed content isn't in any raw query result. Returns the image inline plus a clickable Grafana link, and always saves the PNG to disk (`savedTo`). See [the redaction exceptions](#redaction-exceptions) below. |
 
 ## Logs (Graylog)
 
@@ -99,9 +104,37 @@ The Grafana-side transformation capture depends on the exact visible text/DOM of
 Inspect drawer rather than a published API, so it's more version-sensitive than the rest of
 this project's Grafana integration.
 
-## Screenshot redaction exception
+## Redaction exceptions
 
-`screenshot_panel` is the one tool whose output is only **partly** covered by the redaction
-layer. Its JSON payload is redacted like every other tool's, but the **image itself is
+Two tools' output is only **partly** covered by the redaction layer. Both exceptions exist
+because redaction *cannot help* with the value in question, not because it was inconvenient —
+and both are enumerated in code (`security/redact.ts`'s `RedactOptions.exempt`) rather than
+matched by a naming convention, so adding a third has to be deliberate.
+
+### `screenshot_panel`'s image
+
+Its JSON payload is redacted like every other tool's, but the **image itself is
 not** — redaction only understands text, so anything legible on the panel (legend values,
 axis labels, annotation text) reaches the model as rendered.
+
+### `execute_adhoc_query`'s `exploreUrl`
+
+The replayable Grafana Explore URL skips the configured customer-identifier patterns (in the
+tool result *and* in `audit.jsonl`). Two reasons, and the second is the one that matters:
+
+1. `redactString` rewrites *inside* strings, so a pattern matching something in the query text
+   would return a **broken link** rather than a masked one — silently converting the audit
+   record for the riskiest tool into a dead URL.
+2. It would mask nothing. The model **wrote** that query, so any identifier in the query text
+   was already in its context before the URL existed. Redaction's job is stopping identifiers
+   from crossing into the model's context; it can't un-cross one.
+
+That reasoning is specific to model-authored query *text*. A dashboard query's *results* come
+from Grafana and the model hasn't seen them, which is why series data on the very same response
+stays fully redacted — as does `execute_adhoc_query`'s own echoed `query` field. Secret-shaped
+keys are still masked even inside an exempt key, since nothing needs an unmasked password to
+function.
+
+Note the Explore URL requires **Grafana 10.2+** to open with the query pre-filled: it uses the
+`schemaVersion=1&panes={...}` form, and there is deliberately no Grafana version detection in
+this client. On an older instance the link opens Explore without the query rather than erroring.

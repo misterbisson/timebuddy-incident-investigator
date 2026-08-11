@@ -92,7 +92,11 @@ export async function startMcpServer(
   return server;
 }
 
-export type { Config, GrafanaConnection, LogConnection } from './config.js';
+export type { Config, GrafanaConnection, LogConnection, AdhocQueryPolicy } from './config.js';
+// Exported for electron/src/main.js, which parses its own argv and passes the
+// result through startMcpServer's configOverrides — the flag has to be read in
+// the process that was actually launched with it.
+export { parseAdhocQueryFlags } from './config.js';
 export type { ConnectionsSource } from './grafana/registry.js';
 export type { LogConnectionsSource } from './graylog/registry.js';
 export type { Screenshotter, CapturePanelRequest } from './screenshot/types.js';

@@ -196,6 +196,24 @@ skill exists to handle for them.
      first move — pass the exact name as `searchTerm`. `find_related_dashboards` coming back empty
      just means no dashboard visualizes it yet; that's itself worth reporting (a real observability
      gap on the dashboard-owning team's side), separate from whether the metric exists at all.
+   - **If `execute_adhoc_query` is in your tool list**, it can run a query you write yourself
+     rather than one from a dashboard. It's absent unless the workspace explicitly authorized it,
+     so its presence means someone deliberately turned it on here — usually a repo where
+     dashboards are authored as code. Treat it as a **later** resort than
+     `discover_influxdb_schema`, not an easier alternative to the steps above:
+     - Reach for it only after `find_related_dashboards` **and** `resolve_panel_queries` /
+       `discover_influxdb_schema` have come up empty, or when the task is explicitly to iterate on
+       a query destined for a dashboard.
+     - A dashboard query encodes aggregation, retention-policy, and field choices that a service
+       owner made and validated. A query you write can look right and be subtly wrong — `mean()`
+       over a counter, the wrong retention policy — and `validate_baseline` will compute a
+       perfectly confident z-score on it regardless. Nothing downstream can detect this for you.
+     - Its results carry `provenance: "adhoc"`. Pass that through on the matching `evidence`
+       entries in step 7, and say so in the written note. A verdict resting on queries nobody
+       validated must not read like one resting on a panel a team maintains.
+     - Every call leaves a Grafana Explore URL in the audit trail that replays it exactly.
+       Include that URL in your evidence so a human can check your query rather than take it on
+       trust.
 
 5. **Check blast radius**, once you have a primary panel: `detect_correlated_anomalies` with
    `primaryDashboardUid`/`primaryPanelId`/`startsAtMs`/`primaryLabels`/`connection` — omit
@@ -392,7 +410,10 @@ skill exists to handle for them.
      evidence links just because it's outside the one-shot pipeline.
 
 7. **Assemble the verdict**: `summarize_findings` with the baseline result, correlated results,
-   and an `evidence` array of dashboard/panel links you gathered along the way. Pass
+   and an `evidence` array of dashboard/panel links you gathered along the way. Mark any entry
+   backed by `execute_adhoc_query` with `provenance: "adhoc"` — that adds a disclosure caveat to
+   `missingData` which belongs in your written note; omitting it presents a hand-written query as
+   though a service owner had validated it. Pass
    `validate_baseline`'s `briefExcursions` through in `baseline` unchanged, not just the top-level
    `classification` — `summarize_findings` now folds that in itself, so it never returns
    `likely-false-positive` while brief excursions are sitting right there unexamined (it returns

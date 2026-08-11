@@ -56,6 +56,94 @@ export interface LogConnection {
   tags?: string[];
 }
 
+/**
+ * One workspace's authorization to run model-authored ("ad-hoc") queries
+ * against one endpoint.
+ *
+ * Deliberately NOT sourced from env, and deliberately not a field on
+ * GrafanaConnection: this is a property of the *workspace an agent is running
+ * in*, not of a Grafana instance and not of this machine. It arrives as a
+ * `--allow-adhoc-queries=host[:type]` launch argument, which in practice lives
+ * in a project-scoped `.mcp.json` checked into the repo where the dashboards
+ * themselves are authored. That gives the capability the scope it actually
+ * wants — on in that one repo, absent everywhere else, versioned and
+ * reviewable in a PR — with no stored state that could be left switched on.
+ *
+ * An empty list means the capability does not exist at all: execute_adhoc_query
+ * isn't even registered (see tools/registerAll.ts), so a session started in any
+ * other directory never sees a tool it couldn't use.
+ *
+ * `host` is matched with connections/resolve.ts's hostMatchesConnection, the
+ * same matcher an inbound alert link goes through — so a `matchHosts` alias
+ * resolves here too, and a checked-in file never has to name a connection by
+ * its `crypto.randomUUID()` id.
+ */
+export interface AdhocQueryPolicy {
+  /** Hostname (or `matchHosts` alias) of the connection this authorizes. */
+  host: string;
+  /**
+   * Datasource types authorized on that connection (e.g. `['influxdb']`).
+   * Required, not optional: a bare host would silently authorize every
+   * datasource the connection can reach — including raw-SQL types where a
+   * query body is arbitrary SQL — so the blast radius has to be declared
+   * rather than assumed.
+   */
+  datasourceTypes: string[];
+}
+
+const ADHOC_FLAG = 'allow-adhoc-queries';
+
+/**
+ * Parses `--allow-adhoc-queries=host:type[,type]` occurrences out of an argv
+ * list. Repeatable: one flag per authorized endpoint. Anything malformed is
+ * skipped rather than throwing — a typo in a checked-in `.mcp.json` should
+ * leave the capability off (its safe state) rather than prevent the MCP server
+ * from starting at all, which would take every other tool down with it.
+ * Returns the reasons alongside so the caller can log them; a silently ignored
+ * flag is its own kind of trap.
+ */
+export function parseAdhocQueryFlags(argv: string[]): {
+  policies: AdhocQueryPolicy[];
+  problems: string[];
+} {
+  const policies: AdhocQueryPolicy[] = [];
+  const problems: string[] = [];
+  for (const arg of argv) {
+    if (!arg.startsWith(`--${ADHOC_FLAG}=`)) {
+      // Bare `--allow-adhoc-queries` with no value is rejected on purpose: it
+      // reads like "enable everywhere", which is exactly the scope this flag
+      // exists to avoid granting by accident.
+      if (arg === `--${ADHOC_FLAG}`) {
+        problems.push(`--${ADHOC_FLAG} requires a value: --${ADHOC_FLAG}=<host>:<datasourceType>`);
+      }
+      continue;
+    }
+    const value = arg.slice(`--${ADHOC_FLAG}=`.length).trim();
+    // Split on the LAST colon so an authority with a port ("host:3000") keeps
+    // its port and only the trailing type list is taken as types.
+    const sep = value.lastIndexOf(':');
+    if (sep <= 0 || sep === value.length - 1) {
+      problems.push(
+        `--${ADHOC_FLAG}=${value} is malformed — expected <host>:<datasourceType>[,<datasourceType>] ` +
+          '(the datasource type is required, so a bare host cannot authorize every datasource)',
+      );
+      continue;
+    }
+    const host = value.slice(0, sep).trim().toLowerCase();
+    const datasourceTypes = value
+      .slice(sep + 1)
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+    if (!host || datasourceTypes.length === 0) {
+      problems.push(`--${ADHOC_FLAG}=${value} is malformed — both a host and at least one datasource type are required`);
+      continue;
+    }
+    policies.push({ host, datasourceTypes });
+  }
+  return { policies, problems };
+}
+
 export interface Config {
   connections: GrafanaConnection[];
   logConnections: LogConnection[];
@@ -117,6 +205,14 @@ export interface Config {
    * 1. Default 5.
    */
   auditKeep: number;
+  /**
+   * Workspaces' ad-hoc-query authorizations (see AdhocQueryPolicy). Always
+   * `[]` from loadConfig() — there is deliberately no env var for this, so the
+   * only way it becomes non-empty is a caller passing it through
+   * startMcpServer()'s configOverrides, which is what electron/src/main.js does
+   * with the `--allow-adhoc-queries` launch flag.
+   */
+  adhocQueries: AdhocQueryPolicy[];
 }
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {
@@ -204,6 +300,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     screenshotRetentionHours: parseInt_(env.SCREENSHOT_RETENTION_HOURS, 168),
     auditMaxBytes: parseInt_(env.AUDIT_MAX_BYTES, 5_000_000),
     auditKeep: parseInt_(env.AUDIT_KEEP_FILES, 5),
+    // Never from env — see AdhocQueryPolicy. An env var here would be
+    // machine-scoped, which is the opposite of the per-workspace scope this
+    // capability is supposed to have.
+    adhocQueries: [],
   };
   return cached;
 }

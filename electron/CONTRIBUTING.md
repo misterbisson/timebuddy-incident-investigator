@@ -39,7 +39,17 @@ the GUI), then spawns this app's real binary in `--mcp-server` mode using the ac
 `@modelcontextprotocol/sdk` `Client`/`StdioClientTransport` — the same mechanism a real MCP
 client uses — and confirms `tools/list` returns the full expected tool set and a tool call reaches a real
 network attempt using the seeded, `safeStorage`-decrypted credential (not a
-connection-resolution error). Run it with:
+connection-resolution error).
+
+It then spawns the binary a **second** time with
+`--allow-adhoc-queries=grafana.example.com:influxdb` and checks that
+`execute_adhoc_query` is absent in the first pass and present in the second. That pass exists
+because `main.js` is plain JS that never sees `tsc`, so its argv-parsing →
+`startMcpServer` `configOverrides` → `registerAll` gating path has no type checking behind it —
+a typo there would silently either never enable the tool or always enable it. The statement
+guard's own ordering (refuse before any query executes) is asserted separately against a mocked
+client in the engine's `test/executeAdhocQuery.tool.test.ts`, since an unreachable
+`grafana.example.com` can't distinguish a guard refusal from a network failure. Run it with:
 
 ```bash
 node test/mcpServerMode.mjs

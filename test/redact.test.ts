@@ -41,4 +41,43 @@ describe('redact', () => {
     expect(result['private-key']).toBe('[REDACTED]');
     expect(result['X-API-KEY']).toBe('[REDACTED]');
   });
+
+  describe('exempt keys', () => {
+    const patterns = [/acct-\d{6}/];
+
+    it('leaves an exempt key untouched while still redacting its siblings', () => {
+      const input = { exploreUrl: 'https://g/explore?q=acct-123456', query: 'WHERE a = acct-123456' };
+      const result = redact(input, patterns, { exempt: ['exploreUrl'] }) as typeof input;
+      // Without the exemption this would come back with [REDACTED] spliced into
+      // the middle of the URL — a broken link, not a masked one.
+      expect(result.exploreUrl).toBe('https://g/explore?q=acct-123456');
+      expect(result.query).toBe('WHERE a = [REDACTED]');
+    });
+
+    it('still masks a secret-shaped key even when it is listed as exempt', () => {
+      // Nothing legitimately needs an unmasked password to function, so the
+      // secret-key rule outranks the waiver.
+      const result = redact({ token: 'zzz' }, patterns, { exempt: ['token'] }) as { token: string };
+      expect(result.token).toBe('[REDACTED]');
+    });
+
+    it('exempts nested values under an exempt key, not just strings', () => {
+      const input = { exploreUrl: { raw: 'acct-123456' }, other: 'acct-123456' };
+      const result = redact(input, patterns, { exempt: ['exploreUrl'] }) as typeof input;
+      expect(result.exploreUrl.raw).toBe('acct-123456');
+      expect(result.other).toBe('[REDACTED]');
+    });
+
+    it('applies the exemption at any depth, since results nest', () => {
+      const input = { series: [{ exploreUrl: 'acct-123456', label: 'acct-123456' }] };
+      const result = redact(input, patterns, { exempt: ['exploreUrl'] }) as typeof input;
+      expect(result.series[0]!.exploreUrl).toBe('acct-123456');
+      expect(result.series[0]!.label).toBe('[REDACTED]');
+    });
+
+    it('changes nothing when no exemption is passed', () => {
+      const input = { exploreUrl: 'acct-123456' };
+      expect((redact(input, patterns) as typeof input).exploreUrl).toBe('[REDACTED]');
+    });
+  });
 });

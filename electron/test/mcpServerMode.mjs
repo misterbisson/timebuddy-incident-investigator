@@ -155,7 +155,73 @@ try {
   }
   console.log(`OK: search_logs got past connection resolution to a real network attempt: ${logText}`);
 
+  if (actualNames.includes('execute_adhoc_query')) {
+    fail('execute_adhoc_query must not be registered without an --allow-adhoc-queries flag');
+  }
+  console.log('OK: execute_adhoc_query is absent with no --allow-adhoc-queries flag');
+
   await client.close();
+
+  // Second pass, same seeded store, this time with the flag. main.js is plain
+  // JS and never sees tsc, so its argv parsing -> configOverrides ->
+  // registerAll gating path has no type checking behind it: spawning the real
+  // binary is the only thing that proves the flag actually arrives.
+  const adhocTransport = new StdioClientTransport({
+    command: electronBin,
+    args: [
+      '.',
+      '--mcp-server',
+      `--user-data-dir=${userDataDir}`,
+      '--password-store=basic',
+      '--disable-gpu',
+      // Matches the hostname of the connection the seed step stored.
+      '--allow-adhoc-queries=grafana.example.com:influxdb',
+    ],
+    cwd: electronRoot,
+    stderr: 'pipe',
+    env: process.env,
+  });
+  adhocTransport.stderr?.on('data', (chunk) => process.stderr.write(`[electron adhoc stderr] ${chunk}`));
+  const adhocClient = new Client({ name: 'mcp-server-mode-adhoc-test', version: '0.0.0' });
+  await adhocClient.connect(adhocTransport);
+
+  const adhocTools = (await adhocClient.listTools()).tools.map((t) => t.name);
+  if (!adhocTools.includes('execute_adhoc_query')) {
+    fail(`execute_adhoc_query missing with the flag set (got: ${adhocTools.sort().join(', ')})`);
+  }
+  console.log('OK: execute_adhoc_query is registered when --allow-adhoc-queries names a configured host');
+
+  // A destructive statement must come back as an error, never as a result.
+  //
+  // Scope of this check, stated precisely because it's easy to over-read: what
+  // fails first here is the *authorization* step's listDatasources call, since
+  // grafana.example.com isn't reachable — so this proves the call is gated, not
+  // that the statement guard ran. The DROP text provably never reaches a
+  // datasource because classifyInfluxQL runs before executeQueryWindow, and
+  // that ordering is asserted directly against a mocked client in
+  // test/executeAdhocQuery.tool.test.ts ("never reaches the datasource when the
+  // statement guard refuses", which checks queryDs was not called at all). This
+  // test's job is the part that one can't cover: that the argv flag reaches
+  // registerAll in the real binary.
+  const dropResult = await adhocClient.callTool({
+    name: 'execute_adhoc_query',
+    arguments: {
+      query: 'DROP MEASUREMENT "cpu"',
+      datasourceUid: 'whatever',
+      fromMs: Date.now() - 60_000,
+      toMs: Date.now(),
+    },
+  });
+  const dropText = dropResult.content?.[0]?.text ?? '';
+  if (dropResult.isError !== true) {
+    fail(`DROP MEASUREMENT returned a non-error result: ${dropText}`);
+  }
+  if (/"series"|"provenance"/.test(dropText)) {
+    fail(`DROP MEASUREMENT came back with query results: ${dropText}`);
+  }
+  console.log(`OK: DROP MEASUREMENT rejected: ${dropText.split('\n')[0]}`);
+
+  await adhocClient.close();
   rmSync(userDataDir, { recursive: true, force: true });
   console.log('ALL CHECKS PASSED');
   process.exit(0);
