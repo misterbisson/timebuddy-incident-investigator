@@ -1,12 +1,22 @@
 // Guards the one property of the auto-updater that must never regress: it
-// stays completely inert unless the app is a packaged GUI build. Run under an
+// stays completely inert unless the app is packaged. Run under an
 // `electron test/...` invocation the app is unpackaged (app.isPackaged ===
-// false), which stands in for the dev/CI case; combined with the isMcpMode
-// branch it proves both guards short-circuit before electron-updater is ever
-// touched. If this ever started returning a live updater here, a dev run or —
-// worse — an --mcp-server session (whose stdout is the MCP JSON-RPC channel)
-// could pop a restart dialog or relaunch itself mid-session. Run with:
+// false), which stands in for the dev/CI case, and proves that guard
+// short-circuits before electron-updater is ever touched. If this started
+// returning a live updater here, a dev run would try to check for updates
+// against an app-update.yml that doesn't exist. Run with:
 //   electron test/updater.test.js --user-data-dir=<dir>
+//
+// Scope note: setupAutoUpdater used to refuse isMcpMode outright, so passing
+// `true` below once exercised a second, independent guard. It no longer does —
+// updater.js now handles that mode rather than refusing it (stderr-only logger,
+// no dialog, no quitAndInstall), and main.js is what keeps it to the GUI branch.
+// The isMcpMode:true case is therefore kept as a regression test that the
+// PACKAGED guard alone still covers every mode, not as coverage of MCP-mode
+// behavior — which nothing here can reach, since it all lives past the
+// app.isPackaged return. That behavior is currently unexercised by any
+// automated test; note also that this file is not run by CI at all (the
+// electron-mcp-server job runs only test/mcpServerMode.mjs).
 const assert = require('node:assert');
 const { app } = require('electron');
 
@@ -24,9 +34,8 @@ app.whenReady().then(() => {
     assert.strictEqual(setupAutoUpdater({ isMcpMode: true }), null, 'unpackaged --mcp-server must no-op');
     assert.strictEqual(setupAutoUpdater(), null, 'default args must no-op');
 
-    // The guards must short-circuit BEFORE the lazy require, so electron-updater
-    // is never even loaded on these paths — the property that keeps it out of
-    // the --mcp-server process entirely.
+    // The guard must short-circuit BEFORE the lazy require, so electron-updater
+    // and its transitive deps are never even loaded on the unpackaged path.
     assert.ok(
       !Object.keys(require.cache).some((p) => p.includes(`${require('node:path').sep}electron-updater${require('node:path').sep}`)),
       'electron-updater must not be loaded when setupAutoUpdater no-ops',

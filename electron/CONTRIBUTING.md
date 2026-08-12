@@ -155,7 +155,13 @@ published, checked out at that new tag, and does the actual platform builds +
 `electron-builder --publish always`, uploading the installers **and** the
 `latest-*.yml` update manifests that `electron-updater` reads. Those manifests are what
 `src/updater.js` (wired into `main.js`'s GUI startup) checks on launch to auto-download and
-install newer releases; it no-ops in dev and in `--mcp-server` mode. This is why
+install newer releases; it no-ops in dev (unpackaged). It does not run in `--mcp-server`
+mode either, but note where that gating lives: `updater.js` itself handles that mode
+safely (stderr-only logging, no restart dialog, never `quitAndInstall()`), and it is
+`main.js`'s GUI-only call site that keeps it off. What blocks enabling it there is that
+there's no `requestSingleInstanceLock`, so every Claude Code session spawns its own
+process and an unconditional check would fan out into N simultaneous downloads onto one
+cache path — electing a single checker is the missing piece. This is why
 `build.mac.target` lists a `zip` alongside the `dmg`: Squirrel.Mac (via electron-updater)
 can only consume a zip, so a dmg-only mac release would publish a `latest-mac.yml` the
 updater then chokes on (`ERR_UPDATER_ZIP_FILE_NOT_FOUND`) — the dmg is for first installs,

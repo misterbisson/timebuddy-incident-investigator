@@ -259,9 +259,18 @@ app.whenReady().then(async () => {
   }
   openOrFocusConnectionsWindow();
   // Check GitHub Releases for a newer build and, if found, download it and
-  // offer a restart. No-ops in dev (unpackaged) and never runs in --mcp-server
-  // mode — see updater.js for why both guards matter. Passing isMcpMode is
-  // belt-and-suspenders: this branch only runs when it's false anyway.
+  // offer a restart. No-ops in dev (unpackaged).
+  //
+  // Reached only on the GUI branch — the --mcp-server path returns above. That
+  // is a call-site decision, not a limitation of updater.js, which handles the
+  // mode correctly (no dialog, no quitAndInstall, stderr-only logging). What
+  // still blocks turning it on there is process count, not safety: with no
+  // requestSingleInstanceLock, every Claude Code session/worktree spawns its
+  // own --mcp-server process, so an unconditional check would fan out into N
+  // simultaneous downloads onto one cache path. Electing a single checker
+  // (a timestamp file in userData, or requiring an open GUI window) is the
+  // missing piece. isMcpMode is still passed rather than hardcoded false so
+  // that lifting this is a one-line change here.
   setupAutoUpdater({ isMcpMode });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openOrFocusConnectionsWindow();

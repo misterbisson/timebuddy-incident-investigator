@@ -50,6 +50,15 @@ jobs:
       - name: Test
         run: npm test
 
+      # The one electron/ test that belongs in this job rather than the
+      # electron-mcp-server one below: it stubs `electron` and
+      # `electron-updater` at the module-resolution layer, so it needs neither
+      # the ~100MB Electron binary this job deliberately skips nor a display
+      # server. Its sibling electron/test/updater.test.js does need the real
+      # binary and is not run by CI at all.
+      - name: Test electron auto-updater behavior
+        run: node electron/test/updaterBehavior.test.js
+
   # Runs the one check neither the `test` job above (engine-only install, no
   # Electron binary) nor release.yml (packages but never invokes this script)
   # covers: that the packaged app's --mcp-server mode actually boots and lists
