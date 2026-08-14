@@ -1,4 +1,5 @@
 const { app, dialog } = require('electron');
+const { claimUpdateCheck } = require('./updateCheckClaim.js');
 
 // Wires electron-updater into the packaged GUI app. On launch it checks the
 // GitHub Releases feed (configured by electron-builder's `build.publish` block
@@ -31,15 +32,20 @@ const { app, dialog } = require('electron');
 //   3. A modal restart prompt would interrupt an agent session that the user
 //      may not even be watching. Suppressed in that mode.
 //
-// NOTE: being safe to *call* in --mcp-server mode is not the same as being safe
-// to *enable* there, and main.js still doesn't. There is no
-// requestSingleInstanceLock, so every Claude Code session/worktree spawns its
-// own process — a routine developer machine was observed running 11 at once.
-// Turning this on for all of them means N concurrent checks and up to N
-// concurrent ~120MB downloads racing on one fixed cache path. Enabling it needs
-// an election first (a timestamp file in userData, or gating on a GUI window
-// actually being open); this module is merely ready for that day rather than
-// being what blocks it.
+//   4. Process count. There is no requestSingleInstanceLock, so every Claude
+//      Code session/worktree spawns its own process — a routine developer
+//      machine was observed running 11 at once — and an unconditional check
+//      would mean 11 simultaneous ~120MB downloads onto one shared cache path.
+//      updateCheckClaim.js elects exactly one of them per interval; the losers
+//      return below without even loading electron-updater.
+//
+// GUI launches deliberately skip that election and always check. Opening the app
+// is the user's one manual recourse when they want to be current *now*, and
+// silently no-opping it because a background MCP process stamped the file an
+// hour ago would be a worse bug than the redundant download it saves. The
+// tradeoff is a worst case of two concurrent downloads (one GUI, one elected
+// MCP) rather than one — bounded, rare, and self-correcting, since
+// electron-updater verifies sha512 and simply refuses a corrupted result.
 //
 // Platform note: macOS auto-update (Squirrel.Mac) needs BOTH a code-signed app
 // AND a `zip` artifact in the release — a `dmg` alone is not updater-consumable
@@ -55,8 +61,14 @@ const { app, dialog } = require('electron');
 function setupAutoUpdater({ isMcpMode = false } = {}) {
   if (!app.isPackaged) return null;
 
+  // Elect before doing anything else, so the ~10 processes that lose skip the
+  // lazy require entirely rather than each paying for electron-updater and its
+  // transitive deps just to sit idle. Returning null here is the same "didn't
+  // run" signal as the unpackaged path — nothing downstream distinguishes them.
+  if (isMcpMode && !claimUpdateCheck(app.getPath('userData'))) return null;
+
   // Lazy require: keeps electron-updater and its transitive deps out of the
-  // process entirely on the unpackaged path, loaded only once we've decided we
+  // process entirely on the paths above, loaded only once we've decided we
   // actually intend to check for updates.
   const { autoUpdater } = require('electron-updater');
 

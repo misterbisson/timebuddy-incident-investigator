@@ -254,23 +254,33 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.error('Fatal error starting MCP server:', err);
       app.exit(1);
+      return;
+    }
+    // Deliberately AFTER the transport is up: a session that can't start is not
+    // improved by also checking for updates, and this way the check can never
+    // delay the point at which tools become available.
+    //
+    // Wrapped separately from runMcpServer's catch so an updater fault can't be
+    // misreported as a fatal MCP startup error and take the server — and
+    // therefore every tool the user came for — down with it. Missing one update
+    // check is always the cheaper failure.
+    //
+    // Only one process across all concurrent sessions actually checks; see
+    // updateCheckClaim.js. The update installs on this process's own exit
+    // (autoInstallOnAppQuit), so the user picks it up at their next session
+    // having been interrupted by nothing.
+    try {
+      setupAutoUpdater({ isMcpMode });
+    } catch (err) {
+      console.error('[auto-update] setup failed:', err && err.stack ? err.stack : err);
     }
     return;
   }
   openOrFocusConnectionsWindow();
   // Check GitHub Releases for a newer build and, if found, download it and
-  // offer a restart. No-ops in dev (unpackaged).
-  //
-  // Reached only on the GUI branch — the --mcp-server path returns above. That
-  // is a call-site decision, not a limitation of updater.js, which handles the
-  // mode correctly (no dialog, no quitAndInstall, stderr-only logging). What
-  // still blocks turning it on there is process count, not safety: with no
-  // requestSingleInstanceLock, every Claude Code session/worktree spawns its
-  // own --mcp-server process, so an unconditional check would fan out into N
-  // simultaneous downloads onto one cache path. Electing a single checker
-  // (a timestamp file in userData, or requiring an open GUI window) is the
-  // missing piece. isMcpMode is still passed rather than hardcoded false so
-  // that lifting this is a one-line change here.
+  // offer a restart. No-ops in dev (unpackaged). Unlike the --mcp-server branch
+  // above, a GUI launch always checks rather than participating in the
+  // election — see updater.js's header for why that asymmetry is deliberate.
   setupAutoUpdater({ isMcpMode });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openOrFocusConnectionsWindow();

@@ -17,24 +17,35 @@
 // testing, which is exactly why it's asserted mechanically.
 const Module = require('node:module');
 const { EventEmitter } = require('node:events');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const UPDATER = path.join(__dirname, '..', 'src', 'updater.js');
+const CLAIM = path.join(__dirname, '..', 'src', 'updateCheckClaim.js');
 
 let dialogCalls;
 let quitAndInstallCalls;
 let autoUpdater;
 let dialogResponse;
 let isPackaged;
+let userDataDir;
 
 const realLoad = Module._load;
 
+/** A scratch userData for the election's stamp/lock files. */
+function freshUserData(label) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `tb-updater-${label}-`));
+}
+
 /** Fresh stubs + a fresh module registry entry, so each case starts clean. */
-function loadUpdater({ packaged = true, response = 0 } = {}) {
+function loadUpdater({ packaged = true, response = 0, dataDir = null } = {}) {
   dialogCalls = [];
   quitAndInstallCalls = [];
   dialogResponse = response;
   isPackaged = packaged;
+  userDataDir = dataDir || freshUserData('case');
 
   autoUpdater = new EventEmitter();
   autoUpdater.autoDownload = null;
@@ -48,7 +59,7 @@ function loadUpdater({ packaged = true, response = 0 } = {}) {
   Module._load = function (request) {
     if (request === 'electron') {
       return {
-        app: { isPackaged },
+        app: { isPackaged, getPath: () => userDataDir },
         dialog: {
           showMessageBox: async (opts) => {
             dialogCalls.push(opts);
@@ -174,6 +185,105 @@ const settle = async () => {
       ok = false; // a throw means the lazy require ran — the guard leaked
     }
     check('unpackaged: no-ops in every mode without loading electron-updater', ok);
+  }
+
+  Module._load = realLoad;
+
+  // --- The election itself (updateCheckClaim.js — no electron dependency) ---
+  const { claimUpdateCheck, LOCK_STALE_MS } = require(CLAIM);
+  {
+    const dir = freshUserData('claim');
+    const t0 = 1_700_000_000_000;
+    const interval = 6 * 60 * 60 * 1000;
+
+    check('claim: first run on a fresh userData wins', claimUpdateCheck(dir, { intervalMs: interval, now: t0 }) === true);
+    check('claim: an immediate second attempt stands down', claimUpdateCheck(dir, { intervalMs: interval, now: t0 }) === false);
+    check(
+      'claim: still standing down just before the interval elapses',
+      claimUpdateCheck(dir, { intervalMs: interval, now: t0 + interval - 1000 }) === false,
+    );
+    // mtime is the gate, and the file was really written, so advance the clock
+    // past the interval measured from *now* rather than from the injected t0.
+    check(
+      'claim: wins again once the interval has elapsed',
+      claimUpdateCheck(dir, { intervalMs: 1, now: Date.now() + 1000 }) === true,
+    );
+  }
+
+  {
+    // A live sibling holding the claim blocks. Kept in its own scratch dir from
+    // the stale-lock case below: sharing one directory means a regression here
+    // corrupts the setup there and aborts the run instead of reporting.
+    const dir = freshUserData('lock');
+    const lockPath = path.join(dir, 'last-update-check.lock');
+    fs.writeFileSync(lockPath, '');
+
+    check('claim: a fresh sibling lock blocks', claimUpdateCheck(dir, { intervalMs: 1, now: Date.now() }) === false);
+    // Directly pins the atomic-claim behavior: standing down must not disturb
+    // the holder's lock. Without the 'wx' claim this is what breaks first.
+    check('claim: standing down leaves the sibling lock intact', fs.existsSync(lockPath));
+  }
+
+  {
+    // A lock left behind by a process that died mid-claim must not block forever.
+    const dir = freshUserData('stale');
+    const lockPath = path.join(dir, 'last-update-check.lock');
+    fs.writeFileSync(lockPath, '');
+    const stale = Date.now() - (LOCK_STALE_MS + 60_000);
+    fs.utimesSync(lockPath, new Date(stale), new Date(stale));
+
+    check('claim: a stale lock is reclaimed rather than deadlocking', claimUpdateCheck(dir, { intervalMs: 1, now: Date.now() }) === true);
+    check('claim: the lock is released, not leaked', !fs.existsSync(lockPath));
+  }
+
+  {
+    // The real thing this design exists for: N processes starting at once must
+    // produce exactly one checker. Genuine concurrent processes, not a
+    // simulation — the race is between separate OS processes touching one
+    // directory, which is precisely what a single-threaded stub cannot model.
+    const dir = freshUserData('race');
+    const N = 12;
+    const script = `const {claimUpdateCheck}=require(${JSON.stringify(CLAIM)});process.stdout.write(claimUpdateCheck(${JSON.stringify(dir)})?'WIN':'skip')`;
+
+    const results = await Promise.all(
+      Array.from({ length: N }, () =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+          let out = '';
+          child.stdout.on('data', (d) => (out += d));
+          child.on('close', () => resolve(out));
+        }),
+      ),
+    );
+
+    const winners = results.filter((r) => r === 'WIN').length;
+    check(`race: exactly 1 of ${N} concurrent processes checks (got ${winners})`, winners === 1);
+    check('race: every other process stood down cleanly', results.filter((r) => r === 'skip').length === N - 1);
+  }
+
+  // --- End to end through setupAutoUpdater: elected once, skipped after ---
+  {
+    const shared = freshUserData('shared');
+
+    let setupAutoUpdater = loadUpdater({ packaged: true, dataDir: shared });
+    const first = setupAutoUpdater({ isMcpMode: true });
+    check('mcp: the elected process sets the updater up', first !== null);
+
+    setupAutoUpdater = loadUpdater({ packaged: true, dataDir: shared });
+    const second = setupAutoUpdater({ isMcpMode: true });
+    check('mcp: a sibling in the same interval no-ops', second === null);
+
+    // Losing the election must be as cheap as being unpackaged — that's the
+    // whole reason the claim is checked before the lazy require.
+    check(
+      'mcp: a stood-down process never loads electron-updater',
+      !Object.keys(require.cache).some((p) => p.includes(`${path.sep}electron-updater${path.sep}`)),
+    );
+
+    // A GUI launch is the user's manual recourse and must not be swallowed by a
+    // stamp an MCP process wrote moments ago.
+    setupAutoUpdater = loadUpdater({ packaged: true, dataDir: shared });
+    check('gui: always checks, ignoring the election stamp', setupAutoUpdater({ isMcpMode: false }) !== null);
   }
 
   Module._load = realLoad;

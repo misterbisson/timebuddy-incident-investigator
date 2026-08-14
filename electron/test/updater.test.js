@@ -9,14 +9,16 @@
 //
 // Scope note: setupAutoUpdater used to refuse isMcpMode outright, so passing
 // `true` below once exercised a second, independent guard. It no longer does —
-// updater.js now handles that mode rather than refusing it (stderr-only logger,
-// no dialog, no quitAndInstall), and main.js is what keeps it to the GUI branch.
-// The isMcpMode:true case is therefore kept as a regression test that the
-// PACKAGED guard alone still covers every mode, not as coverage of MCP-mode
-// behavior — which nothing here can reach, since it all lives past the
-// app.isPackaged return. That behavior is currently unexercised by any
-// automated test; note also that this file is not run by CI at all (the
-// electron-mcp-server job runs only test/mcpServerMode.mjs).
+// updater.js now runs in that mode too (stderr-only logger, no dialog, no
+// quitAndInstall, one elected checker per interval). The isMcpMode:true case is
+// therefore kept as a regression test that the PACKAGED guard alone still
+// covers every mode, not as coverage of MCP-mode behavior — which nothing here
+// can reach, since it all lives past the app.isPackaged return.
+//
+// That behavior is covered by test/updaterBehavior.test.js, which stubs
+// `electron` instead of running under it and so can reach the packaged
+// branches. Prefer adding cases there: this file is not run by CI at all (the
+// electron-mcp-server job runs only test/mcpServerMode.mjs), while that one is.
 const assert = require('node:assert');
 const { app } = require('electron');
 
