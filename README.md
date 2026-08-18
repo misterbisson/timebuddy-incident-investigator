@@ -101,12 +101,22 @@ The first time Claude launches the app as a server, macOS shows a one-time keych
 ## Staying up to date
 
 The installed app updates itself — you don't re-download it by hand after the first install.
-When you open the app (in its normal GUI mode; never while Claude is running it as an MCP
-server), it checks [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases)
-for a newer version, downloads it in the background, and then offers a **Restart now / Later**
-prompt. Pick **Later** and the update is applied automatically the next time you quit. A failed
-or offline check is silent and just retried on the next launch — it never interrupts an
-investigation, and it never touches the MCP-server process Claude talks to.
+It checks [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases)
+for a newer version and downloads it in the background, whether you opened the app yourself or
+Claude is running it as an MCP server.
+
+**When you open the app**, it checks every launch, then offers a **Restart now / Later** prompt
+once the download finishes. Pick **Later** and the update is applied automatically the next time
+you quit.
+
+**When Claude is running it as an MCP server**, it checks at most once every six hours, and never
+prompts or restarts — interrupting an investigation to install an update would be worse than
+waiting. The update is applied quietly when that server shuts down, so you're on the new version
+at your next session without doing anything. If you use Timebuddy only through Claude and never
+open the app yourself, this is the path that keeps you current.
+
+A failed or offline check is silent and just retried later — it never interrupts an
+investigation, and a broken update check can never take the MCP server down with it.
 
 - **macOS** updates are Apple Developer ID signed and notarized, same as the build you first
   installed.
