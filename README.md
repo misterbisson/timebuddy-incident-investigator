@@ -72,13 +72,15 @@ your saved credentials, so **Allow** it.
 
 ## MCP tools
 
-19 read-only tools, grouped by what they're for. You rarely call them by name — the skills
+19 always-registered read-only tools, grouped by what they're for, plus two conditional ones —
+`screenshot_panel` (Electron app only) and `execute_adhoc_query` ([off by
+default](#ad-hoc-queries-off-by-default)) — 21 in all. You rarely call them by name — the skills
 above chain them. **See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.**
 
 | Group | Tools |
 | --- | --- |
 | **Ingest & resolve** | `get_alert_context`, `list_firing_alerts`, `get_product_context`, `fetch_dashboard`, `resolve_panel_queries` |
-| **Query & analyze** | `execute_query_window`, `render_dashboard`, `validate_baseline`, `summarize_findings` |
+| **Query & analyze** | `execute_query_window`, `render_dashboard`, `validate_baseline`, `summarize_findings`, `execute_adhoc_query` *(off by default)* |
 | **Correlate & discover** | `find_related_dashboards`, `list_folder_dashboards`, `detect_correlated_anomalies`, `discover_influxdb_schema`, `discover_label_values` |
 | **Export & capture** | `export_panel_csv`, `screenshot_panel` *(Electron app only)* |
 | **Logs** | `search_logs`, `list_log_sources`, `correlate_logs` |
@@ -95,6 +97,35 @@ so it opens normally — no Gatekeeper block, no `xattr` or "Open Anyway" workar
 
 The first time Claude launches the app as a server, macOS shows a one-time keychain prompt
 (it's decrypting your saved connection credentials) — click **Allow**.
+
+## Staying up to date
+
+The installed app updates itself — you don't re-download it by hand after the first install.
+It checks [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases)
+for a newer version and downloads it in the background, whether you opened the app yourself or
+Claude is running it as an MCP server.
+
+**When you open the app**, it checks every launch, then offers a **Restart now / Later** prompt
+once the download finishes. Pick **Later** and the update is applied automatically the next time
+you quit.
+
+**When Claude is running it as an MCP server**, it checks at most once every six hours, and never
+prompts or restarts — interrupting an investigation to install an update would be worse than
+waiting. The update is applied quietly when that server shuts down, so you're on the new version
+at your next session without doing anything. If you use Timebuddy only through Claude and never
+open the app yourself, this is the path that keeps you current.
+
+A failed or offline check is silent and just retried later — it never interrupts an
+investigation, and a broken update check can never take the MCP server down with it.
+
+- **macOS** updates are Apple Developer ID signed and notarized, same as the build you first
+  installed.
+- **Windows** and **Linux** (AppImage) update the same way — though Windows builds aren't
+  code-signed yet, so an update installs an unsigned build (as does the initial download; see
+  [Known limitations](#known-limitations-mvp)).
+
+Only the packaged app auto-updates; a checkout run from source has nothing to update and skips
+the check.
 
 ## Configuring connections
 
