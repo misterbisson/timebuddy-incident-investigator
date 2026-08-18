@@ -254,14 +254,33 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.error('Fatal error starting MCP server:', err);
       app.exit(1);
+      return;
+    }
+    // Deliberately AFTER the transport is up: a session that can't start is not
+    // improved by also checking for updates, and this way the check can never
+    // delay the point at which tools become available.
+    //
+    // Wrapped separately from runMcpServer's catch so an updater fault can't be
+    // misreported as a fatal MCP startup error and take the server — and
+    // therefore every tool the user came for — down with it. Missing one update
+    // check is always the cheaper failure.
+    //
+    // Only one process across all concurrent sessions actually checks; see
+    // updateCheckClaim.js. The update installs on this process's own exit
+    // (autoInstallOnAppQuit), so the user picks it up at their next session
+    // having been interrupted by nothing.
+    try {
+      setupAutoUpdater({ isMcpMode });
+    } catch (err) {
+      console.error('[auto-update] setup failed:', err && err.stack ? err.stack : err);
     }
     return;
   }
   openOrFocusConnectionsWindow();
   // Check GitHub Releases for a newer build and, if found, download it and
-  // offer a restart. No-ops in dev (unpackaged) and never runs in --mcp-server
-  // mode — see updater.js for why both guards matter. Passing isMcpMode is
-  // belt-and-suspenders: this branch only runs when it's false anyway.
+  // offer a restart. No-ops in dev (unpackaged). Unlike the --mcp-server branch
+  // above, a GUI launch always checks rather than participating in the
+  // election — see updater.js's header for why that asymmetry is deliberate.
   setupAutoUpdater({ isMcpMode });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openOrFocusConnectionsWindow();
