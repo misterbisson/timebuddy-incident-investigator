@@ -31,6 +31,9 @@ jobs:
     # protection has no bypass for direct pushes.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # release-please API calls only, ~15s. Capped to catch a hang; GitHub's
+    # default is 6 hours (see ci.yml's electron-mcp-server for the incident).
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
@@ -70,6 +73,11 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.os }}
+    # Packaging plus signing, notarization, and asset upload — 6min observed at
+    # worst. The most generous cap in the repo on purpose: Apple's notary
+    # service is genuinely variable, and failing a real release on a slow notary
+    # day would be a worse outcome than the hang this guards against.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout code
@@ -130,6 +138,9 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.os }}
+    # Same work as `release` against an existing tag, so the same cap and the
+    # same notary-variance reasoning applies.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout code
@@ -207,6 +218,10 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.os }}
+    # electron-builder packaging, unsigned — ~3min at worst. The headroom is for
+    # its toolchain fetches, which have failed mid-download before (a `socket
+    # hang up` pulling the NSIS/winCodeSign tools).
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
