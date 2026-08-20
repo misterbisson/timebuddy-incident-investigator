@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.7.1...v0.8.0) (2026-08-18)
+
+
+### Features
+
+* **electron:** check for updates in --mcp-server mode, one elected process at a time ([#213](https://github.com/misterbisson/timebuddy-incident-investigator/issues/213)) ([f585bb5](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f585bb5648742d7da3b7264716486fd335601c91))
+
+
+### Bug Fixes
+
+* **deps-dev:** bump the minor-and-patch group with 2 updates ([55fb066](https://github.com/misterbisson/timebuddy-incident-investigator/commit/55fb0667134a827c6c3233ee793be2a0e8ce97c4))
+* **deps:** bump @hono/node-server from 1.19.14 to 2.1.0 ([5946752](https://github.com/misterbisson/timebuddy-incident-investigator/commit/594675259b4d2619e60dbb7180385f7c0ffc99db))
+
 ## [0.7.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.7.0...v0.7.1) (2026-08-11)
 
 
