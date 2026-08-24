@@ -1,6 +1,23 @@
 const { app, dialog } = require('electron');
 const { claimUpdateCheck } = require('./updateCheckClaim.js');
 
+// Read by main.js's idle-shutdown guard (see startMcpServer's
+// onIdleShutdown), so the watchdog never quits this process mid-download —
+// killing it would drop the partial file and push the next successful
+// install out by a full election interval (updateCheckClaim.js), for no
+// reason: the ~60s idle recheck costs nothing this process wasn't already
+// going to pay. True from the moment electron-updater confirms a newer
+// version exists (autoDownload=true means the download starts right after)
+// until the download settles one way or another. Stays false forever in
+// every process that never runs the updater at all — the unpackaged path,
+// or one that lost the update-check election — since nothing here ever sets
+// it in that case.
+let downloadInProgress = false;
+
+function isUpdateDownloadInProgress() {
+  return downloadInProgress;
+}
+
 // Wires electron-updater into the packaged GUI app. On launch it checks the
 // GitHub Releases feed (configured by electron-builder's `build.publish` block
 // in package.json, which electron-builder bakes into app-update.yml at pack
@@ -37,7 +54,13 @@ const { claimUpdateCheck } = require('./updateCheckClaim.js');
 //      machine was observed running 11 at once — and an unconditional check
 //      would mean 11 simultaneous ~120MB downloads onto one shared cache path.
 //      updateCheckClaim.js elects exactly one of them per interval; the losers
-//      return below without even loading electron-updater.
+//      return below without even loading electron-updater. main.js's
+//      idle-shutdown watchdog (src/idleShutdown.ts, wired up in
+//      startMcpServer) is the other half of that same pile-up problem —
+//      once a process goes quiet it now quits itself instead of running
+//      forever — and isUpdateDownloadInProgress() above is what keeps the
+//      two features from fighting: the watchdog defers rather than killing
+//      the one process actually mid-download.
 //
 // GUI launches deliberately skip that election and always check. Opening the app
 // is the user's one manual recourse when they want to be current *now*, and
@@ -97,7 +120,21 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // autoDownload=true means the download starts the instant this fires —
+  // isUpdateDownloadInProgress() above must read true from here through
+  // whichever of 'update-downloaded'/'error' below settles it, with no gap.
+  autoUpdater.on('update-available', () => {
+    downloadInProgress = true;
+  });
+  // No newer version — nothing was ever downloading, but set it anyway
+  // rather than assuming: cheap, and correct even if a future
+  // electron-updater version ever fires this after 'update-available'.
+  autoUpdater.on('update-not-available', () => {
+    downloadInProgress = false;
+  });
+
   autoUpdater.on('error', (err) => {
+    downloadInProgress = false;
     // Never surface an update failure as a modal: a transient network error,
     // an offline launch, or a build with no matching release must not
     // interrupt the app. Log for diagnosis; the next launch retries. (stderr,
@@ -107,6 +144,7 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
   });
 
   autoUpdater.on('update-downloaded', async (info) => {
+    downloadInProgress = false;
     const version = info && info.version ? info.version : '';
 
     if (isMcpMode) {
@@ -159,4 +197,4 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
   return autoUpdater;
 }
 
-module.exports = { setupAutoUpdater };
+module.exports = { setupAutoUpdater, isUpdateDownloadInProgress };

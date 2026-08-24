@@ -213,6 +213,30 @@ export interface Config {
    * with the `--allow-adhoc-queries` launch flag.
    */
   adhocQueries: AdhocQueryPolicy[];
+  /**
+   * Minutes of silence on the MCP stdio transport — no tool call, no
+   * `tools/list`, no message of any kind — before this process quits itself.
+   * See idleShutdown.ts. `0` (or any non-positive value) disables the
+   * watchdog.
+   *
+   * Exists because neither the standalone CLI nor the Electron app's
+   * `--mcp-server` mode has any other way to notice it's been abandoned:
+   * `StdioServerTransport` only listens for `data`/`error` on stdin, never
+   * `end`, so a parent that stops talking without an explicit
+   * shutdown leaves the process running forever, doing nothing. In
+   * practice this is almost always the Electron app — Claude Code/Desktop
+   * spawns one instance per session/worktree, has no single-instance lock
+   * (see electron/src/updateCheckClaim.js), and a routine developer machine
+   * has been observed running a dozen at once. The Electron app layers its
+   * own guards on top of this (see electron/src/main.js's idleShutdownGuard)
+   * so this timer alone never fires while an update is mid-download or a
+   * window is open; the standalone CLI has no such guards and just exits.
+   *
+   * Default 30 minutes: long enough that a slow-but-live investigation never
+   * trips it (any tool call resets the clock), short enough that abandoned
+   * processes don't accumulate indefinitely.
+   */
+  idleShutdownMinutes: number;
 }
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {
@@ -304,6 +328,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // machine-scoped, which is the opposite of the per-workspace scope this
     // capability is supposed to have.
     adhocQueries: [],
+    idleShutdownMinutes: parseInt_(env.IDLE_SHUTDOWN_MINUTES, 30),
   };
   return cached;
 }
