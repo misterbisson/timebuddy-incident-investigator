@@ -211,6 +211,28 @@ disk. See `README.md`'s "How connections are stored" section for the storage for
 `electron/test/mcpServerMode.mjs` for how it's tested (spawns the real binary in
 `--mcp-server` mode via the actual MCP SDK client/transport; no live Grafana needed).
 
+Neither `--mcp-server` mode nor the standalone CLI has any way to notice its stdio
+parent stopped talking without an explicit shutdown — `StdioServerTransport` only
+listens for `data`/`error` on stdin, never `end` — and the Electron app has no
+`requestSingleInstanceLock` (see `updateCheckClaim.js`'s header), so Claude Code/Desktop
+spawning one process per session/worktree routinely leaves a dozen idle ones running.
+`src/idleShutdown.ts`'s `watchForIdleShutdown()` is the fix: `server.ts`'s
+`startMcpServer()` wires it to the stdio transport (setting `transport.onmessage` before
+`server.connect()` so the SDK's own `Protocol.connect()` chains it rather than replacing
+it — see that function's doc comment for why the ordering is load-bearing), and any
+inbound JSON-RPC message counts as activity. Past `idleShutdownMinutes` (config.ts,
+`IDLE_SHUTDOWN_MINUTES`, default 30) of silence it calls an `onIdle` callback; the
+default (used by the standalone CLI) just exits. `electron/src/main.js`'s
+`idleShutdownGuard` is the Electron-specific callback, and it's not a plain exit: it
+returns `false` (telling the watchdog to keep polling instead of quitting) while
+`updater.js`'s `isUpdateDownloadInProgress()` is true, or while the Activity or
+Connections window is open — see that function's own doc comment for why both matter.
+Killing a mid-download process would waste the bytes already fetched and push the next
+install out by a full election interval; killing one with a window open would be
+un-asked-for while someone's actually looking at it. Otherwise it calls `app.quit()`,
+which is also the only path (besides the user quitting Claude Code/Desktop) that
+installs an already-downloaded update in this mode, via `autoInstallOnAppQuit`.
+
 `skills/explore/SKILL.md`, `skills/investigate/SKILL.md`, and `skills/export/SKILL.md`
 (packaged as a Claude Code plugin via `.claude-plugin/plugin.json`, invoked as
 `/timebuddy:explore` / `/timebuddy:investigate` / `/timebuddy:export`) are prose runbooks

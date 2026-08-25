@@ -7,7 +7,7 @@ const { testConnection } = require('./grafanaTest.js');
 const { testGraylogConnection } = require('./graylogTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
 const { attachAuthHeaders } = require('./authGuard.js');
-const { setupAutoUpdater } = require('./updater.js');
+const { setupAutoUpdater, isUpdateDownloadInProgress } = require('./updater.js');
 
 // Populated once runMcpServer() has dynamically imported the engine package —
 // null in the normal (non --mcp-server) GUI launch, since there's no
@@ -167,6 +167,43 @@ function getOrCreateActivityWindow() {
   return activityWindow;
 }
 
+/**
+ * Vetoes the engine's idle-shutdown watchdog (src/idleShutdown.ts) in the
+ * two cases where quitting would be actively wrong even though the MCP
+ * transport itself has gone quiet — everything else, it lets through:
+ *
+ *   1. An update is mid-download (updater.js's isUpdateDownloadInProgress()).
+ *      Quitting here wouldn't lose the update permanently — the next elected
+ *      process just re-downloads it — but it would throw away the bandwidth
+ *      already spent and push the next successful install out by a full
+ *      election interval (updateCheckClaim.js) for no reason: deferring
+ *      costs nothing this process wasn't already going to pay.
+ *
+ *   2. A window is open (Activity or Connections). Both are opened only on
+ *      user action — Activity the moment a tool call happens, Connections
+ *      from the File menu — so an open window means a person is actually
+ *      looking at this process, not that Claude Code/Desktop merely forgot
+ *      to close it.
+ *
+ * Otherwise, quits for real via app.quit(). That's also the only path
+ * (besides the user closing Claude Code/Desktop themselves) that ever
+ * applies an already-downloaded update in --mcp-server mode:
+ * autoInstallOnAppQuit fires on any normal app.quit(), same as it would on
+ * an explicit shutdown (see updater.js).
+ */
+function idleShutdownGuard({ idleMinutes }) {
+  if (isUpdateDownloadInProgress()) {
+    console.error(`[idle-shutdown] update download in progress; deferring (idle ${idleMinutes}m)`);
+    return false;
+  }
+  if ((activityWindow && !activityWindow.isDestroyed()) || (connectionsWindow && !connectionsWindow.isDestroyed())) {
+    console.error(`[idle-shutdown] a window is open; deferring (idle ${idleMinutes}m)`);
+    return false;
+  }
+  console.error(`[idle-shutdown] no MCP activity for ${idleMinutes} minute(s); quitting`);
+  app.quit();
+}
+
 async function runMcpServer() {
   const startupConnections = store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
@@ -230,6 +267,7 @@ async function runMcpServer() {
     // connectionStore.js's kind split) — a Graylog connection added/edited
     // in the GUI takes effect on the next tool call with no restart either.
     () => store.getLogConnectionsForEngine(),
+    idleShutdownGuard,
   );
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
