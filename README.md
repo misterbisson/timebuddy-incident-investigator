@@ -277,6 +277,17 @@ recorded search in your browser; it doesn't embed the Graylog UI (a log search i
 visual), and the panel-only export/screenshot buttons stay hidden. The log is in-memory only
 and clears when the server restarts; nothing is written to disk.
 
+## Idle shutdown
+
+Claude Code/Desktop spawns a new instance of the app per MCP session/worktree, with no
+limit on how many can be running at once — it's normal to end up with several idle ones
+after a few investigations. Each one quits itself after 30 minutes with no MCP activity
+(any tool call resets the clock), so they don't pile up indefinitely. It won't quit out
+from under you, though: it waits if an update is mid-download (see
+[Staying up to date](#staying-up-to-date)), or if you have the Activity or Connections
+window open. Set `IDLE_SHUTDOWN_MINUTES` to change the timeout, or `0` to disable it
+(see `.env.example`).
+
 ## Multiple connections
 
 Every tool takes an optional `connection` parameter (a connection id). When it's omitted:

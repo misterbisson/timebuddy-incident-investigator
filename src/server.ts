@@ -8,6 +8,7 @@ import type { Screenshotter } from './screenshot/types.js';
 import type { ActivityLog } from './activity/activityLog.js';
 import { registerAllTools } from './tools/registerAll.js';
 import { runStartupMaintenance } from './security/retention.js';
+import { watchForIdleShutdown } from './idleShutdown.js';
 
 /**
  * Builds the MCP server and registers every tool against the given
@@ -76,6 +77,17 @@ export async function startMcpServer(
   screenshotter?: Screenshotter,
   activityLog?: ActivityLog,
   logSource: LogConnectionsSource = [],
+  /**
+   * Called once `config.idleShutdownMinutes` of silence elapses on the
+   * transport (see idleShutdown.ts). Defaults to logging and calling
+   * `process.exit(0)`, which is correct for both the standalone CLI
+   * (index.ts passes nothing here) and, most of the time, the Electron app's
+   * `--mcp-server` mode — UNLESS that caller has its own reason to defer:
+   * electron/src/main.js passes a guard that returns `false` while an update
+   * is mid-download or a window (Activity/Connections) is open, so this
+   * timer alone never quits out from under either.
+   */
+  onIdleShutdown?: (ctx: { idleMinutes: number }) => boolean | void | Promise<boolean | void>,
 ): Promise<McpServer> {
   const server = createServer(source, configOverrides, screenshotter, activityLog, logSource);
 
@@ -88,6 +100,19 @@ export async function startMcpServer(
   void runStartupMaintenance(config);
 
   const transport = new StdioServerTransport();
+  // Must happen before server.connect(transport) below — see
+  // watchForIdleShutdown's own doc comment for why the ordering matters.
+  watchForIdleShutdown(transport, {
+    idleMinutes: config.idleShutdownMinutes,
+    onIdle:
+      onIdleShutdown ??
+      (({ idleMinutes }) => {
+        // Deliberately console.error, not console.log — stdout is the MCP
+        // JSON-RPC channel.
+        console.error(`[idle-shutdown] no MCP activity for ${idleMinutes} minute(s); exiting`);
+        process.exit(0);
+      }),
+  });
   await server.connect(transport);
   return server;
 }
