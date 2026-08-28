@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.8.0...v0.9.0) (2026-08-25)
+
+
+### Features
+
+* quit idle --mcp-server instances after a period of inactivity ([#221](https://github.com/misterbisson/timebuddy-incident-investigator/issues/221)) ([760a71f](https://github.com/misterbisson/timebuddy-incident-investigator/commit/760a71fe96b7810c630211c33ef1d914552d5edc))
+
 ## [0.8.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.7.1...v0.8.0) (2026-08-18)
 
 
