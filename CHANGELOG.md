@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.0...v0.9.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump the minor-and-patch group across 1 directory with 2 updates ([#225](https://github.com/misterbisson/timebuddy-incident-investigator/issues/225)) ([e609a1d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/e609a1d1914ff8597492c41f9927a08846307205))
+
 ## [0.9.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.8.0...v0.9.0) (2026-08-25)
 
 
