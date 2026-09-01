@@ -7,7 +7,7 @@ const { testConnection } = require('./grafanaTest.js');
 const { testGraylogConnection } = require('./graylogTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
 const { attachAuthHeaders } = require('./authGuard.js');
-const { setupAutoUpdater } = require('./updater.js');
+const { setupAutoUpdater, isUpdateDownloadInProgress } = require('./updater.js');
 
 // Populated once runMcpServer() has dynamically imported the engine package —
 // null in the normal (non --mcp-server) GUI launch, since there's no
@@ -167,11 +167,66 @@ function getOrCreateActivityWindow() {
   return activityWindow;
 }
 
+/**
+ * Vetoes the engine's idle-shutdown watchdog (src/idleShutdown.ts) in the
+ * two cases where quitting would be actively wrong even though the MCP
+ * transport itself has gone quiet — everything else, it lets through:
+ *
+ *   1. An update is mid-download (updater.js's isUpdateDownloadInProgress()).
+ *      Quitting here wouldn't lose the update permanently — the next elected
+ *      process just re-downloads it — but it would throw away the bandwidth
+ *      already spent and push the next successful install out by a full
+ *      election interval (updateCheckClaim.js) for no reason: deferring
+ *      costs nothing this process wasn't already going to pay.
+ *
+ *   2. A window is open (Activity or Connections). Both are opened only on
+ *      user action — Activity the moment a tool call happens, Connections
+ *      from the File menu — so an open window means a person is actually
+ *      looking at this process, not that Claude Code/Desktop merely forgot
+ *      to close it.
+ *
+ * Otherwise, quits for real via app.quit(). That's also the only path
+ * (besides the user closing Claude Code/Desktop themselves) that ever
+ * applies an already-downloaded update in --mcp-server mode:
+ * autoInstallOnAppQuit fires on any normal app.quit(), same as it would on
+ * an explicit shutdown (see updater.js).
+ */
+function idleShutdownGuard({ idleMinutes }) {
+  if (isUpdateDownloadInProgress()) {
+    console.error(`[idle-shutdown] update download in progress; deferring (idle ${idleMinutes}m)`);
+    return false;
+  }
+  if ((activityWindow && !activityWindow.isDestroyed()) || (connectionsWindow && !connectionsWindow.isDestroyed())) {
+    console.error(`[idle-shutdown] a window is open; deferring (idle ${idleMinutes}m)`);
+    return false;
+  }
+  console.error(`[idle-shutdown] no MCP activity for ${idleMinutes} minute(s); quitting`);
+  app.quit();
+}
+
 async function runMcpServer() {
   const startupConnections = store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
-  const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection, createPanelActions } = await import('timebuddy-incident-investigator');
+  const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection, createPanelActions, parseAdhocQueryFlags } =
+    await import('timebuddy-incident-investigator');
+
+  // Ad-hoc (model-authored) queries are authorized per *workspace*, not per
+  // connection and not per machine: the authorization arrives as one or more
+  // --allow-adhoc-queries=<host>:<datasourceType> flags, which in practice live
+  // in a project-scoped .mcp.json checked into the repo where the dashboards
+  // themselves are authored. Reading it from argv here — rather than from env or
+  // from connections.json — is what gives it that scope: it's on in the repo
+  // that declared it and absent everywhere else, with no stored state that could
+  // be left switched on after the fact.
+  //
+  // Malformed flags are reported and skipped rather than fatal. A typo in a
+  // checked-in .mcp.json should leave the capability off (its safe state), not
+  // take the whole MCP server — and therefore every other tool — down with it.
+  const { policies: adhocQueries, problems: adhocProblems } = parseAdhocQueryFlags(process.argv);
+  for (const problem of adhocProblems) {
+    console.error(`Ignoring ad-hoc query flag: ${problem}`);
+  }
 
   activityLog = createActivityLog();
   activityLog.onEntry((entry) => {
@@ -204,7 +259,7 @@ async function runMcpServer() {
   // one Claude Code/Desktop is already talking to over stdio).
   await startMcpServer(
     connectionsSource,
-    { dataDir },
+    { dataDir, adhocQueries },
     screenshotter,
     activityLog,
     // Same re-read-on-every-call thunk as the Grafana source above, backed
@@ -212,13 +267,20 @@ async function runMcpServer() {
     // connectionStore.js's kind split) — a Graylog connection added/edited
     // in the GUI takes effect on the next tool call with no restart either.
     () => store.getLogConnectionsForEngine(),
+    idleShutdownGuard,
   );
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
   const startupLogConnections = store.getLogConnectionsForEngine();
   console.error(
     `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')}` +
-      `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})`,
+      `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})` +
+      // Logged loudly when on, silent when off: this is the one flag that
+      // widens what the agent may run, so its state should be visible in the
+      // startup line someone checks when a session behaves unexpectedly.
+      (adhocQueries.length > 0
+        ? `; ad-hoc queries ENABLED for ${adhocQueries.map((p) => `${p.host} (${p.datasourceTypes.join('/')})`).join(', ')}`
+        : ''),
   );
 }
 
@@ -230,14 +292,33 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.error('Fatal error starting MCP server:', err);
       app.exit(1);
+      return;
+    }
+    // Deliberately AFTER the transport is up: a session that can't start is not
+    // improved by also checking for updates, and this way the check can never
+    // delay the point at which tools become available.
+    //
+    // Wrapped separately from runMcpServer's catch so an updater fault can't be
+    // misreported as a fatal MCP startup error and take the server — and
+    // therefore every tool the user came for — down with it. Missing one update
+    // check is always the cheaper failure.
+    //
+    // Only one process across all concurrent sessions actually checks; see
+    // updateCheckClaim.js. The update installs on this process's own exit
+    // (autoInstallOnAppQuit), so the user picks it up at their next session
+    // having been interrupted by nothing.
+    try {
+      setupAutoUpdater({ isMcpMode });
+    } catch (err) {
+      console.error('[auto-update] setup failed:', err && err.stack ? err.stack : err);
     }
     return;
   }
   openOrFocusConnectionsWindow();
   // Check GitHub Releases for a newer build and, if found, download it and
-  // offer a restart. No-ops in dev (unpackaged) and never runs in --mcp-server
-  // mode — see updater.js for why both guards matter. Passing isMcpMode is
-  // belt-and-suspenders: this branch only runs when it's false anyway.
+  // offer a restart. No-ops in dev (unpackaged). Unlike the --mcp-server branch
+  // above, a GUI launch always checks rather than participating in the
+  // election — see updater.js's header for why that asymmetry is deliberate.
   setupAutoUpdater({ isMcpMode });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openOrFocusConnectionsWindow();

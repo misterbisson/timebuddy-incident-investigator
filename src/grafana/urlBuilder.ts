@@ -75,6 +75,80 @@ export function buildFolderUrl(baseUrl: string, folderUid: string, slug?: string
   return `${baseUrl.replace(/\/+$/, '')}${path}`;
 }
 
+export interface ExploreUrlOptions {
+  datasourceUid: string;
+  datasourceType: string;
+  /** The raw query text, exactly as sent to /api/ds/query. */
+  query: string;
+  fromMs: number;
+  toMs: number;
+  /** Grafana org the datasource belongs to; omitted rather than defaulted to 1 (see below). */
+  orgId?: number;
+}
+
+/**
+ * Fixed pane key. Grafana generates a random three-character key per pane; a
+ * constant one means two Explore URLs for the same query are byte-identical and
+ * therefore diffable, which matters when these land in an audit log that someone
+ * reads later. Grafana treats the key as opaque, so any stable string works.
+ */
+const EXPLORE_PANE_KEY = 'timebuddy';
+
+/**
+ * Builds a Grafana Explore URL that re-runs one ad-hoc query exactly as
+ * execute_adhoc_query ran it — the audit artifact for a query that came from the
+ * model rather than from a dashboard. A logged query string tells a human what
+ * was asked; this lets them click it and see the same result in the tool they
+ * already trust, which is the difference between a record and a reproduction.
+ *
+ * Same round-trip discipline as buildDashboardUrl above: generate the shape
+ * Grafana itself parses, so a URL from here works when pasted back in.
+ *
+ * Three things this deliberately does NOT do:
+ *
+ * - **No relative time range.** Grafana's own Explore links happily carry
+ *   `"from":"now-1h"`, which makes them describe a *different* window every time
+ *   they're opened. For an audit record that's not a cosmetic problem, it's a
+ *   record that silently lies the next day, so `fromMs`/`toMs` are always
+ *   absolute epoch-ms strings — matching buildDashboardUrl's `from`/`to`.
+ * - **No hardcoded `orgId=1`.** A wrong org resolves against the wrong
+ *   datasource list. Omitted unless the caller actually knows it, which lets
+ *   Grafana fall back to the viewer's own current org.
+ * - **No builder-model query.** The pane carries `query` + `rawQuery: true`
+ *   (InfluxQL's raw text form), not the measurement/select/groupBy model Grafana
+ *   emits from its visual query editor. That's the shape the query was actually
+ *   executed in, and reconstructing an equivalent builder model would risk the
+ *   link showing something subtly different from what ran.
+ *
+ * Emits the `schemaVersion=1&panes={...}` form, which is Grafana >= 10.2. On an
+ * older instance the link will open Explore without the query pre-filled rather
+ * than erroring; there is no Grafana version detection in this client, so that
+ * floor is documented rather than detected (see docs/TOOLS.md).
+ */
+export function buildExploreUrl(baseUrl: string, opts: ExploreUrlOptions): string {
+  const pane = {
+    datasource: opts.datasourceUid,
+    queries: [
+      {
+        refId: 'A',
+        datasource: { type: opts.datasourceType, uid: opts.datasourceUid },
+        query: opts.query,
+        rawQuery: true,
+        resultFormat: 'time_series',
+      },
+    ],
+    // Strings, not numbers: Grafana's Explore state reads absolute bounds as
+    // stringified epoch-ms, and a bare number is parsed inconsistently across
+    // versions.
+    range: { from: String(opts.fromMs), to: String(opts.toMs) },
+  };
+  const url = new URL(`${baseUrl.replace(/\/+$/, '')}/explore`);
+  url.searchParams.set('schemaVersion', '1');
+  url.searchParams.set('panes', JSON.stringify({ [EXPLORE_PANE_KEY]: pane }));
+  if (opts.orgId !== undefined) url.searchParams.set('orgId', String(opts.orgId));
+  return url.toString();
+}
+
 export function buildSoloPanelUrl(
   baseUrl: string,
   dashboardUid: string,

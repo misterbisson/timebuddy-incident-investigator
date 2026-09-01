@@ -73,13 +73,15 @@ your saved credentials, so **Allow** it.
 
 ## MCP tools
 
-19 read-only tools, grouped by what they're for. You rarely call them by name — the skills
+19 always-registered read-only tools, grouped by what they're for, plus two conditional ones —
+`screenshot_panel` (Electron app only) and `execute_adhoc_query` ([off by
+default](#ad-hoc-queries-off-by-default)) — 21 in all. You rarely call them by name — the skills
 above chain them. **See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.**
 
 | Group | Tools |
 | --- | --- |
 | **Ingest & resolve** | `get_alert_context`, `list_firing_alerts`, `get_product_context`, `fetch_dashboard`, `resolve_panel_queries` |
-| **Query & analyze** | `execute_query_window`, `render_dashboard`, `validate_baseline`, `summarize_findings` |
+| **Query & analyze** | `execute_query_window`, `render_dashboard`, `validate_baseline`, `summarize_findings`, `execute_adhoc_query` *(off by default)* |
 | **Correlate & discover** | `find_related_dashboards`, `list_folder_dashboards`, `detect_correlated_anomalies`, `discover_influxdb_schema`, `discover_label_values` |
 | **Export & capture** | `export_panel_csv`, `screenshot_panel` *(Electron app only)* |
 | **Logs** | `search_logs`, `list_log_sources`, `correlate_logs` |
@@ -122,6 +124,35 @@ brew trust --cask misterbisson/timebuddy/timebuddy
 To upgrade later, `brew upgrade --cask timebuddy`. To remove it, `brew uninstall --cask
 timebuddy`; add `--zap` to also delete `connections.json`/`secrets.enc.json` from
 `~/Library/Application Support/Timebuddy Incident Investigator`.
+
+## Staying up to date
+
+The installed app updates itself — you don't re-download it by hand after the first install.
+It checks [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases)
+for a newer version and downloads it in the background, whether you opened the app yourself or
+Claude is running it as an MCP server.
+
+**When you open the app**, it checks every launch, then offers a **Restart now / Later** prompt
+once the download finishes. Pick **Later** and the update is applied automatically the next time
+you quit.
+
+**When Claude is running it as an MCP server**, it checks at most once every six hours, and never
+prompts or restarts — interrupting an investigation to install an update would be worse than
+waiting. The update is applied quietly when that server shuts down, so you're on the new version
+at your next session without doing anything. If you use Timebuddy only through Claude and never
+open the app yourself, this is the path that keeps you current.
+
+A failed or offline check is silent and just retried later — it never interrupts an
+investigation, and a broken update check can never take the MCP server down with it.
+
+- **macOS** updates are Apple Developer ID signed and notarized, same as the build you first
+  installed.
+- **Windows** and **Linux** (AppImage) update the same way — though Windows builds aren't
+  code-signed yet, so an update installs an unsigned build (as does the initial download; see
+  [Known limitations](#known-limitations-mvp)).
+
+Only the packaged app auto-updates; a checkout run from source has nothing to update and skips
+the check.
 
 ## Configuring connections
 
@@ -273,6 +304,17 @@ recorded search in your browser; it doesn't embed the Graylog UI (a log search i
 visual), and the panel-only export/screenshot buttons stay hidden. The log is in-memory only
 and clears when the server restarts; nothing is written to disk.
 
+## Idle shutdown
+
+Claude Code/Desktop spawns a new instance of the app per MCP session/worktree, with no
+limit on how many can be running at once — it's normal to end up with several idle ones
+after a few investigations. Each one quits itself after 30 minutes with no MCP activity
+(any tool call resets the clock), so they don't pile up indefinitely. It won't quit out
+from under you, though: it waits if an update is mid-download (see
+[Staying up to date](#staying-up-to-date)), or if you have the Activity or Connections
+window open. Set `IDLE_SHUTDOWN_MINUTES` to change the timeout, or `0` to disable it
+(see `.env.example`).
+
 ## Multiple connections
 
 Every tool takes an optional `connection` parameter (a connection id). When it's omitted:
@@ -347,16 +389,79 @@ limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LO
 - The Grafana and Graylog clients are **fixed allowlists of read-only endpoints**. There is
   no "make an arbitrary request" tool — nothing built on top can reach a mutating endpoint,
   even if asked to.
+- Queries normally come from a dashboard someone authored, never from the model. The one
+  exception is **`execute_adhoc_query`**, which is **absent unless you explicitly turn it on
+  for a specific workspace and endpoint** — see [Ad-hoc queries](#ad-hoc-queries-off-by-default)
+  below. When it is on, only single-statement `SELECT`/`SHOW` queries run, only against
+  datasource types you named, and every query (including refused ones) is recorded with a
+  Grafana Explore URL that replays it.
 - `security/limits.ts` caps query time-range span, max data points, and concurrent outgoing
   requests.
 - `security/redact.ts` masks secret-shaped fields and configured customer-identifier
-  patterns before any data returns to the model. (The one gap: `screenshot_panel`'s rendered
-  image — see [`docs/TOOLS.md`](docs/TOOLS.md#screenshot-redaction-exception).)
+  patterns before any data returns to the model. (Two narrow exceptions, both because masking
+  would destroy the thing rather than protect it: `screenshot_panel`'s rendered image, and
+  `execute_adhoc_query`'s Explore URL — see
+  [`docs/TOOLS.md`](docs/TOOLS.md#redaction-exceptions).)
 - `security/audit.ts` appends every tool invocation to a local JSONL audit log.
 - A per-user token or login carries whatever Grafana role that person actually has — it drops
   the "Viewer-role service account" defense-in-depth a shared token gave you, so the read-only
   guarantee then rests entirely on the client allowlist. A Viewer-scoped service-account token
   is still the safer choice for a shared/CI connection.
+
+### Ad-hoc queries (off by default)
+
+Every other query tool replays a query a human already put on a dashboard. `execute_adhoc_query`
+runs query text the model wrote instead. It does not exist unless you ask for it, and you ask
+for it **per workspace** — not per machine and not per connection — by adding a launch flag to a
+project-scoped `.mcp.json` in the repo where you author dashboards:
+
+```json
+{
+  "mcpServers": {
+    "timebuddy": {
+      "command": "timebuddy",
+      "args": ["--mcp-server", "--allow-adhoc-queries=metrics.staging.example.com:influxdb"]
+    }
+  }
+}
+```
+
+The flag is `--allow-adhoc-queries=<host>:<datasourceType>[,<datasourceType>]`, repeatable once
+per endpoint. `<host>` is matched against each connection's URL host and its `matchHosts`
+aliases, so you name endpoints the way you'd say them out loud rather than by internal id. The
+datasource type is **required** — a bare host would authorize every datasource the connection
+can reach, including raw-SQL ones.
+
+Why a launch flag rather than a setting in the app: this way the capability is on in the one
+repo that declared it, absent everywhere else, versioned in git, and visible in a pull request.
+There is no stored state that can be left switched on, and no way for an imported connection
+manifest to enable it.
+
+What holds when it's on:
+
+- **Only reads.** Single-statement `SELECT`/`SHOW` only. Statement heads are allowlisted rather
+  than destructive verbs blocklisted, so `DROP`/`DELETE`/`ALTER`/`CREATE` — and anything
+  InfluxDB adds later — are refused by not being on the list. `SELECT … INTO` is refused
+  separately, since it writes despite starting with `SELECT`. Anything unclassifiable is
+  refused.
+- **Only datasource types with a guard.** InfluxQL today. A type you authorize but that has no
+  read-only guard yet (raw SQL, for instance) is still refused — being willing isn't the same
+  as being verifiable.
+- **The same caps as everything else.** `MAX_LOOKBACK_HOURS`, `MAX_DATA_POINTS`, concurrency.
+- **A replayable audit trail.** Every call records a Grafana Explore URL that re-runs exactly
+  that query over exactly that window (absolute timestamps, never `now-1h`), in `audit.jsonl`
+  and in the app's Activity window. Refused and failed queries are recorded too — those are the
+  ones worth reproducing. Requires Grafana 10.2+ for the link to open pre-filled.
+- **Marked provenance.** Results carry `provenance: "adhoc"`, and it flows into
+  `summarize_findings`' evidence, so a verdict resting on a hand-written query says so instead
+  of reading like one resting on a panel a service owner maintains.
+
+The trade you're accepting: a dashboard query encodes choices someone made and validated —
+aggregation, retention policy, which field actually means what. A hand-written query can look
+right and be subtly wrong, and the analysis here will compute a confident z-score on it anyway.
+Prefer `find_related_dashboards` → `resolve_panel_queries` → `execute_query_window`, and reach
+for this when that path comes up empty or when you're iterating on a query you intend to put on
+a dashboard.
 
 ## Local data and disk usage
 

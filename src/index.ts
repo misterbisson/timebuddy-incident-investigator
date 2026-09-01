@@ -1,4 +1,4 @@
-import { loadConfig } from './config.js';
+import { loadConfig, parseAdhocQueryFlags } from './config.js';
 import { startMcpServer } from './server.js';
 
 /**
@@ -11,10 +11,31 @@ import { startMcpServer } from './server.js';
  */
 async function main() {
   const config = loadConfig();
-  await startMcpServer(config.connections, config, undefined, undefined, config.logConnections);
+  // Same per-workspace ad-hoc-query authorization the Electron binary honors
+  // (see config.ts's AdhocQueryPolicy). Parsed here too rather than only there:
+  // parseAdhocQueryFlags is exported public API, so a flag passed to this
+  // entrypoint that silently did nothing — no tool, no explanation — would be
+  // exactly the trap the `problems` list exists to prevent.
+  const { policies: adhocQueries, problems: adhocProblems } = parseAdhocQueryFlags(process.argv);
+  for (const problem of adhocProblems) {
+    console.error(`Ignoring ad-hoc query flag: ${problem}`);
+  }
+  await startMcpServer(
+    config.connections,
+    { ...config, adhocQueries },
+    undefined,
+    undefined,
+    config.logConnections,
+  );
   console.error(
     `timebuddy-incident-investigator MCP server running on stdio (${config.connections.length} Grafana connection(s): ${config.connections.map((c) => c.id).join(', ')}` +
-      `; ${config.logConnections.length} log connection(s): ${config.logConnections.map((c) => c.id).join(', ')})`,
+      `; ${config.logConnections.length} log connection(s): ${config.logConnections.map((c) => c.id).join(', ')})` +
+      // Logged loudly when on, silent when off — this is the one flag that
+      // widens what the agent may run, so its state belongs in the startup line
+      // someone checks when a session behaves unexpectedly.
+      (adhocQueries.length > 0
+        ? `; ad-hoc queries ENABLED for ${adhocQueries.map((p) => `${p.host} (${p.datasourceTypes.join('/')})`).join(', ')}`
+        : ''),
   );
 }
 

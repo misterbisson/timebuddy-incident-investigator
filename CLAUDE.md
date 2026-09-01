@@ -91,6 +91,32 @@ Three things shape almost every module here and are easy to miss from a partial 
    is what makes the read-only guarantee real rather than just a description. Don't add a generic
    proxy method to this client.
 
+   One tool now sends *model-authored* query text through this allowlist, and it's worth
+   understanding why that doesn't contradict the above. `execute_adhoc_query` still goes
+   through the already-allowlisted `POST /api/ds/query` — the endpoint boundary is untouched.
+   What changes is **query provenance**, and that matters because the endpoint guarantee was
+   quietly leaning on it: `/api/ds/query` is read-only *for the queries the other tools send*,
+   not in general (InfluxQL over it accepts `DROP MEASUREMENT`, `DELETE FROM`,
+   `SELECT … INTO`; SQL datasources execute `rawSql` verbatim; `DsQueryTarget` is
+   `[key: string]: unknown`). So the guard moves from *which endpoint* to *which statement,
+   on which datasource type*: `query/adhocGuard.ts` allowlists SELECT/SHOW statement heads
+   (never blocklists destructive verbs) and refuses anything it can't classify, and the tool
+   refuses any datasource type it has no guard for — raw SQL included — even when a workspace
+   authorized it. Authorization itself is per-workspace, not per-connection: see
+   `config.ts`'s `AdhocQueryPolicy`. Don't widen `GUARDABLE_TYPES` without writing a real
+   guard for that query language.
+
+   Two invariants in there that a partial read will miss, both load-bearing. **The tool
+   executes `verdict.statement`, the text the guard scanned — never the caller's raw input.**
+   Every claim the guard makes is about the string it inspected, so running the raw input
+   instead would mean checking one string and executing another, and no test would notice.
+   And **the scanner is one quote-aware pass** (`scanInfluxQL`) rather than a comment-strip
+   followed by a split: an earlier version stripped comments with a regex first, which
+   truncated any query with `--` inside a string literal and — because the scanned text is
+   what runs — silently executed a rewritten query. It was fail-safe rather than fail-open
+   (the truncation became a datasource syntax error), but "neither refused nor preserved" is
+   the outcome the guard's own refuse-by-default rule exists to forbid.
+
 2. **Every tool's structured output is redacted before it reaches the model.** `security/redact.ts`
    masks secret-shaped keys and configured customer-identifier patterns; tools call it on
    their result just before returning `content`. `security/limits.ts` enforces the
@@ -98,10 +124,24 @@ Three things shape almost every module here and are easy to miss from a partial 
    `security/audit.ts` logs every tool invocation to a local JSONL file. New tools should
    follow the same `withAudit(...) { ...; return { content: [...] } }` /
    `redact(result, config.redactionPatterns)` pattern used in `src/tools/*.ts` rather than
-   returning raw data. The one exception is image bytes: `screenshot_panel` redacts its JSON
-   payload like everything else, but the PNG content block goes to the model as rendered,
-   since redaction only understands text. Don't generalize that into a second exception —
-   any new *text* output belongs behind `redact()`.
+   returning raw data. There are exactly **two** exceptions, both narrow and both justified by
+   redaction being unable to help rather than by convenience:
+
+   - **Image bytes.** `screenshot_panel` redacts its JSON payload like everything else, but the
+     PNG content block goes to the model as rendered, since redaction only understands text.
+   - **`exploreUrl`.** `execute_adhoc_query` passes its replayable Grafana link through
+     `redact()`'s `exempt` allowlist (see `security/redact.ts`'s `RedactOptions`, and the same
+     waiver in `security/audit.ts` so the URL survives into `audit.jsonl`). `redactString`
+     rewrites *inside* strings, so a matched pattern would return a **broken link** rather than
+     a masked one — and it would mask nothing the model doesn't already have, because the model
+     wrote that query, so any identifier in the query text was in its context before the URL
+     existed. Note this reasoning is specific to model-authored query text: a dashboard query's
+     *results* come from Grafana and the model hasn't seen them, which is why series data on the
+     same response stays fully redacted.
+
+   Don't add a third. `redact()`'s waiver is a key allowlist rather than a naming convention
+   precisely so each exemption is a deliberate, greppable act — any new *text* output belongs
+   behind `redact()` unless masking it would destroy the thing that makes it useful.
 
 3. **A tool call doesn't target one fixed Grafana — it resolves a connection first.**
    `src/grafana/registry.ts`'s `ConnectionRegistry` lazily builds and caches one
@@ -192,6 +232,28 @@ see `README.md`'s "Installing via Homebrew" section for the user-facing side and
 `electron/CONTRIBUTING.md`'s release section for the automation that keeps its cask's
 `version`/`sha256` current on every release). See the "Pull requests" section above for
 the one convention from this repo that carries over to that one.
+
+Neither `--mcp-server` mode nor the standalone CLI has any way to notice its stdio
+parent stopped talking without an explicit shutdown — `StdioServerTransport` only
+listens for `data`/`error` on stdin, never `end` — and the Electron app has no
+`requestSingleInstanceLock` (see `updateCheckClaim.js`'s header), so Claude Code/Desktop
+spawning one process per session/worktree routinely leaves a dozen idle ones running.
+`src/idleShutdown.ts`'s `watchForIdleShutdown()` is the fix: `server.ts`'s
+`startMcpServer()` wires it to the stdio transport (setting `transport.onmessage` before
+`server.connect()` so the SDK's own `Protocol.connect()` chains it rather than replacing
+it — see that function's doc comment for why the ordering is load-bearing), and any
+inbound JSON-RPC message counts as activity. Past `idleShutdownMinutes` (config.ts,
+`IDLE_SHUTDOWN_MINUTES`, default 30) of silence it calls an `onIdle` callback; the
+default (used by the standalone CLI) just exits. `electron/src/main.js`'s
+`idleShutdownGuard` is the Electron-specific callback, and it's not a plain exit: it
+returns `false` (telling the watchdog to keep polling instead of quitting) while
+`updater.js`'s `isUpdateDownloadInProgress()` is true, or while the Activity or
+Connections window is open — see that function's own doc comment for why both matter.
+Killing a mid-download process would waste the bytes already fetched and push the next
+install out by a full election interval; killing one with a window open would be
+un-asked-for while someone's actually looking at it. Otherwise it calls `app.quit()`,
+which is also the only path (besides the user quitting Claude Code/Desktop) that
+installs an already-downloaded update in this mode, via `autoInstallOnAppQuit`.
 
 `skills/explore/SKILL.md`, `skills/investigate/SKILL.md`, and `skills/export/SKILL.md`
 (packaged as a Claude Code plugin via `.claude-plugin/plugin.json`, invoked as

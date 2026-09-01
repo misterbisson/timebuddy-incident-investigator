@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.9.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.0...v0.9.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump the minor-and-patch group across 1 directory with 2 updates ([#225](https://github.com/misterbisson/timebuddy-incident-investigator/issues/225)) ([e609a1d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/e609a1d1914ff8597492c41f9927a08846307205))
+
+## [0.9.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.8.0...v0.9.0) (2026-08-25)
+
+
+### Features
+
+* quit idle --mcp-server instances after a period of inactivity ([#221](https://github.com/misterbisson/timebuddy-incident-investigator/issues/221)) ([760a71f](https://github.com/misterbisson/timebuddy-incident-investigator/commit/760a71fe96b7810c630211c33ef1d914552d5edc))
+
+## [0.8.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.7.1...v0.8.0) (2026-08-18)
+
+
+### Features
+
+* **electron:** check for updates in --mcp-server mode, one elected process at a time ([#213](https://github.com/misterbisson/timebuddy-incident-investigator/issues/213)) ([f585bb5](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f585bb5648742d7da3b7264716486fd335601c91))
+
+
+### Bug Fixes
+
+* **deps-dev:** bump the minor-and-patch group with 2 updates ([55fb066](https://github.com/misterbisson/timebuddy-incident-investigator/commit/55fb0667134a827c6c3233ee793be2a0e8ce97c4))
+* **deps:** bump @hono/node-server from 1.19.14 to 2.1.0 ([5946752](https://github.com/misterbisson/timebuddy-incident-investigator/commit/594675259b4d2619e60dbb7180385f7c0ffc99db))
+
+## [0.7.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.7.0...v0.7.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump the minor-and-patch group across 1 directory with 3 updates ([#206](https://github.com/misterbisson/timebuddy-incident-investigator/issues/206)) ([83cb19f](https://github.com/misterbisson/timebuddy-incident-investigator/commit/83cb19fccc9dec4e35e341224169d267fe526019))
+* **deps:** bump js-yaml from 4.3.0 to 4.3.1 ([#209](https://github.com/misterbisson/timebuddy-incident-investigator/issues/209)) ([f338497](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f3384976b8844fe15345249ccba7560b04a869b7))
+* make the ad-hoc InfluxQL guard literal-aware, and stop silent flag drops ([#211](https://github.com/misterbisson/timebuddy-incident-investigator/issues/211)) ([5d75f9a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5d75f9aacc626eb385c42f60b679f74e859b6d9c))
+
+## [0.7.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.2...v0.7.0) (2026-08-11)
+
+
+### Features
+
+* add execute_adhoc_query, gated per-workspace, with a replayable Explore URL trail ([#207](https://github.com/misterbisson/timebuddy-incident-investigator/issues/207)) ([71e649a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/71e649a842f5b397f9ef6e3a1b235c8d1b6f4a2f))
+
 ## [0.6.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.6.1...v0.6.2) (2026-08-04)
 
 

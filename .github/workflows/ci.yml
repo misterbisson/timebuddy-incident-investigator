@@ -17,6 +17,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # ~20s in practice, and nothing here touches the network beyond `npm ci`.
+    # The cap exists only to catch a hang — see electron-mcp-server below.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code
@@ -50,6 +53,15 @@ jobs:
       - name: Test
         run: npm test
 
+      # The one electron/ test that belongs in this job rather than the
+      # electron-mcp-server one below: it stubs `electron` and
+      # `electron-updater` at the module-resolution layer, so it needs neither
+      # the ~100MB Electron binary this job deliberately skips nor a display
+      # server. Its sibling electron/test/updater.test.js does need the real
+      # binary and is not run by CI at all.
+      - name: Test electron auto-updater behavior
+        run: node electron/test/updaterBehavior.test.js
+
   # Runs the one check neither the `test` job above (engine-only install, no
   # Electron binary) nor release.yml (packages but never invokes this script)
   # covers: that the packaged app's --mcp-server mode actually boots and lists
@@ -58,6 +70,20 @@ jobs:
   # block the fast fixture-based signal above. Tracked in #97.
   electron-mcp-server:
     runs-on: ubuntu-latest
+    # Every job in this repo caps its runtime, and this is the job that taught
+    # us to: on #219's release PR the apt-get step below stalled and ran
+    # GitHub's full 6-hour default before being cancelled, which made an
+    # otherwise-green release look broken. A re-run passed in 46s.
+    #
+    # Two of the step comments below describe *other* hangs this job has had
+    # (xvfb-run's readiness wait, gnome-keyring's unlock prompt). Each was fixed
+    # by changing the approach, which is right but only ever addresses the hang
+    # already seen; a cap is what bounds the next unforeseen one.
+    #
+    # 15 rather than something tight: ~45s is typical, but this job genuinely
+    # does two network-bound things (apt install, ~100MB Electron download) that
+    # can be slow without being stuck.
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code

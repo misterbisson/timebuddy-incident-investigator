@@ -8,6 +8,20 @@ export interface EvidenceLink {
   dashboardUid?: string;
   panelId?: number;
   url?: string;
+  /**
+   * Where this evidence's query came from. `'dashboard'` (the default when
+   * omitted) means a query a human authored and a service owner maintains;
+   * `'adhoc'` means execute_adhoc_query ran query text the model wrote.
+   *
+   * This isn't bookkeeping. Everything below is deterministic rule-based
+   * assembly, and it was written on the assumption that its inputs are
+   * trustworthy — a z-score computed over a hand-written query with the wrong
+   * aggregation or retention policy is exactly as confident-looking as one over
+   * a validated panel, and nothing downstream could tell the difference. So
+   * ad-hoc provenance is surfaced as a caveat the calling agent has to carry
+   * into its written note.
+   */
+  provenance?: 'dashboard' | 'adhoc';
 }
 
 export interface SummarizeFindingsInput {
@@ -49,6 +63,19 @@ export interface FindingsReport {
 export function summarizeFindings(input: SummarizeFindingsInput): FindingsReport {
   const reasons: string[] = [];
   const missingData = [...input.warnings];
+  // Added here rather than in each branch on purpose: every return path below
+  // spreads this same array, so the caveat cannot be dropped by whichever
+  // verdict happens to be reached. missingData is what the calling agent is
+  // expected to disclose, which is exactly where an "this rests on queries
+  // nobody validated" warning belongs.
+  const adhocCount = input.evidence.filter((e) => e.provenance === 'adhoc').length;
+  if (adhocCount > 0) {
+    missingData.push(
+      `${adhocCount} of ${input.evidence.length} evidence item(s) came from ad-hoc queries written for this ` +
+        'investigation, not from dashboard panels a service owner maintains. Say so in the written note: the ' +
+        'aggregation, retention policy, and field choices in those queries were not independently validated.',
+    );
+  }
   const scoreThreshold = input.correlationScoreThreshold ?? 1;
   const confirmedCorrelated = input.correlated.filter((c) => c.score >= scoreThreshold);
 

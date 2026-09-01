@@ -60,6 +60,14 @@ const evidenceLinkSchema = z.object({
   dashboardUid: z.string().optional(),
   panelId: z.number().optional(),
   url: z.string().optional(),
+  provenance: z
+    .enum(['dashboard', 'adhoc'])
+    .optional()
+    .describe(
+      'Where this evidence came from. Pass "adhoc" for anything backed by execute_adhoc_query — its result ' +
+        'carries provenance:"adhoc" for exactly this purpose. Defaults to "dashboard". Marking it adds a ' +
+        'disclosure caveat to missingData that belongs in the written note.',
+    ),
 });
 
 function toNaN(value: number | null): number {

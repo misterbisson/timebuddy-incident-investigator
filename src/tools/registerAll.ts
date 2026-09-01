@@ -24,6 +24,7 @@ import { registerDiscoverLabelValues } from './discoverLabelValues.js';
 import { registerSearchLogs } from './searchLogs.js';
 import { registerListLogSources } from './listLogSources.js';
 import { registerCorrelateLogs } from './correlateLogs.js';
+import { registerExecuteAdhocQuery } from './executeAdhocQuery.js';
 
 export interface ToolContext {
   registry: ConnectionRegistry;
@@ -58,4 +59,29 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   // No browser to drive the client-side capture with in the standalone CLI —
   // omit the tool entirely rather than registering something that always errors.
   if (ctx.screenshotter) registerScreenshotPanel(server, ctx as ToolContext & { screenshotter: Screenshotter });
+  // Same reasoning, for a different reason to be absent: unless some workspace
+  // authorized ad-hoc queries via --allow-adhoc-queries, this tool would refuse
+  // every call, so don't advertise it at all. A model that can't see it can't
+  // spend a turn discovering it isn't allowed — and in the overwhelmingly common
+  // case (no flag anywhere) the server's tool list is byte-identical to what it
+  // was before this feature existed.
+  //
+  // Note the asymmetry with the connections thunk: this is a startup decision,
+  // because an MCP server advertises one tool list per session. Adding the flag
+  // needs a session restart, unlike adding a connection.
+  if ((ctx.config.adhocQueries ?? []).length > 0) {
+    // Warn about policy hosts matching no connection before registering, so the
+    // "wrong hostname in .mcp.json" case surfaces here rather than as a
+    // confusing per-call refusal later. stderr, never stdout: stdout is the MCP
+    // JSON-RPC channel once the transport connects.
+    const unmatched = ctx.registry.unmatchedAdhocHosts();
+    if (unmatched.length > 0) {
+      console.error(
+        `Warning: --allow-adhoc-queries names ${unmatched.length} host(s) matching no configured Grafana ` +
+          `connection: ${unmatched.join(', ')}. Ad-hoc queries will be refused for them until a connection ` +
+          'with that hostname (or matchHosts alias) exists.',
+      );
+    }
+    registerExecuteAdhocQuery(server, ctx);
+  }
 }

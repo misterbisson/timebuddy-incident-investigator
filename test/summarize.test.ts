@@ -141,4 +141,45 @@ describe('summarizeFindings', () => {
     const report = summarizeFindings(input);
     expect(report.verdict).toBe('inconclusive');
   });
+
+  describe('ad-hoc evidence provenance', () => {
+    it('says nothing when all evidence is dashboard-derived', () => {
+      const input = baseInput();
+      input.evidence = [{ description: 'panel 2' }, { description: 'panel 3', provenance: 'dashboard' }];
+      expect(summarizeFindings(input).missingData).toEqual([]);
+    });
+
+    it('discloses ad-hoc evidence in missingData, with counts', () => {
+      const input = baseInput();
+      input.evidence = [
+        { description: 'panel 2' },
+        { description: 'hand-written influxql', provenance: 'adhoc' },
+      ];
+      const caveat = summarizeFindings(input).missingData.find((m) => m.includes('ad-hoc'));
+      expect(caveat).toContain('1 of 2');
+      expect(caveat).toContain('not independently validated');
+    });
+
+    it.each([
+      ['insufficient-data'],
+      ['baseline-all-zero'],
+      ['statistically-unusual'],
+      ['common-during-normal-operations'],
+    ] as const)('carries the caveat through the %s verdict branch', (classification) => {
+      // Every branch spreads the same missingData array; this is the test that
+      // would fail if a future branch built its own.
+      const input = baseInput({ classification, zScore: -6 });
+      input.evidence = [{ description: 'hand-written influxql', provenance: 'adhoc' }];
+      expect(summarizeFindings(input).missingData.some((m) => m.includes('ad-hoc'))).toBe(true);
+    });
+
+    it('preserves caller warnings alongside the caveat', () => {
+      const input = baseInput();
+      input.warnings = ['window was clamped'];
+      input.evidence = [{ description: 'x', provenance: 'adhoc' }];
+      const { missingData } = summarizeFindings(input);
+      expect(missingData[0]).toBe('window was clamped');
+      expect(missingData).toHaveLength(2);
+    });
+  });
 });

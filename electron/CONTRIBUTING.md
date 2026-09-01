@@ -39,7 +39,17 @@ the GUI), then spawns this app's real binary in `--mcp-server` mode using the ac
 `@modelcontextprotocol/sdk` `Client`/`StdioClientTransport` — the same mechanism a real MCP
 client uses — and confirms `tools/list` returns the full expected tool set and a tool call reaches a real
 network attempt using the seeded, `safeStorage`-decrypted credential (not a
-connection-resolution error). Run it with:
+connection-resolution error).
+
+It then spawns the binary a **second** time with
+`--allow-adhoc-queries=grafana.example.com:influxdb` and checks that
+`execute_adhoc_query` is absent in the first pass and present in the second. That pass exists
+because `main.js` is plain JS that never sees `tsc`, so its argv-parsing →
+`startMcpServer` `configOverrides` → `registerAll` gating path has no type checking behind it —
+a typo there would silently either never enable the tool or always enable it. The statement
+guard's own ordering (refuse before any query executes) is asserted separately against a mocked
+client in the engine's `test/executeAdhocQuery.tool.test.ts`, since an unreachable
+`grafana.example.com` can't distinguish a guard refusal from a network failure. Run it with:
 
 ```bash
 node test/mcpServerMode.mjs
@@ -144,8 +154,29 @@ merge commit `vX.Y.Z`. The `release` job then only runs if a version was actuall
 published, checked out at that new tag, and does the actual platform builds +
 `electron-builder --publish always`, uploading the installers **and** the
 `latest-*.yml` update manifests that `electron-updater` reads. Those manifests are what
-`src/updater.js` (wired into `main.js`'s GUI startup) checks on launch to auto-download and
-install newer releases; it no-ops in dev and in `--mcp-server` mode. This is why
+`src/updater.js` checks on launch to auto-download and install newer releases; it no-ops in
+dev (unpackaged). It runs in **both** launch modes, but they behave differently on purpose:
+
+- **GUI:** always checks, and on a completed download offers a restart dialog.
+- **`--mcp-server`:** checks only if it wins the election in `src/updateCheckClaim.js`,
+  and never prompts or calls `quitAndInstall()` — that would tear down the stdio session
+  Claude Code owns, mid-conversation. `autoInstallOnAppQuit` applies the update when that
+  server process next exits, which for an MCP server is the end of every session, so the
+  user picks it up at their next session having been interrupted by nothing.
+
+The election exists because there's no `requestSingleInstanceLock`: every Claude Code
+session/worktree spawns its own process (11 were observed at once), so an unconditional
+check would mean 11 simultaneous ~120MB downloads onto one shared cache path. A timestamp
+file gates on an interval, and an atomically-created (`wx`) lock file covers the
+read-then-write window for processes starting simultaneously. GUI launches deliberately
+bypass the election — opening the app is the user's one manual recourse, and silently
+no-opping it because a background process stamped the file an hour ago would be worse than
+the redundant download it saves. Note that `requestSingleInstanceLock()` is *not* the tool
+for this: it makes the second instance quit, which would break the multi-session MCP model
+outright. Also note that in `--mcp-server` mode stdout is the JSON-RPC channel, which is
+why `updater.js` pins `electron-updater`'s logger to stderr — its default logger is
+`electron-log` when resolvable and bare `console` otherwise, and `console.info` writes to
+stdout, corrupting the session silently rather than failing loudly. This is why
 `build.mac.target` lists a `zip` alongside the `dmg`: Squirrel.Mac (via electron-updater)
 can only consume a zip, so a dmg-only mac release would publish a `latest-mac.yml` the
 updater then chokes on (`ERR_UPDATER_ZIP_FILE_NOT_FOUND`) — the dmg is for first installs,
