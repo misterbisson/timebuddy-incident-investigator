@@ -29,7 +29,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "electron-updater": "^6.6.2",
     "undici": "^8.10.0",
-    "zod": "^4.4.3"
+    "zod": "^4.5.2"
   },
   "build": {
     "appId": "com.timebuddy-incident-investigator.connection-manager",
