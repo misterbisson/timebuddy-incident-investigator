@@ -49,6 +49,35 @@ if (process.platform === 'linux') {
 // of safeStorage — see connectionStore.js's getConnectionsForEngine().
 const isMcpMode = process.argv.includes('--mcp-server');
 
+// In --mcp-server mode this process is headless by design — it never opens a
+// window unless the user asks for one — but it's still a full GUI-capable
+// Electron app, so Electron's default uncaught-exception handler will happily
+// put a modal "A JavaScript error occurred in the main process" dialog on
+// screen. That dialog is a uniquely bad failure mode here: it belongs to no
+// visible window, it appears long after whatever session spawned this process
+// ended (so it reads as a mystery alert from nothing the user was doing), and
+// while it's up the main thread is blocked — this process can't even take the
+// idle-shutdown path that exists to reap it, so it sits there until somebody
+// clicks OK.
+//
+// The known cause of that dialog is a write to a departed client, and it's
+// handled properly in the engine (src/stdioPipe.ts) rather than here. These
+// handlers are the backstop for everything else: report to stderr — which is
+// where an MCP client collects this process's logs — and keep running. Not
+// exiting is deliberate: Node calls post-exception state undefined, but an MCP
+// server that stays up serving tools is strictly more useful to the person
+// mid-investigation than one that vanishes, and this is the same
+// "log-and-continue" contract Electron's own default handler has, minus the
+// dialog.
+if (isMcpMode) {
+  process.on('uncaughtException', (err) => {
+    console.error('[mcp-server] uncaught exception:', err && err.stack ? err.stack : err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('[mcp-server] unhandled rejection:', reason && reason.stack ? reason.stack : reason);
+  });
+}
+
 /**
  * Matches renderer/styles.css's --color-bg for each theme (#176) — set as
  * BrowserWindow's own backgroundColor so the native window paints the right
@@ -191,16 +220,22 @@ function getOrCreateActivityWindow() {
  * autoInstallOnAppQuit fires on any normal app.quit(), same as it would on
  * an explicit shutdown (see updater.js).
  */
-function idleShutdownGuard({ idleMinutes }) {
+function idleShutdownGuard({ idleMinutes, reason }) {
+  // 'client-disconnected' means the stdio pipe itself is broken (the engine's
+  // stdioPipe.ts noticed), 'idle' means the timeout elapsed with the client
+  // possibly still alive. Both defer for the same two reasons below — the
+  // distinction is only worth logging, so the stderr line a user reads when
+  // they wonder why this process quit says which one it was.
+  const why = reason === 'client-disconnected' ? 'MCP client disconnected' : `no MCP activity for ${idleMinutes} minute(s)`;
   if (isUpdateDownloadInProgress()) {
-    console.error(`[idle-shutdown] update download in progress; deferring (idle ${idleMinutes}m)`);
+    console.error(`[idle-shutdown] update download in progress; deferring (${why})`);
     return false;
   }
   if ((activityWindow && !activityWindow.isDestroyed()) || (connectionsWindow && !connectionsWindow.isDestroyed())) {
-    console.error(`[idle-shutdown] a window is open; deferring (idle ${idleMinutes}m)`);
+    console.error(`[idle-shutdown] a window is open; deferring (${why})`);
     return false;
   }
-  console.error(`[idle-shutdown] no MCP activity for ${idleMinutes} minute(s); quitting`);
+  console.error(`[idle-shutdown] ${why}; quitting`);
   app.quit();
 }
 
