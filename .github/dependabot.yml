@@ -1,10 +1,28 @@
 version: 2
 
 updates:
-  # Root workspace (the MCP server engine). "electron" is a separate npm
-  # workspace member (see package.json's "workspaces") with its own
-  # manifest/lockfile scope, so it gets its own entry below rather than
-  # relying on Dependabot's workspace auto-detection.
+  # Every npm dependency in the repo, including the `electron` workspace
+  # member's. There is deliberately NO second entry for directory: "/electron",
+  # even though it has its own package.json — a `/electron` entry cannot produce
+  # a mergeable PR, and this entry already covers it.
+  #
+  # Both halves of that are worth stating, because the natural reading of
+  # package.json's "workspaces" is the opposite:
+  #
+  #   - A `/electron` entry is scoped to files under that directory, but the
+  #     workspace member has no electron/package-lock.json — npm resolves the
+  #     whole workspace into the ROOT lockfile. So it bumps electron/package.json
+  #     and leaves the lockfile behind, and every job dies at `npm ci` with
+  #     "Invalid: lock file's electron@X does not satisfy electron@Y". PR #228
+  #     was exactly this, and it duplicated #229 from this entry.
+  #
+  #   - This entry does reach into the member's manifest. #227 bumped `zod` in
+  #     both package.json AND electron/package.json plus the lockfile; #229
+  #     bumped `electron` in electron/package.json plus the lockfile. Nothing is
+  #     lost by having only this entry.
+  #
+  # If a future change gives electron/ its own lockfile, that reasoning inverts
+  # and a second entry becomes correct.
   - package-ecosystem: npm
     directory: "/"
     schedule:
@@ -22,19 +40,6 @@ updates:
     # default versioning, which only bumps on fix/feat/breaking commits (no
     # config-driven equivalent of semantic-release's dependencyReleaseRules) —
     # hence "fix" here rather than the more conventional "chore" for deps.
-    commit-message:
-      prefix: "fix"
-      prefix-development: "fix"
-      include: "scope"
-
-  - package-ecosystem: npm
-    directory: "/electron"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      minor-and-patch:
-        update-types: [minor, patch]
     commit-message:
       prefix: "fix"
       prefix-development: "fix"
