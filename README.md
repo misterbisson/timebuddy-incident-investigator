@@ -52,9 +52,10 @@ login — no shared admin service account), then registers it with their Claude 
 separate server process, no env vars to hand-edit, no plaintext credential file anywhere.
 
 1. **Download & install** the latest build for your platform from
-   [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
-   The macOS build is Developer ID signed and notarized, so it opens normally — just drag
-   it to Applications (see [Installing a downloaded build](#installing-a-downloaded-build-macos)).
+   [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases),
+   or on macOS, via [Homebrew](#installing-via-homebrew-macos). The macOS build is Developer
+   ID signed and notarized, so it opens normally — just drag it to Applications (see
+   [Installing a downloaded build](#installing-a-downloaded-build-macos)).
 2. **Add a connection** for each Grafana or Graylog endpoint (one per region/tier) — Bearer
    token or Basic auth for Grafana, API token or login for Graylog. Hit **Test connection**,
    then **Save**. See [Configuring connections](#configuring-connections).
@@ -97,6 +98,32 @@ so it opens normally — no Gatekeeper block, no `xattr` or "Open Anyway" workar
 
 The first time Claude launches the app as a server, macOS shows a one-time keychain prompt
 (it's decrypting your saved connection credentials) — click **Allow**.
+
+## Installing via Homebrew (macOS)
+
+Timebuddy publishes a [Homebrew](https://brew.sh) cask from its own tap,
+[`misterbisson/homebrew-timebuddy`](https://github.com/misterbisson/homebrew-timebuddy).
+It installs the same signed, notarized `.dmg` as the manual download above — pick either
+one, not both.
+
+```bash
+brew tap misterbisson/timebuddy
+brew trust misterbisson/timebuddy
+brew install --cask timebuddy
+```
+
+The `brew trust` step is required, not optional: Homebrew refuses to load casks from a
+third-party tap (any tap other than `homebrew/cask`) until it's trusted, and stops with
+`Refusing to load cask ... from untrusted tap` without it. To trust only this cask instead
+of the whole tap:
+
+```bash
+brew trust --cask misterbisson/timebuddy/timebuddy
+```
+
+To upgrade later, `brew upgrade --cask timebuddy`. To remove it, `brew uninstall --cask
+timebuddy`; add `--zap` to also delete `connections.json`/`secrets.enc.json` from
+`~/Library/Application Support/Timebuddy Incident Investigator`.
 
 ## Staying up to date
 

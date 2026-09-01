@@ -118,6 +118,72 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Bump Homebrew cask
+        # Runs only on the macOS leg — the only one that just produced the two
+        # dmg's the cask serves (arm64 + x64). Hashes those local files directly
+        # rather than re-downloading from the release that was just published
+        # (same bytes, one less round-trip and one less thing that could 404 on
+        # a slow CDN propagation), then pushes the version + sha256 bump
+        # straight to misterbisson/homebrew-timebuddy's main branch — the
+        # one documented exception to that repo's own PR-only convention, since
+        # every field it touches was computed from files this job just built and
+        # signed. That means the tap's main must stay pushable by whoever owns
+        # HOMEBREW_TAP_TOKEN: if a ruleset is ever added there, it needs an
+        # explicit bypass entry for that account or this step locks itself out.
+        # HOMEBREW_TAP_TOKEN is a fine-grained PAT scoped to Contents:
+        # read/write on that one repo only — the default GITHUB_TOKEN above is
+        # scoped to this repo and can't push elsewhere.
+        if: matrix.os == 'macos-latest'
+        working-directory: electron/dist
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          ARM_SHA=$(shasum -a 256 "Timebuddy-Incident-Investigator-${VERSION}-arm64.dmg" | awk '{print $1}')
+          INTEL_SHA=$(shasum -a 256 "Timebuddy-Incident-Investigator-${VERSION}-x64.dmg" | awk '{print $1}')
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/misterbisson/homebrew-timebuddy.git" tap
+          cd tap
+
+          # Anchored to the sha256 block's own shape, not a bare `intel: "..."`:
+          # the cask's second line is `arch arm: "arm64", intel: "x64"`, and a
+          # looser pattern rewrites *that* into the Intel sha — the url's
+          # #{arch} interpolation then 404s for every Intel user. Requiring 64
+          # hex chars plus a leading-whitespace anchor makes that line
+          # unmatchable. Likewise `"[^"]*"` rather than `".*"`: the arm sha line
+          # ends in a comma *outside* its closing quote, and a greedy `.*"` that
+          # reached past it left `",,` behind — a Ruby syntax error that breaks
+          # the cask on every arch, not just Intel.
+          sed -i '' -E \
+            -e "s/^([[:space:]]*version )\"[^\"]*\"/\\1\"${VERSION}\"/" \
+            -e "s/^([[:space:]]*sha256 arm:[[:space:]]+)\"[0-9a-f]{64}\"/\\1\"${ARM_SHA}\"/" \
+            -e "s/^([[:space:]]+intel:[[:space:]]+)\"[0-9a-f]{64}\"/\\1\"${INTEL_SHA}\"/" \
+            Casks/timebuddy.rb
+
+          # A sed that matches nothing still exits 0. Without these, a cask
+          # reformatted out from under those patterns would publish a commit
+          # that changed nothing (or only some fields) as if it had worked, and
+          # the tap would quietly serve a stale version forever. `ruby -c`
+          # catches the corruption class above before it reaches anyone's brew.
+          for expected in "version \"${VERSION}\"" "\"${ARM_SHA}\"" "\"${INTEL_SHA}\""; do
+            grep -qF "${expected}" Casks/timebuddy.rb || {
+              echo "::error::cask bump did not apply: ${expected} missing from Casks/timebuddy.rb"
+              exit 1
+            }
+          done
+          ruby -c Casks/timebuddy.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/timebuddy.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date, nothing to commit."
+          else
+            git commit -m "chore: bump timebuddy cask to ${VERSION}"
+            git push origin HEAD:main
+          fi
+
   republish:
     # Manual recovery job (workflow_dispatch, `tag` input). Rebuilds and uploads
     # the installers for an existing, already-published release whose assets are
