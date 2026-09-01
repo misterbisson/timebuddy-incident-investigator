@@ -55,6 +55,7 @@ separate server process, no env vars to hand-edit, no plaintext credential file 
    [GitHub Releases](https://github.com/misterbisson/timebuddy-incident-investigator/releases).
    The macOS build is Developer ID signed and notarized, so it opens normally — just drag
    it to Applications (see [Installing a downloaded build](#installing-a-downloaded-build-macos)).
+   **macOS 13 (Ventura) or later** is required; on Windows and Linux, any 64-bit version.
 2. **Add a connection** for each Grafana or Graylog endpoint (one per region/tier) — Bearer
    token or Basic auth for Grafana, API token or login for Graylog. Hit **Test connection**,
    then **Save**. See [Configuring connections](#configuring-connections).
@@ -119,7 +120,11 @@ A failed or offline check is silent and just retried later — it never interrup
 investigation, and a broken update check can never take the MCP server down with it.
 
 - **macOS** updates are Apple Developer ID signed and notarized, same as the build you first
-  installed.
+  installed. Builds after 0.9.1 require **macOS 13 (Ventura) or later** — Chromium dropped
+  macOS 12 (Monterey), so the Electron runtime underneath did too. On an older macOS the
+  update is declined rather than installed: the app treats itself as up to date and quietly
+  stays on the version you have, instead of replacing it with a build that wouldn't launch.
+  Updating macOS to 13 or later resumes updates on the next check.
 - **Windows** and **Linux** (AppImage) update the same way — though Windows builds aren't
   code-signed yet, so an update installs an unsigned build (as does the initial download; see
   [Known limitations](#known-limitations-mvp)).
