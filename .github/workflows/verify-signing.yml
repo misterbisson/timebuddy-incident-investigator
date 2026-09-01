@@ -10,9 +10,33 @@ name: Verify macOS Signing
 # Same-repo PRs get repo secrets; fork PRs do not (MACOS_CERTIFICATE would be
 # empty and the fail-fast step below trips) — that's intended, signing can't be
 # verified from a fork anyway.
+#
+# Dependabot PRs are the case that bites, and they are NOT forks: a
+# Dependabot-triggered `pull_request` event runs with the `dependabot` secrets
+# scope, so MACOS_CERTIFICATE is empty and this job fails on every one of them,
+# structurally, no matter how healthy the bump is. This job is not a required
+# check (see main's protection: `test` plus the three `build-pr` jobs), so it
+# doesn't block the merge — but it does mean a dependency bump that breaks
+# signing looks identical to one that doesn't.
+#
+# That's why `push: branches: [main]` is here. It costs one notary run per merge
+# to main, and buys a real signing signal on the merged tree within minutes of
+# the merge rather than at the next release. It's the gap that let electron 43 →
+# 44 (#229) reach main with signing verified only by a manual `workflow_dispatch`
+# against the PR branch — which worked, but only because someone thought to run
+# it. For a Dependabot PR specifically, that dispatch is still the way to get the
+# signal BEFORE merging:
+#     gh workflow run verify-signing.yml --ref <dependabot-branch>
+# A workflow_dispatch run does get repo secrets.
 
 on:
   workflow_dispatch:
+  # Post-merge safety net for the PRs this job can't check pre-merge (see the
+  # Dependabot note above). Unpathed on purpose: `push` runs are the backstop,
+  # and a path filter here would reintroduce the same blind spot for any file
+  # combination the pull_request filter below doesn't anticipate.
+  push:
+    branches: [ main ]
   pull_request:
     branches: [ main ]
     # Only when something that affects the built/signed app changes — not docs
@@ -26,7 +50,11 @@ on:
       - '.github/workflows/verify-signing.yml'
 
 concurrency:
-  group: verify-signing-${{ github.ref }}
+  # Keyed on event_name as well as ref now that `push` is a trigger: on a merge
+  # to main both a push run and (briefly) the PR's run can be in flight, and a
+  # bare ref key would have one cancel the other — losing exactly the signal
+  # this job exists to produce.
+  group: verify-signing-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
