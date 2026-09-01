@@ -31,6 +31,16 @@ let autoUpdater;
 let dialogResponse;
 let isPackaged;
 let userDataDir;
+let stubbedRelease = null;
+const realPlatform = process.platform;
+
+/** Pins process.platform for a case (null restores the host's real value). */
+function setPlatform(platform) {
+  Object.defineProperty(process, 'platform', {
+    value: platform || realPlatform,
+    configurable: true,
+  });
+}
 
 const realLoad = Module._load;
 
@@ -40,12 +50,14 @@ function freshUserData(label) {
 }
 
 /** Fresh stubs + a fresh module registry entry, so each case starts clean. */
-function loadUpdater({ packaged = true, response = 0, dataDir = null } = {}) {
+function loadUpdater({ packaged = true, response = 0, dataDir = null, osRelease = null, platform = null } = {}) {
   dialogCalls = [];
   quitAndInstallCalls = [];
   dialogResponse = response;
   isPackaged = packaged;
   userDataDir = dataDir || freshUserData('case');
+  stubbedRelease = osRelease;
+  setPlatform(platform);
 
   autoUpdater = new EventEmitter();
   autoUpdater.autoDownload = null;
@@ -71,6 +83,13 @@ function loadUpdater({ packaged = true, response = 0, dataDir = null } = {}) {
     if (request === 'electron-updater') {
       if (!isPackaged) throw new Error('electron-updater must not be required on the unpackaged path');
       return { autoUpdater };
+    }
+    // Only intercepted when a case actually pins a release; otherwise the real
+    // module is returned so every other case keeps the host's true values.
+    if ((request === 'node:os' || request === 'os') && stubbedRelease !== null) {
+      return Object.assign(Object.create(realLoad.apply(this, arguments)), {
+        release: () => stubbedRelease,
+      });
     }
     return realLoad.apply(this, arguments);
   };
@@ -286,7 +305,64 @@ const settle = async () => {
     check('gui: always checks, ignoring the election stamp', setupAutoUpdater({ isMcpMode: false }) !== null);
   }
 
+  // --- The macOS floor: an OS too old for this build's Electron declines ---
+  //
+  // Note what this can and cannot do, because it's easy to over-read. It
+  // protects a user running THIS version when a FUTURE Electron raises the
+  // floor past their OS. It does NOT protect the users stranded by the raise
+  // that shipped with this build — they can't launch it, so this code never
+  // runs for them. `minimumSystemVersion` in the published feed (see
+  // scripts/updateFeedMinimumSystemVersion.js) is what covers that case, by
+  // being read by the OLD app's own electron-updater.
+  {
+    // macOS 12 Monterey is Darwin 21 — below the Darwin 22 (macOS 13) floor.
+    let setupAutoUpdater = loadUpdater({ packaged: true, osRelease: '21.6.0', platform: 'darwin' });
+    let updater;
+    const { stdout, stderr } = await captureOutput(async () => {
+      updater = setupAutoUpdater({ isMcpMode: true });
+    });
+    check('os-floor: Monterey (Darwin 21) declines to set up an updater', updater === null);
+    check('os-floor: the reason is logged on stderr', /21\.6\.0/.test(stderr) && /Darwin 22/.test(stderr));
+    check('os-floor: NOTHING reaches stdout (the JSON-RPC channel)', stdout === '');
+    check(
+      'os-floor: a declining process never loads electron-updater',
+      !Object.keys(require.cache).some((p) => p.includes(`${path.sep}electron-updater${path.sep}`)),
+    );
+
+    // Ventura is exactly the floor, so it must pass — an off-by-one here would
+    // silently strand the oldest supported OS.
+    setupAutoUpdater = loadUpdater({ packaged: true, osRelease: '22.0.0', platform: 'darwin' });
+    check('os-floor: Ventura (Darwin 22) is allowed — boundary is inclusive', setupAutoUpdater({ isMcpMode: false }) !== null);
+
+    // A Darwin floor must never be applied to other platforms: os.release() on
+    // Windows looks like '10.0.26100', which compares as OLDER than 22 and
+    // would block every Windows update if the platform check were dropped.
+    setupAutoUpdater = loadUpdater({ packaged: true, osRelease: '10.0.26100', platform: 'win32' });
+    check('os-floor: Windows is unaffected by the Darwin floor', setupAutoUpdater({ isMcpMode: false }) !== null);
+
+    setupAutoUpdater = loadUpdater({ packaged: true, osRelease: '6.1.0', platform: 'linux' });
+    check('os-floor: Linux is unaffected by the Darwin floor', setupAutoUpdater({ isMcpMode: false }) !== null);
+
+    // Fail open: an unparseable release string is not evidence of an old OS.
+    setupAutoUpdater = loadUpdater({ packaged: true, osRelease: 'not-a-version', platform: 'darwin' });
+    check('os-floor: an unparseable os.release() fails OPEN', setupAutoUpdater({ isMcpMode: false }) !== null);
+
+    // The gate sits ahead of the update-check election on purpose: a process
+    // that will decline every update must not first win the claim and burn the
+    // interval an eligible sibling could have used.
+    const shared = freshUserData('os-floor-election');
+    setupAutoUpdater = loadUpdater({ packaged: true, osRelease: '21.6.0', platform: 'darwin', dataDir: shared });
+    await captureOutput(async () => setupAutoUpdater({ isMcpMode: true }));
+    setupAutoUpdater = loadUpdater({ packaged: true, osRelease: '22.6.0', platform: 'darwin', dataDir: shared });
+    check(
+      'os-floor: declining does NOT consume the election claim',
+      setupAutoUpdater({ isMcpMode: true }) !== null,
+    );
+  }
+
   Module._load = realLoad;
+  stubbedRelease = null;
+  setPlatform(null);
 
   const failed = checks.filter(([, ok]) => !ok);
   for (const [name, ok] of checks) console.log(`${ok ? 'ok  ' : 'FAIL'}  ${name}`);
