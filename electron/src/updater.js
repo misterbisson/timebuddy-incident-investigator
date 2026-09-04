@@ -1,5 +1,34 @@
+const os = require('node:os');
 const { app, dialog } = require('electron');
 const { claimUpdateCheck } = require('./updateCheckClaim.js');
+
+// Darwin major version of the oldest macOS this build's Electron supports —
+// 22 is macOS 13 Ventura, the floor Electron 44 inherited from Chromium.
+// Keep in step with scripts/updateFeedMinimumSystemVersion.js, which publishes
+// the same floor into the update feed, and with README's requirement line.
+const MINIMUM_DARWIN_MAJOR = 22;
+
+// Guards against *the next* floor raise, not the one that shipped with this
+// build — worth stating plainly, since the instinct is to expect the opposite.
+// The users a floor raise strands are the ones who cannot launch the build that
+// contains this function, so it can never run on their machine; the field
+// stamped into latest-mac.yml is what protects them (see that script's header).
+// What this does cover is the case where a future Electron drops macOS 13 while
+// someone is running *this* version: the check below is already installed on
+// their machine, so the update is declined locally even if the feed for that
+// future release were published without a floor.
+//
+// Also deliberately ahead of the update-check election in setupAutoUpdater: a
+// process that is going to decline every update must not first win the claim
+// and burn the interval that an eligible sibling process could have used.
+function isOsTooOldForUpdates() {
+  if (process.platform !== 'darwin') return false;
+  const major = Number.parseInt(os.release().split('.')[0], 10);
+  // An unparseable release string is not evidence of an old OS — fail open and
+  // let electron-updater's own feed-side check be the authority.
+  if (!Number.isFinite(major)) return false;
+  return major < MINIMUM_DARWIN_MAJOR;
+}
 
 // Read by main.js's idle-shutdown guard (see startMcpServer's
 // onIdleShutdown), so the watchdog never quits this process mid-download —
@@ -83,6 +112,14 @@ function isUpdateDownloadInProgress() {
 // update and no-ops via the error handler below.
 function setupAutoUpdater({ isMcpMode = false } = {}) {
   if (!app.isPackaged) return null;
+
+  if (isOsTooOldForUpdates()) {
+    console.error(
+      `[auto-update] skipped: macOS kernel ${os.release()} is older than the minimum ` +
+        `Darwin ${MINIMUM_DARWIN_MAJOR} (macOS 13) this build's Electron supports`,
+    );
+    return null;
+  }
 
   // Elect before doing anything else, so the ~10 processes that lose skip the
   // lazy require entirely rather than each paying for electron-updater and its
@@ -197,4 +234,4 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
   return autoUpdater;
 }
 
-module.exports = { setupAutoUpdater, isUpdateDownloadInProgress };
+module.exports = { setupAutoUpdater, isUpdateDownloadInProgress, isOsTooOldForUpdates };

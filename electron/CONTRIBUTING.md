@@ -159,6 +159,14 @@ PR) is what actually cuts the release: release-please bumps `package.json`,
 entries in `release-please-config.json` keep the latter two in sync — the plugin one
 matters because `electron/package.json` ships that directory as `extraResources`, so a
 stale version there would be visible to anyone who installed the bundled plugin), bumps
+`package-lock.json`'s own entry for the `electron` workspace member (a fourth
+`extra-files` entry, `$.packages.electron.version`; the `node` release type refreshes the
+lockfile's *root* entry on its own but not a member's, so without it `electron` sat at the
+previous version in the lockfile while `electron/package.json` moved on — harmless to
+`npm ci`, and it self-corrected whenever Dependabot next regenerated the lockfile, which
+is why it went unnoticed. A jsonpath matching nothing is a no-op in release-please's JSON
+updater, so if the lockfile's shape ever changes this reverts to the old drift rather than
+breaking the release), bumps
 the version string `src/server.ts` reports to MCP clients in the `initialize` handshake
 (via release-please's generic updater and the `x-release-please-version` marker comment,
 since a `.ts` file can't take a `jsonpath` entry), updates `CHANGELOG.md`, and tags the
@@ -208,16 +216,45 @@ number of unreleased commits can land on `main` without forcing a release — me
 whenever you're ready to cut one.
 
 `.github/dependabot.yml` configures scheduled dependency-update PRs (weekly, grouped by
-minor/patch) for the root workspace, the `electron/` workspace, and GitHub Actions
-versions — on top of GitHub's always-on, config-independent Dependabot security-update
-PRs for vulnerability fixes.
+minor/patch) for npm and for GitHub Actions versions — on top of GitHub's always-on,
+config-independent Dependabot security-update PRs for vulnerability fixes.
+
+There is deliberately **one** npm entry, `directory: "/"`, covering the `electron/`
+workspace member too — resist adding a second for `/electron`, which reads like the
+obvious thing to do given it has its own `package.json`. It can't produce a mergeable PR:
+the member has no `electron/package-lock.json` (npm resolves the whole workspace into the
+root lockfile), so a `/electron`-scoped entry bumps `electron/package.json`, can't reach
+the lockfile that pins it, and every job dies at `npm ci` with `Invalid: lock file's
+electron@X does not satisfy electron@Y`. Meanwhile the root entry *does* reach the member's
+manifest — it has bumped both `zod` in `electron/package.json`
+([#227](https://github.com/misterbisson/timebuddy-incident-investigator/pull/227)) and
+`electron` itself
+([#229](https://github.com/misterbisson/timebuddy-incident-investigator/pull/229)) — so the
+second entry only ever produced a broken twin of a PR the root entry already opened
+correctly ([#228](https://github.com/misterbisson/timebuddy-incident-investigator/pull/228)
+was that twin). If `electron/` ever gets its own lockfile, this inverts and a second entry
+becomes right.
 
 **macOS builds are Apple Developer ID signed and notarized** (electron-builder native
 signing via `CSC_LINK` + `mac.notarize`), so downloaded builds open without a Gatekeeper
 block — see [`SIGNING.md`](SIGNING.md) for the full setup, the required secrets, and the
 validate-before-store credential-rotation runbook. The `verify-signing.yml` workflow proves
 the whole sign → notarize → staple path on a clean runner for every PR that touches the
-app. Windows and Linux builds are unsigned entirely, same as upstream Time Buddy.
+app, **and** on every push to `main`. Windows and Linux builds are unsigned entirely, same
+as upstream Time Buddy.
+
+The push-to-`main` trigger is not redundant with the PR one: a Dependabot `pull_request`
+event runs with the `dependabot` secrets scope rather than the repo's, so
+`MACOS_CERTIFICATE` is empty and this job fails on *every* Dependabot PR no matter how
+healthy the bump. It isn't a required check, so that doesn't block merges — but it does
+make a bump that breaks signing indistinguishable from one that doesn't, which is how
+electron 43 → 44 reached `main` with signing verified only by a manually dispatched run.
+To get that signal *before* merging a Dependabot PR, dispatch it against the branch —
+`workflow_dispatch` runs do get repo secrets:
+
+```bash
+gh workflow run verify-signing.yml --ref <dependabot-branch>
+```
 
 `mac.target[0].arch` builds both `x64` and `arm64` dmgs, and `mac.artifactName` is set
 explicitly (`${productName}-${version}-${arch}.${ext}`) so both always carry their arch in

@@ -109,6 +109,13 @@ jobs:
       - name: Build engine
         run: npm run build
 
+      # Lives here rather than in the fast `test` job because it imports
+      # `semver` to reproduce electron-updater's own version comparison, and
+      # every package that pulls semver into the tree is an electron-workspace
+      # dependency — that job's `--workspaces=false` install wouldn't have it.
+      - name: Test macOS update-feed floor
+        run: node electron/test/updateFeedMinimumSystemVersion.test.js
+
       # `npm ci` alone does NOT fetch the Electron binary — the `electron`
       # package's own postinstall only writes a path.txt; the ~100MB binary is
       # fetched lazily, synchronously, the first time something does
