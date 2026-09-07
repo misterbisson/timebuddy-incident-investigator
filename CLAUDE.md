@@ -211,18 +211,40 @@ disk. See `README.md`'s "How connections are stored" section for the storage for
 `electron/test/mcpServerMode.mjs` for how it's tested (spawns the real binary in
 `--mcp-server` mode via the actual MCP SDK client/transport; no live Grafana needed).
 
-Neither `--mcp-server` mode nor the standalone CLI has any way to notice its stdio
-parent stopped talking without an explicit shutdown — `StdioServerTransport` only
-listens for `data`/`error` on stdin, never `end` — and the Electron app has no
-`requestSingleInstanceLock` (see `updateCheckClaim.js`'s header), so Claude Code/Desktop
-spawning one process per session/worktree routinely leaves a dozen idle ones running.
-`src/idleShutdown.ts`'s `watchForIdleShutdown()` is the fix: `server.ts`'s
+Nothing in `StdioServerTransport` notices that this process's stdio parent went away: it
+listens for `data`/`error` on stdin, never `end`, and its `send()` writes to stdout with
+no error handling at all — and the Electron app has no `requestSingleInstanceLock` (see
+`updateCheckClaim.js`'s header), so Claude Code/Desktop spawning one process per
+session/worktree routinely leaves a dozen idle ones running. Two modules cover that gap
+together, and both are wired up in `startMcpServer()`.
+
+`src/stdioPipe.ts`'s `guardStdioPipe()` handles the pipe actually breaking. Writing a
+response to a client that has exited fails with `EPIPE`, which arrives as an `'error'`
+event on stdout that nobody listens for — an uncaught exception. In the standalone CLI
+that's a stack trace on a stderr nobody is reading; in `--mcp-server` mode it's worse,
+because that process is GUI-capable even though it never opens a window, so Electron's
+default handler puts a modal "A JavaScript error occurred in the main process" dialog
+on screen — unattached to any window, minutes or hours after the session that spawned it
+ended, and blocking the main thread so the process can't even take the idle-shutdown
+path below. So a dead pipe is swallowed unconditionally (there is nobody left to report
+it to, which is exactly why it can't be raised as an exception), and both a failed write
+and stdin reaching EOF are reported to the idle watchdog as `clientGone()` rather than
+exiting directly — every reason not to quit *yet* lives there and in its host's
+callback. With the watchdog disabled (`idleShutdownMinutes` <= 0) `clientGone()` is a
+no-op, since "never auto-quit" isn't a request to crash instead.
+
+`src/idleShutdown.ts`'s `watchForIdleShutdown()` handles the commoner case, a client
+that's gone without the pipe breaking (nothing is ever written, so nothing ever fails):
+`server.ts`'s
 `startMcpServer()` wires it to the stdio transport (setting `transport.onmessage` before
 `server.connect()` so the SDK's own `Protocol.connect()` chains it rather than replacing
 it — see that function's doc comment for why the ordering is load-bearing), and any
 inbound JSON-RPC message counts as activity. Past `idleShutdownMinutes` (config.ts,
-`IDLE_SHUTDOWN_MINUTES`, default 30) of silence it calls an `onIdle` callback; the
-default (used by the standalone CLI) just exits. `electron/src/main.js`'s
+`IDLE_SHUTDOWN_MINUTES`, default 30) of silence it calls an `onIdle` callback — with
+`reason: 'idle'`, or `'client-disconnected'` when `clientGone()` short-circuited the
+timeout — and it stays the single place that decides whether this process may stop
+serving, which is why the pipe guard reports *to* it instead of quitting. The default
+callback (used by the standalone CLI) just exits. `electron/src/main.js`'s
 `idleShutdownGuard` is the Electron-specific callback, and it's not a plain exit: it
 returns `false` (telling the watchdog to keep polling instead of quitting) while
 `updater.js`'s `isUpdateDownloadInProgress()` is true, or while the Activity or

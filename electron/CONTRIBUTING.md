@@ -49,7 +49,19 @@ because `main.js` is plain JS that never sees `tsc`, so its argv-parsing →
 a typo there would silently either never enable the tool or always enable it. The statement
 guard's own ordering (refuse before any query executes) is asserted separately against a mocked
 client in the engine's `test/executeAdhocQuery.tool.test.ts`, since an unreachable
-`grafana.example.com` can't distinguish a guard refusal from a network failure. Run it with:
+`grafana.example.com` can't distinguish a guard refusal from a network failure.
+
+A **third** pass spawns the binary with a raw child process instead of an SDK client, so it
+can do the one thing a well-behaved MCP client never does: destroy its read end of the
+server's stdout while a response is pending. That's what Claude Code/Desktop exiting mid-call
+looks like from this side, and it used to be a crash — the failed write raised an unhandled
+`EPIPE`, which in a process that's GUI-capable but deliberately windowless meant Electron's
+default handler putting a modal "A JavaScript error occurred in the main process" dialog on
+screen, blocking the main thread so not even idle shutdown could reap it. The pass asserts the
+process instead reports why and quits `0`. The guard itself is unit-tested in the engine
+(`test/stdioPipe.test.ts`); what only the real binary can show is that the crash dialog is
+gone and that `main.js`'s headless `uncaughtException`/`unhandledRejection` handlers are in
+place. Run all three with:
 
 ```bash
 node test/mcpServerMode.mjs

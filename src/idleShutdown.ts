@@ -4,6 +4,12 @@
  * Electron app's update-download/open-window guards) belongs to the caller,
  * passed in as `onIdle`. See server.ts's startMcpServer() for the one place
  * this is wired up, and electron/src/main.js for the guarded callback.
+ *
+ * It's also the single place that decides *whether* this process may stop
+ * serving, which is why stdioPipe.ts reports a vanished client here
+ * (`clientGone()`) rather than exiting on its own: a dead pipe and a long
+ * silence are the same conclusion reached two ways, and both have to clear
+ * the same host-supplied guards.
  */
 
 /**
@@ -17,6 +23,18 @@
 export interface MessageSource {
   onmessage?(message: unknown): void;
 }
+
+/**
+ * Why the watchdog is proposing shutdown. `'idle'` is the timeout: nothing
+ * arrived for `idleMinutes`, and the client may well still be alive and merely
+ * quiet. `'client-disconnected'` is certainty rather than inference — the
+ * stdio pipe is broken (see stdioPipe.ts), so no request can ever arrive again
+ * no matter how long this process waits. A host's guard can treat them
+ * differently, but usually shouldn't: both mean there is nothing left to
+ * serve, and the reasons to defer (an in-flight update download, a window
+ * someone is looking at) don't depend on which one it is.
+ */
+export type ShutdownReason = 'idle' | 'client-disconnected';
 
 export interface IdleShutdownOptions {
   /** Minutes of silence before `onIdle` fires. `0` (or any non-positive value) disables the watchdog entirely — `watchForIdleShutdown` is then a no-op. */
@@ -33,9 +51,24 @@ export interface IdleShutdownOptions {
    * retried — so a broken guard can't wedge the watchdog into a fast error
    * loop.
    */
-  onIdle: (ctx: { idleMinutes: number }) => boolean | void | Promise<boolean | void>;
+  onIdle: (ctx: {
+    idleMinutes: number;
+    reason: ShutdownReason;
+  }) => boolean | void | Promise<boolean | void>;
   /** How often to poll once the idle threshold has been crossed at least once. Default 60s. */
   recheckMs?: number;
+}
+
+export interface IdleShutdownHandle {
+  /** Stops the watchdog for good; `onIdle` will not be called again. */
+  stop: () => void;
+  /**
+   * Reports that the client is gone (stdioPipe.ts calls this), running the
+   * shutdown decision now rather than waiting out `idleMinutes`. Idempotent in
+   * effect: repeat calls just re-run a decision that has already been made or
+   * deferred. A no-op when the watchdog is disabled.
+   */
+  clientGone: () => void;
 }
 
 /**
@@ -53,15 +86,26 @@ export interface IdleShutdownOptions {
  * own dispatch calls ours too. Calling this after `connect()` would instead
  * silently replace the SDK's handler, and no message would ever reach a
  * tool again.
+ *
+ * The returned handle's `clientGone()` short-circuits the timeout for the case
+ * where waiting is pointless: the pipe is broken, so the transport is not
+ * merely quiet but finished. It runs the same guarded, deferrable shutdown
+ * decision immediately instead of at the next poll.
  */
 export function watchForIdleShutdown(
   transport: MessageSource,
   { idleMinutes, onIdle, recheckMs = 60_000 }: IdleShutdownOptions,
-): { stop: () => void } {
-  if (idleMinutes <= 0) return { stop: () => undefined };
+): IdleShutdownHandle {
+  // idleMinutes <= 0 means "never auto-quit". That applies to `clientGone()`
+  // too: a host that opted out of automatic shutdown didn't ask for one just
+  // because the client left. stdioPipe.ts still keeps the process from
+  // crashing on the dead pipe either way.
+  if (idleMinutes <= 0) return { stop: () => undefined, clientGone: () => undefined };
 
   const idleMs = idleMinutes * 60_000;
   let lastActivity = Date.now();
+  let reason: ShutdownReason = 'idle';
+  let handled = false;
 
   const priorOnMessage = transport.onmessage;
   transport.onmessage = (message: unknown) => {
@@ -69,25 +113,46 @@ export function watchForIdleShutdown(
     priorOnMessage?.(message);
   };
 
-  const timer = setInterval(() => {
-    if (Date.now() - lastActivity < idleMs) return;
+  const check = () => {
+    if (handled) return;
+    // A disconnected client skips the clock entirely — there is no amount of
+    // further waiting that could produce another message.
+    if (reason === 'idle' && Date.now() - lastActivity < idleMs) return;
     Promise.resolve()
-      .then(() => onIdle({ idleMinutes }))
+      .then(() => onIdle({ idleMinutes, reason }))
       .then((deferred) => {
         // Anything but an explicit `false` means onIdle considers this
         // handled (most commonly because it already exited the process, so
         // this line never even runs) — stop polling rather than calling it
         // again next tick for no reason.
-        if (deferred !== false) clearInterval(timer);
+        if (deferred !== false) {
+          handled = true;
+          clearInterval(timer);
+        }
       })
       .catch(() => {
         // A broken onIdle must not wedge this into a fast interval error
         // loop — treat a throw/rejection the same as any other "handled"
         // (non-`false`) result and stop.
+        handled = true;
         clearInterval(timer);
       });
-  }, recheckMs);
+  };
+
+  const timer = setInterval(check, recheckMs);
   timer.unref();
 
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => {
+      handled = true;
+      clearInterval(timer);
+    },
+    clientGone: () => {
+      reason = 'client-disconnected';
+      // The interval keeps running, so an onIdle that defers (a window open,
+      // an update downloading) is re-asked every recheckMs — same as the
+      // timeout path, and still with reason 'client-disconnected'.
+      check();
+    },
+  };
 }

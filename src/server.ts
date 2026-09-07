@@ -8,7 +8,8 @@ import type { Screenshotter } from './screenshot/types.js';
 import type { ActivityLog } from './activity/activityLog.js';
 import { registerAllTools } from './tools/registerAll.js';
 import { runStartupMaintenance } from './security/retention.js';
-import { watchForIdleShutdown } from './idleShutdown.js';
+import { watchForIdleShutdown, type ShutdownReason } from './idleShutdown.js';
+import { guardStdioPipe } from './stdioPipe.js';
 
 /**
  * Builds the MCP server and registers every tool against the given
@@ -78,16 +79,21 @@ export async function startMcpServer(
   activityLog?: ActivityLog,
   logSource: LogConnectionsSource = [],
   /**
-   * Called once `config.idleShutdownMinutes` of silence elapses on the
-   * transport (see idleShutdown.ts). Defaults to logging and calling
-   * `process.exit(0)`, which is correct for both the standalone CLI
+   * Called when this process has nothing left to serve: `config.idleShutdownMinutes`
+   * of silence on the transport (`reason: 'idle'`), or the client's pipe
+   * breaking (`reason: 'client-disconnected'` — see stdioPipe.ts, which routes
+   * that through the same watchdog so it clears the same guards). Defaults to
+   * logging and calling `process.exit(0)`, which is correct for both the standalone CLI
    * (index.ts passes nothing here) and, most of the time, the Electron app's
    * `--mcp-server` mode — UNLESS that caller has its own reason to defer:
    * electron/src/main.js passes a guard that returns `false` while an update
    * is mid-download or a window (Activity/Connections) is open, so this
    * timer alone never quits out from under either.
    */
-  onIdleShutdown?: (ctx: { idleMinutes: number }) => boolean | void | Promise<boolean | void>,
+  onIdleShutdown?: (ctx: {
+    idleMinutes: number;
+    reason: ShutdownReason;
+  }) => boolean | void | Promise<boolean | void>,
 ): Promise<McpServer> {
   const server = createServer(source, configOverrides, screenshotter, activityLog, logSource);
 
@@ -102,22 +108,35 @@ export async function startMcpServer(
   const transport = new StdioServerTransport();
   // Must happen before server.connect(transport) below — see
   // watchForIdleShutdown's own doc comment for why the ordering matters.
-  watchForIdleShutdown(transport, {
+  const idleWatch = watchForIdleShutdown(transport, {
     idleMinutes: config.idleShutdownMinutes,
     onIdle:
       onIdleShutdown ??
-      (({ idleMinutes }) => {
+      (({ idleMinutes, reason }) => {
         // Deliberately console.error, not console.log — stdout is the MCP
         // JSON-RPC channel.
-        console.error(`[idle-shutdown] no MCP activity for ${idleMinutes} minute(s); exiting`);
+        console.error(
+          reason === 'client-disconnected'
+            ? '[idle-shutdown] MCP client disconnected; exiting'
+            : `[idle-shutdown] no MCP activity for ${idleMinutes} minute(s); exiting`,
+        );
         process.exit(0);
       }),
   });
+  // Keeps a write to a departed client from taking the process down with it
+  // (the EPIPE crash stdioPipe.ts's header describes) and routes that
+  // discovery into the same guarded shutdown decision as the idle timeout,
+  // reached immediately instead of up to idleShutdownMinutes later. No
+  // ordering constraint against connect() — it wraps the outbound half.
+  guardStdioPipe(transport, { onClientGone: () => idleWatch.clientGone() });
   await server.connect(transport);
   return server;
 }
 
 export type { Config, GrafanaConnection, LogConnection, AdhocQueryPolicy } from './config.js';
+// Part of startMcpServer's public signature (the onIdleShutdown callback's ctx),
+// so it has to be reachable from the package entrypoint too.
+export type { ShutdownReason } from './idleShutdown.js';
 // Exported for electron/src/main.js, which parses its own argv and passes the
 // result through startMcpServer's configOverrides — the flag has to be read in
 // the process that was actually launched with it.

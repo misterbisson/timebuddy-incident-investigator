@@ -7,7 +7,7 @@
 // GrafanaClient wiring works end to end, not just that the process boots).
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -57,6 +57,81 @@ const seed = spawnSync(
 );
 if (seed.status !== 0) {
   fail(`seed script exited ${seed.status} (spawn error: ${seed.error})`);
+}
+
+/**
+ * The failure mode this exists for: Claude Code/Desktop exits (or is killed)
+ * while this process still owes it a response, so the reply lands on a broken
+ * pipe. Nothing in the SDK's stdio transport guards that write, and the
+ * resulting unhandled 'error' event used to reach Electron's default handler —
+ * which, in a process that deliberately never opens a window, puts a modal
+ * "A JavaScript error occurred in the main process" dialog on screen with no
+ * app behind it and blocks the main thread so even idle shutdown can't reap it.
+ *
+ * Only the real binary can prove this: the engine's own unit tests
+ * (test/stdioPipe.test.ts) cover the guard against fake streams, but the thing
+ * that made this bug bad — Electron's crash dialog, and main.js's headless
+ * handlers for it — exists only here. Driven with a raw child process rather
+ * than StdioClientTransport because the whole point is to slam our read end of
+ * its stdout shut, which a well-behaved MCP client never does.
+ */
+async function checkClientDisconnectShutdown() {
+  const child = spawn(
+    electronBin,
+    ['.', '--mcp-server', `--user-data-dir=${userDataDir}`, '--password-store=basic', '--disable-gpu'],
+    { cwd: electronRoot, stdio: ['pipe', 'pipe', 'pipe'], env: process.env },
+  );
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+    process.stderr.write(`[electron disconnect stderr] ${chunk}`);
+  });
+  const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+
+  // Break the pipe only once the server is actually serving — before that
+  // there's no pending write to fail, so the test would prove nothing.
+  const deadline = Date.now() + 60_000;
+  while (!/MCP server running on stdio/.test(stderr)) {
+    if (Date.now() > deadline) {
+      child.kill();
+      fail(`--mcp-server never reported readiness within 60s (stderr: ${stderr})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'disconnect-test', version: '0' } },
+    }) + '\n',
+  );
+  // Our read end, gone before the reply can land — exactly what a departed
+  // client looks like from the server's side. stdin is left open so this
+  // exercises the failed-write path specifically, not the stdin-EOF one.
+  child.stdout.destroy();
+
+  const outcome = await Promise.race([
+    exited,
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 30_000)),
+  ]);
+
+  if (/A JavaScript error occurred|Unhandled 'error' event|Uncaught Exception/.test(stderr)) {
+    child.kill();
+    fail(`writing to a departed client crashed the main process instead of shutting it down: ${stderr}`);
+  }
+  if (outcome === 'timeout') {
+    child.kill();
+    fail(`--mcp-server did not quit within 30s of its client disappearing (stderr: ${stderr})`);
+  }
+  if (outcome.code !== 0) {
+    fail(`--mcp-server exited ${outcome.code} (signal ${outcome.signal}) after its client disappeared, expected a clean 0`);
+  }
+  if (!/MCP client is gone/.test(stderr)) {
+    fail(`--mcp-server quit without reporting why (stderr: ${stderr})`);
+  }
+  console.log('OK: a write to a departed client shut the server down cleanly instead of crashing');
 }
 
 const transport = new StdioClientTransport({
@@ -222,6 +297,9 @@ try {
   console.log(`OK: DROP MEASUREMENT rejected: ${dropText.split('\n')[0]}`);
 
   await adhocClient.close();
+
+  await checkClientDisconnectShutdown();
+
   rmSync(userDataDir, { recursive: true, force: true });
   console.log('ALL CHECKS PASSED');
   process.exit(0);
