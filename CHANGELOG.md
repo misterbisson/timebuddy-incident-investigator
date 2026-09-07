@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.1...v0.9.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* decline macOS updates on releases the OS can't launch ([#232](https://github.com/misterbisson/timebuddy-incident-investigator/issues/232)) ([9183ddd](https://github.com/misterbisson/timebuddy-incident-investigator/commit/9183dddbc67229bdc5af7ee348d74b4fc9c0819d))
+* **deps-dev:** bump electron from 43.4.0 to 44.0.0 ([#229](https://github.com/misterbisson/timebuddy-incident-investigator/issues/229)) ([a89dfee](https://github.com/misterbisson/timebuddy-incident-investigator/commit/a89dfee3976b61632e624293238f84efadcd6fad))
+* **deps:** bump the minor-and-patch group with 2 updates ([#227](https://github.com/misterbisson/timebuddy-incident-investigator/issues/227)) ([a3e39a0](https://github.com/misterbisson/timebuddy-incident-investigator/commit/a3e39a03c8492735cdc16f38b80861741b2285e1))
+* don't crash (or pop a modal) when the MCP client's pipe dies ([#231](https://github.com/misterbisson/timebuddy-incident-investigator/issues/231)) ([f00e561](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f00e56190c869cfe0abdb6684a583bcc7c901236))
+
 ## [0.9.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.0...v0.9.1) (2026-08-28)
 
 
