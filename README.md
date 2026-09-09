@@ -47,7 +47,7 @@ reverse.** A skill that owns your inventory can answer "what is this host, what 
 rack, which services declare it" and then hand the dashboard to `find_related_dashboards` /
 `execute_query_window` for the actual timeseries. The direction is one-way by construction:
 Timebuddy has no way to reach into a ticket tracker or a CMDB, because the
-[read-only endpoint allowlists](#security) are the only network surface it has.
+[read-only endpoint allowlists](#security) are the only network surface its tool layer has.
 
 Composition happens in the agent, not through pipes — it reads one tool's output and decides
 what to call next. So the contract that makes it work is that **every output states what it
