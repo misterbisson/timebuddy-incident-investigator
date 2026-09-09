@@ -256,7 +256,10 @@ describe('execute_adhoc_query execution', () => {
       connection: 'staging',
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain('Query refused');
+    // The refusal names the dialect the type dispatched to, so a caller who
+    // meant PromQL and got an InfluxQL refusal can see they picked the wrong
+    // datasource.
+    expect(result.content[0]!.text).toContain('InfluxQL query refused');
     expect(queryDs).not.toHaveBeenCalled();
   });
 
@@ -412,5 +415,224 @@ describe('execute_adhoc_query audit and redaction', () => {
     const [record] = await auditLines();
     expect(record!.argsSummary.exploreUrl).toContain('acct-123456');
     expect(record!.argsSummary.query).toContain('[REDACTED]');
+  });
+});
+
+const PROM: DatasourceInfo[] = [{ uid: 'prom1', id: 3, name: 'Prometheus', type: 'prometheus' }];
+
+/** A Prometheus-shaped range response: `count` points spaced `stepMs` apart from FROM. */
+function promResponse(stepMs: number, count: number): DsQueryResponse {
+  const times = Array.from({ length: count }, (_, i) => FROM + i * stepMs);
+  return {
+    results: {
+      A: {
+        frames: [
+          {
+            schema: {
+              refId: 'A',
+              fields: [
+                { name: 'Time', type: 'time' },
+                { name: 'Value', type: 'number', labels: { job: 'web' } },
+              ],
+            },
+            data: { values: [times, times.map(() => 1)] },
+          },
+        ],
+      },
+    },
+  };
+}
+
+describe('execute_adhoc_query PromQL', () => {
+  const authorized = () => config([{ host: 'metrics.staging.example.com', datasourceTypes: ['prometheus'] }]);
+
+  const base = { datasourceUid: 'prom1', fromMs: FROM, toMs: TO, connection: 'staging', includePoints: true };
+
+  it('runs a range query at the requested step and sends it as a PromQL target', async () => {
+    const cfg = authorized();
+    const { client, queryDs } = fakeClient(PROM, promResponse(60_000, 61));
+    const body = payload(
+      await callTool(cfg, client, { ...base, query: 'count_over_time(app_action_total[1m])', stepSeconds: 60 }),
+    );
+    expect(body.provenance).toBe('adhoc');
+    expect(body.queryType).toBe('range');
+    // Both the string and numeric step forms, so the step survives whichever
+    // field the instance's Prometheus backend reads (see #200).
+    expect(queryDs.mock.calls[0]![0].queries[0]).toMatchObject({
+      expr: 'count_over_time(app_action_total[1m])',
+      range: true,
+      instant: false,
+      interval: '60s',
+      intervalMs: 60_000,
+    });
+    // Not the InfluxQL shape.
+    expect(queryDs.mock.calls[0]![0].queries[0]!.rawQuery).toBeUndefined();
+  });
+
+  it('reports the effective step measured from the returned timestamps', async () => {
+    const cfg = authorized();
+    const { client } = fakeClient(PROM, promResponse(60_000, 61));
+    const body = payload(await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 60 }));
+    expect(body.step).toMatchObject({ requestedMs: 60_000, effectiveMs: 60_000, points: 61, matchesRequested: true });
+    expect(body.step.note).toBeUndefined();
+  });
+
+  it('flags a datasource that evaluated at a different step than requested', async () => {
+    // The failure #200 documents, made visible instead of assumed away: the
+    // requested step is a request, and a caller measuring scrape density is
+    // asking a question *about* the step.
+    const cfg = authorized();
+    const { client } = fakeClient(PROM, promResponse(15_000, 241));
+    const body = payload(await callTool(cfg, client, { ...base, query: 'increase(x[1m])', stepSeconds: 60 }));
+    expect(body.step.matchesRequested).toBe(false);
+    expect(body.step.effectiveMs).toBe(15_000);
+    expect(body.step.note).toContain('15000ms, not the requested 60000ms');
+  });
+
+  it('measures the step before the response clamp downsamples the series', async () => {
+    // A datasource that returns more points than the step implies (one that
+    // aligns to its own retention rather than the requested step) trips
+    // clampSeriesPoints, which strides the *emitted* points. Measuring after it
+    // would report the stride and claim the datasource ignored the step.
+    const cfg = { ...authorized(), maxDataPoints: 101 };
+    const { client } = fakeClient(PROM, promResponse(1_000, 500));
+    const body = payload(
+      await callTool(cfg, client, { ...base, query: 'up', toMs: FROM + 100_000, stepSeconds: 1 }),
+    );
+    expect(body.step).toMatchObject({ effectiveMs: 1_000, matchesRequested: true, points: 500 });
+    expect(body.series[0].pointsTotal).toBe(500);
+    expect(body.series[0].points.length).toBe(101);
+  });
+
+  it('says so when there are too few points to measure a step', async () => {
+    const cfg = authorized();
+    const { client } = fakeClient(PROM, { results: { A: { frames: [] } } });
+    const body = payload(await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 60 }));
+    expect(body.step.requestedMs).toBe(60_000);
+    expect(body.step.effectiveMs).toBeUndefined();
+    expect(body.step.note).toContain('Too few points');
+  });
+
+  it('refuses a range query with no stepSeconds instead of inferring one', async () => {
+    const cfg = authorized();
+    const { client, queryDs } = fakeClient(PROM);
+    const result = await callTool(cfg, client, { ...base, query: 'rate(x[1m])' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('require an explicit "stepSeconds"');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
+  it('refuses a step finer than MAX_DATA_POINTS allows, naming the smallest that fits', async () => {
+    const cfg = { ...authorized(), maxDataPoints: 100 };
+    const { client, queryDs } = fakeClient(PROM);
+    const result = await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 1 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('MAX_DATA_POINTS=100');
+    expect(result.content[0]!.text).toMatch(/stepSeconds >= 37/);
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
+  it('runs an instant query at the window end', async () => {
+    const cfg = authorized();
+    const { client, queryDs } = fakeClient(PROM, promResponse(0, 1));
+    const body = payload(await callTool(cfg, client, { ...base, query: 'up', queryType: 'instant' }));
+    expect(body.queryType).toBe('instant');
+    expect(body.evaluatedAtMs).toBe(TO);
+    expect(body.step).toBeUndefined();
+    expect(queryDs.mock.calls[0]![0].queries[0]).toMatchObject({ expr: 'up', instant: true, range: false });
+    expect(queryDs.mock.calls[0]![0].queries[0]!.interval).toBeUndefined();
+  });
+
+  it('refuses stepSeconds on an instant query rather than ignoring it', async () => {
+    const cfg = authorized();
+    const { client, queryDs } = fakeClient(PROM);
+    const result = await callTool(cfg, client, { ...base, query: 'up', queryType: 'instant', stepSeconds: 60 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('does not apply to instant PromQL');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
+  it('names PromQL when the guard refuses, so the dispatch is visible', async () => {
+    const cfg = authorized();
+    const { client, queryDs } = fakeClient(PROM);
+    const result = await callTool(cfg, client, { ...base, query: 'up; down', stepSeconds: 60 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('PromQL query refused');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
+  it('builds a Prometheus-shaped Explore pane carrying the expression and the step', async () => {
+    const cfg = authorized();
+    const { client } = fakeClient(PROM, promResponse(60_000, 61));
+    const body = payload(await callTool(cfg, client, { ...base, query: 'sum(rate(x[5m]))', stepSeconds: 60 }));
+    const pane = JSON.parse(new URL(body.exploreUrl).searchParams.get('panes')!).timebuddy;
+    expect(pane.queries[0]).toMatchObject({ expr: 'sum(rate(x[5m]))', range: true, instant: false, interval: '60s' });
+    // An InfluxQL-shaped pane would open Explore empty against Prometheus.
+    expect(pane.queries[0].query).toBeUndefined();
+    expect(pane.range).toEqual({ from: String(FROM), to: String(TO) });
+  });
+
+  it('records queryType and stepSeconds in the audit record', async () => {
+    const cfg = authorized();
+    const { client } = fakeClient(PROM, promResponse(60_000, 61));
+    await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 60 });
+    const raw = await readFile(join(dataDir, 'audit.jsonl'), 'utf8');
+    const record = JSON.parse(raw.trim().split('\n')[0]!);
+    expect(record.argsSummary.stepSeconds).toBe(60);
+    expect(record.argsSummary.exploreUrl).toContain('/explore');
+  });
+});
+
+describe('execute_adhoc_query dialect parameters', () => {
+  const influxAuthorized = () => config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
+
+  it('refuses stepSeconds against an InfluxDB datasource rather than ignoring it', async () => {
+    // Accepting and ignoring a resolution parameter is the same class of bug as
+    // #200: the caller believes they set the step, and nothing says otherwise.
+    const cfg = influxAuthorized();
+    const { client, queryDs } = fakeClient(INFLUX);
+    const result = await callTool(cfg, client, {
+      query: 'SELECT mean("value") FROM "cpu"',
+      datasourceUid: 'influx1',
+      fromMs: FROM,
+      toMs: TO,
+      connection: 'staging',
+      stepSeconds: 60,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('does not apply to InfluxQL');
+    expect(result.content[0]!.text).toContain('GROUP BY time(...)');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
+  it('refuses queryType against an InfluxDB datasource', async () => {
+    const cfg = influxAuthorized();
+    const { client } = fakeClient(INFLUX);
+    const result = await callTool(cfg, client, {
+      query: 'SHOW MEASUREMENTS',
+      datasourceUid: 'influx1',
+      fromMs: FROM,
+      toMs: TO,
+      connection: 'staging',
+      queryType: 'instant',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('"queryType" does not apply to InfluxQL');
+  });
+
+  it('still returns no step fields for an InfluxQL query', async () => {
+    const cfg = influxAuthorized();
+    const { client } = fakeClient(INFLUX);
+    const body = payload(
+      await callTool(cfg, client, {
+        query: 'SELECT mean("value") FROM "cpu"',
+        datasourceUid: 'influx1',
+        fromMs: FROM,
+        toMs: TO,
+        connection: 'staging',
+      }),
+    );
+    expect(body.step).toBeUndefined();
+    expect(body.queryType).toBeUndefined();
   });
 });
