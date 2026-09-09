@@ -161,6 +161,101 @@ describe('parseGrafanaTimeExpr', () => {
     it('throws for a zone this runtime does not know rather than silently using UTC', () => {
       expect(() => parseGrafanaTimeExpr('now/d', nowMs, { timeZone: 'Mars/Olympus_Mons' })).toThrow(/Unknown time zone/);
     });
+
+    it('ignores an unusable zone for an expression that never reads a wall clock', () => {
+      // The zone is resolved lazily, so a bogus one only fails a call that
+      // actually needs it — a fixed-duration shift and a bare absolute don't.
+      expect(parseGrafanaTimeExpr('now-1h', nowMs, { timeZone: 'Mars/Olympus_Mons' })).toBe(nowMs - 3_600_000);
+      expect(parseGrafanaTimeExpr('1780704000000', nowMs, { timeZone: 'Mars/Olympus_Mons' })).toBe(1780704000000);
+    });
+  });
+
+  describe('midnight DST transitions', () => {
+    // America/Havana springs forward at 00:00 on 2026-03-08 (clocks jump
+    // straight to 01:00) and falls back at 01:00 on 2026-11-01 (so 00:00 runs
+    // twice). Rounding lands exactly on those boundaries, and getting either
+    // wrong moves "today" to the wrong calendar day.
+    const havana = { timeZone: 'America/Havana' } as const;
+    const localTime = (ms: number) =>
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Havana',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hourCycle: 'h23',
+      }).format(new Date(ms));
+
+    it('resolves a nonexistent midnight forward past the gap, not backwards into the previous day', () => {
+      const noon = Date.parse('2026-03-08T18:00:00Z');
+      expect(localTime(parseGrafanaTimeExpr('now/d', noon, havana))).toBe('2026-03-08, 01:00:00');
+      expect(localTime(parseGrafanaTimeExpr('now/d', noon, { ...havana, roundUp: true }))).toBe('2026-03-08, 23:59:59');
+    });
+
+    it("does not carry the gap-shifted start's clock time into the next day when deriving the end", () => {
+      // endOf as "start + 1 day - 1ms" would land at 00:59:59.999 tomorrow,
+      // making the window run an hour past the local day it reports.
+      const noon = Date.parse('2026-03-08T18:00:00Z');
+      const start = parseGrafanaTimeExpr('now/d', noon, havana);
+      const end = parseGrafanaTimeExpr('now/d', noon, { ...havana, roundUp: true });
+      expect(end - start).toBe(23 * 3_600_000 - 1);
+      expect(localTime(end + 1)).toBe('2026-03-09, 00:00:00');
+    });
+
+    it('resolves an ambiguous midnight to its first occurrence', () => {
+      const noon = Date.parse('2026-11-01T18:00:00Z');
+      const start = parseGrafanaTimeExpr('now/d', noon, havana);
+      expect(start).toBe(Date.parse('2026-11-01T04:00:00.000Z'));
+      expect(localTime(start)).toBe('2026-11-01, 00:00:00');
+      // 00:00 runs twice, so the local day is 25 hours long.
+      expect(parseGrafanaTimeExpr('now/d', noon, { ...havana, roundUp: true }) - start).toBe(25 * 3_600_000 - 1);
+    });
+
+    it('rounds correctly in a zone with a sub-hour offset and a sub-hour DST shift', () => {
+      // Australia/Lord_Howe is +10:30/+11:00 with a 30-minute transition.
+      const noon = Date.parse('2026-10-04T02:00:00Z');
+      const opts = { timeZone: 'Australia/Lord_Howe' } as const;
+      const start = parseGrafanaTimeExpr('now/d', noon, opts);
+      const end = parseGrafanaTimeExpr('now/d', noon, { ...opts, roundUp: true });
+      expect(end - start).toBe(23.5 * 3_600_000 - 1);
+    });
+  });
+
+  describe('zone-less absolute timestamps', () => {
+    // Date.parse reads a zone-less date-*time* as the host process's local
+    // time and a date-only string as UTC — so the same link would resolve
+    // differently per machine, and adding a time component would shift the
+    // window. Grafana's dateTimeParse reads both in the dashboard's zone.
+    it('resolves a zone-less date-time in the given zone, not the host process one', () => {
+      expect(parseGrafanaTimeExpr('2026-03-01T00:00:00', 0, { timeZone: 'UTC' })).toBe(Date.parse('2026-03-01T00:00:00Z'));
+      expect(parseGrafanaTimeExpr('2026-03-01T00:00:00', 0, { timeZone: 'America/Los_Angeles' })).toBe(
+        Date.parse('2026-03-01T08:00:00Z'),
+      );
+      expect(parseGrafanaTimeExpr('2026-03-01 12:30:45.250', 0, { timeZone: 'UTC' })).toBe(
+        Date.parse('2026-03-01T12:30:45.250Z'),
+      );
+    });
+
+    it('reads a date-only string the same way as a date-time, rather than switching to UTC', () => {
+      for (const timeZone of ['UTC', 'America/Los_Angeles', 'Asia/Kolkata']) {
+        expect(parseGrafanaTimeExpr('2026-03-01', 0, { timeZone })).toBe(
+          parseGrafanaTimeExpr('2026-03-01T00:00:00', 0, { timeZone }),
+        );
+      }
+    });
+
+    it('leaves a timestamp that carries its own offset alone', () => {
+      for (const timeZone of ['UTC', 'America/Los_Angeles']) {
+        expect(parseGrafanaTimeExpr('2026-03-01T00:00:00Z', 0, { timeZone })).toBe(Date.parse('2026-03-01T00:00:00Z'));
+        expect(parseGrafanaTimeExpr('2026-03-01T00:00:00+02:00', 0, { timeZone })).toBe(
+          Date.parse('2026-03-01T00:00:00+02:00'),
+        );
+      }
+    });
+
+    it('applies date math to a zone-less anchor in that same zone', () => {
+      expect(parseGrafanaTimeExpr('2026-03-02T00:00:00||-1d', 0, { timeZone: 'America/Los_Angeles' })).toBe(
+        Date.parse('2026-03-01T08:00:00Z'),
+      );
+    });
   });
 
   describe('refusals', () => {
@@ -195,9 +290,28 @@ describe('describeGrafanaTimeExpr', () => {
       relative: false,
       rounds: false,
       roundsWeek: false,
+      zoneAnchored: false,
       zoneSensitive: false,
     });
     expect(describeGrafanaTimeExpr('2026-06-08T00:00:00Z').relative).toBe(false);
+    // Carries its own offset, so no zone is needed to place it.
+    expect(describeGrafanaTimeExpr('2026-06-08T00:00:00+02:00').zoneSensitive).toBe(false);
+  });
+
+  it('flags a zone-less timestamp as needing a zone, even though it is not relative', () => {
+    expect(describeGrafanaTimeExpr('2026-03-01T00:00:00')).toEqual({
+      relative: false,
+      rounds: false,
+      roundsWeek: false,
+      zoneAnchored: true,
+      zoneSensitive: true,
+    });
+    expect(describeGrafanaTimeExpr('2026-03-01').zoneAnchored).toBe(true);
+    expect(describeGrafanaTimeExpr('2026-03-01T00:00:00||-1d')).toMatchObject({
+      relative: true,
+      zoneAnchored: true,
+      zoneSensitive: true,
+    });
   });
 
   it('reports a sub-day relative expression as zone-independent, so the preferences lookup can be skipped', () => {
@@ -205,6 +319,7 @@ describe('describeGrafanaTimeExpr', () => {
       relative: true,
       rounds: false,
       roundsWeek: false,
+      zoneAnchored: false,
       zoneSensitive: false,
     });
     expect(describeGrafanaTimeExpr('now-90m').zoneSensitive).toBe(false);
@@ -221,12 +336,14 @@ describe('describeGrafanaTimeExpr', () => {
       relative: true,
       rounds: true,
       roundsWeek: false,
+      zoneAnchored: false,
       zoneSensitive: true,
     });
     expect(describeGrafanaTimeExpr('now/w-28d')).toEqual({
       relative: true,
       rounds: true,
       roundsWeek: true,
+      zoneAnchored: false,
       zoneSensitive: true,
     });
   });

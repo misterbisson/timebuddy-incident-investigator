@@ -177,8 +177,27 @@ preferences falls through rather than erroring), then the documented UTC/Sunday 
 and whichever tier answered is *reported* on the result as `window.relativeTime`, because
 a wrong week-start is otherwise indistinguishable from a correct one. **An expression it
 can't classify is refused**, fiscal-period units by name; the whole hazard here is that a
-mis-resolved window looks like data rather than an error. See
-`docs/BEHAVIOR.md`'s "Relative time params" section, and keep it current.
+mis-resolved window looks like data rather than an error.
+
+Two deliberate non-refusals sit inside that last rule, both because the alternative fails
+calls that need nothing from the thing that's broken. A configured zone this runtime can't
+resolve is *skipped* (next tier answers, discarded value reported as `timeZoneIgnored`)
+rather than fatal — one typo'd `timezone` field on a dashboard would otherwise take out
+every window on it. And `Zone` validates its zone lazily, on first wall-clock read, so
+`now-1h` and bare epoch-ms bounds never touch it; validating in the constructor made them
+fail too.
+
+`Zone.toInstant`'s DST handling is also load-bearing and looks over-built until it isn't:
+a wall clock can name no instant (a spring-forward gap) or two (a fall-back hour), and in
+zones that transition *at midnight* — `America/Havana`, `America/Santiago` — that is
+exactly where day/week/month rounding lands. Candidate offsets are round-tripped, gaps
+resolve forward and ambiguity to the first occurrence (moment's normalization, hence
+Grafana's), and `endOf` finds the next period's start by *rounding* into it rather than
+shifting this one's start. `test/dateMathZones.test.ts` pins all of it against an
+independent bisect-the-`Intl`-output spec across thirteen zone/date cases; keep that test
+rather than trimming it to the obvious zones — the predecessor bug was invisible in every
+02:00-transition zone. See `docs/BEHAVIOR.md`'s "Relative time params" section, and keep
+it current.
 
 `index-builder/` is a separate concern: it crawls all dashboards (per connection) to
 build a metric/measurement -> dashboard reverse index, cached to

@@ -94,10 +94,19 @@ export interface TimeExprShape {
   /** Rounds to a week — the one unit whose boundary depends on the configured week-start. */
   roundsWeek: boolean;
   /**
-   * Resolving it needs a time zone: any rounding, or any shift by a day or
+   * Anchored on an ISO timestamp that carries no zone designator, so which
+   * instant it names is decided by the resolved zone rather than by the text.
+   * Not `relative` (nothing about it depends on the reference time), but it
+   * still has to be *resolved*, and a caller that reports how a window was
+   * resolved should report this one too.
+   */
+  zoneAnchored: boolean;
+  /**
+   * Resolving it needs a time zone: any rounding, any shift by a day or
    * larger (those are calendar arithmetic, so a DST transition inside the
-   * shift moves the result). A pure `now-90m` is zone-independent, which is
-   * what lets the common case skip the preferences lookup entirely.
+   * shift moves the result), or a zone-anchored timestamp. A pure `now-90m`
+   * is zone-independent, which is what lets the common case skip the
+   * preferences lookup entirely.
    */
   zoneSensitive: boolean;
 }
@@ -110,8 +119,42 @@ function invalidExpr(value: string): Error {
   );
 }
 
-function parseAbsolute(value: string): number | undefined {
+/**
+ * An ISO-8601 date or date-time carrying **no** zone designator — so which
+ * instant it names depends on a zone supplied from outside it.
+ *
+ * These can't go through `Date.parse`, whose answer for them is neither
+ * Grafana's nor self-consistent: a zone-less date-*time* is specified as the
+ * *host process's* local time (so the same link resolves differently per
+ * machine), while a date-only string is specified as UTC (so adding a time
+ * component silently shifts the window by the host's offset). Grafana's
+ * `dateTimeParse` reads both as wall clocks in the dashboard's zone, and so
+ * does this module — see `zoneAnchored` on TimeExprShape.
+ */
+const ZONELESS_TIMESTAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3})\d*)?)?)?$/;
+
+function isZonelessTimestamp(value: string): boolean {
+  return !/^\d+$/.test(value) && ZONELESS_TIMESTAMP_RE.test(value);
+}
+
+function parseAbsolute(value: string, zone: Zone): number | undefined {
   if (/^\d+$/.test(value)) return Number(value);
+  const zoneless = ZONELESS_TIMESTAMP_RE.exec(value);
+  if (zoneless) {
+    const [, year, month, day, hour, minute, second, fraction] = zoneless;
+    return zone.toInstant({
+      year: Number(year),
+      month: Number(month),
+      day: Number(day),
+      hour: Number(hour ?? 0),
+      minute: Number(minute ?? 0),
+      second: Number(second ?? 0),
+      ms: Number((fraction ?? '').padEnd(3, '0')),
+    });
+  }
+  // Everything else carries its own offset ("...Z", "...+02:00"), where the
+  // zone plays no part, or is a format only Date.parse might recognize.
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? undefined : parsed;
 }
@@ -122,13 +165,18 @@ function parseAbsolute(value: string): number | undefined {
  * reference time, otherwise the text up to `||` is an absolute date and the
  * rest is date math (a bare absolute date is just the whole string).
  */
-function splitAnchor(value: string, nowMs: number): { anchorMs: number; math: string } {
+function splitAnchor(value: string, nowMs: number, zone: Zone): { anchorMs: number; math: string } {
   if (value.startsWith('now')) return { anchorMs: nowMs, math: value.slice(3) };
   const sep = value.indexOf('||');
   const datePart = sep === -1 ? value : value.slice(0, sep);
-  const anchorMs = parseAbsolute(datePart);
+  const anchorMs = parseAbsolute(datePart, zone);
   if (anchorMs === undefined) throw invalidExpr(value);
   return { anchorMs, math: sep === -1 ? '' : value.slice(sep + 2) };
+}
+
+function anchorText(value: string): string {
+  const sep = value.indexOf('||');
+  return sep === -1 ? value : value.slice(0, sep);
 }
 
 function parseOps(math: string, whole: string): TimeOp[] {
@@ -178,18 +226,25 @@ function parseOps(math: string, whole: string): TimeOp[] {
 export function describeGrafanaTimeExpr(value: string): TimeExprShape {
   const trimmed = value.trim();
   const relative = trimmed.startsWith('now') || trimmed.includes('||');
+  const zoneAnchored = !relative ? isZonelessTimestamp(trimmed) : isZonelessTimestamp(anchorText(trimmed));
   if (!relative) {
-    if (parseAbsolute(trimmed) === undefined) throw invalidExpr(value);
-    return { relative: false, rounds: false, roundsWeek: false, zoneSensitive: false };
+    // UTC only to *validate* the text here; the real zone is applied when the
+    // caller has resolved one and calls parseGrafanaTimeExpr.
+    if (parseAbsolute(trimmed, new Zone(DEFAULT_TIME_ZONE)) === undefined) throw invalidExpr(value);
+    return { relative: false, rounds: false, roundsWeek: false, zoneAnchored, zoneSensitive: zoneAnchored };
   }
-  const { math } = splitAnchor(trimmed, 0);
+  const { math } = splitAnchor(trimmed, 0, new Zone(DEFAULT_TIME_ZONE));
   const ops = parseOps(math, value);
   const rounds = ops.some((o) => o.op === '/');
   return {
     relative: true,
     rounds,
     roundsWeek: ops.some((o) => o.op === '/' && o.unit === 'w'),
-    zoneSensitive: rounds || ops.some((o) => o.unit === 'd' || o.unit === 'w' || o.unit === 'M' || o.unit === 'Q' || o.unit === 'y'),
+    zoneAnchored,
+    zoneSensitive:
+      rounds
+      || zoneAnchored
+      || ops.some((o) => o.unit === 'd' || o.unit === 'w' || o.unit === 'M' || o.unit === 'Q' || o.unit === 'y'),
   };
 }
 
@@ -203,7 +258,7 @@ export function parseGrafanaTimeExpr(value: string, nowMs: number, opts: Grafana
   const zone = new Zone(opts.timeZone ?? DEFAULT_TIME_ZONE);
   const weekStartDay = WEEK_START_DAY[opts.weekStart ?? DEFAULT_WEEK_START];
   const trimmed = value.trim();
-  const { anchorMs, math } = splitAnchor(trimmed, nowMs);
+  const { anchorMs, math } = splitAnchor(trimmed, nowMs, zone);
   let time = anchorMs;
   for (const { op, amount, unit } of parseOps(math, value)) {
     if (op === '/') {
@@ -240,31 +295,41 @@ const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
  * transition instead of an hour off.
  */
 class Zone {
-  constructor(private readonly timeZone: string) {
-    if (!FORMATTERS.has(timeZone)) {
-      let formatter: Intl.DateTimeFormat;
-      try {
-        formatter = new Intl.DateTimeFormat('en-US', {
-          timeZone,
-          hourCycle: 'h23',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        });
-      } catch {
-        throw new Error(
-          `Unknown time zone "${timeZone}" — expected an IANA zone name (e.g. "America/Los_Angeles") or "UTC".`,
-        );
-      }
-      FORMATTERS.set(timeZone, formatter);
+  constructor(private readonly timeZone: string) {}
+
+  /**
+   * Built on first use, not in the constructor: a zone this runtime can't
+   * resolve must only fail a call that actually *reads* a wall clock. An
+   * expression like `now-1h` (or a bare epoch-ms bound) never touches one, and
+   * eagerly validating here made an unusable zone saved on a dashboard fail
+   * those too.
+   */
+  private formatter(): Intl.DateTimeFormat {
+    const cached = FORMATTERS.get(this.timeZone);
+    if (cached) return cached;
+    let formatter: Intl.DateTimeFormat;
+    try {
+      formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: this.timeZone,
+        hourCycle: 'h23',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    } catch {
+      throw new Error(
+        `Unknown time zone "${this.timeZone}" — expected an IANA zone name (e.g. "America/Los_Angeles") or "UTC".`,
+      );
     }
+    FORMATTERS.set(this.timeZone, formatter);
+    return formatter;
   }
 
   private wallClock(ms: number): WallClock {
-    const parts = FORMATTERS.get(this.timeZone)!.formatToParts(new Date(ms));
+    const parts = this.formatter().formatToParts(new Date(ms));
     const field = (type: string): number => Number(parts.find((p) => p.type === type)!.value);
     const hour = field('hour');
     return {
@@ -292,11 +357,38 @@ class Zone {
    * normalized the way `Date.UTC` normalizes them, which is also how moment
    * treats an overflowing set — so callers can subtract days from a
    * day-of-month without special-casing month boundaries.
+   *
+   * A wall clock does not always name exactly one instant, and both exceptions
+   * matter here because DST transitions in some zones happen *at midnight* —
+   * exactly where day/week/month rounding lands:
+   *
+   * - **Ambiguous** (a fall-back hour that runs twice, e.g. `America/Havana`
+   *   2026-11-01 00:00): two instants qualify, and the earlier is returned —
+   *   the first occurrence, as moment resolves it.
+   * - **Nonexistent** (a spring-forward gap, e.g. `America/Havana` 2026-03-08
+   *   00:00, where clocks jump straight to 01:00): no instant qualifies, so
+   *   the answer is resolved *forward*, past the gap, to 01:00 local — again
+   *   moment's normalization, and therefore Grafana's.
+   *
+   * The candidate offsets have to be round-tripped rather than just applied in
+   * sequence. Applying the second one unconditionally is wrong in a gap: for
+   * the Havana case it walks 00:00 -> 05:00Z (correctly 01:00 local, past the
+   * gap) and then back to 04:00Z, which is 23:00 on the *previous day* — so
+   * `now/d` silently named the wrong calendar day.
    */
-  private toInstant(w: WallClock): number {
+  toInstant(w: WallClock): number {
     const naive = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second, w.ms);
-    const guess = naive - this.offsetAt(naive);
-    return naive - this.offsetAt(guess);
+    const first = this.offsetAt(naive);
+    const candidate = naive - first;
+    const second = this.offsetAt(candidate);
+    if (first === second) return candidate;
+    // An offset is right for a candidate instant only if it is the offset
+    // actually in effect there: offsetAt(t) === naive - t.
+    const valid = [candidate, naive - second].filter((t) => this.offsetAt(t) === naive - t);
+    // Ambiguous -> earliest match. Gap (nothing round-trips) -> the later
+    // candidate, which is the one computed with the pre-transition offset and
+    // so lands just after the gap.
+    return valid.length > 0 ? Math.min(...valid) : Math.max(candidate, naive - second);
   }
 
   startOf(ms: number, unit: Unit, weekStartDay: number): number {
@@ -325,12 +417,21 @@ class Zone {
   }
 
   /**
-   * The period's last millisecond, computed as "start of the next period minus
-   * 1ms" — which is exactly what moment's `endOf` does, and therefore stays
-   * right on a day that a DST transition made 23 or 25 hours long.
+   * The period's last millisecond, as "start of the *next* period minus 1ms" —
+   * which is what moment's `endOf` computes, and stays right on a day a DST
+   * transition made 23 or 25 hours long.
+   *
+   * The next period's start is found by rounding a point inside it, not by
+   * shifting this period's start. Shifting alone preserves wall-clock time,
+   * and on a day whose first instant a spring-forward gap pushed off midnight
+   * that carries the wrong clock time into the next period: Havana's
+   * 2026-03-08 begins at 01:00 local, so `start + 1d - 1ms` would land at
+   * 00:59:59.999 *tomorrow* and the "day" would run an hour into it. The extra
+   * `startOf` is a no-op in every ordinary case.
    */
   endOf(ms: number, unit: Unit, weekStartDay: number): number {
-    return this.shift(this.startOf(ms, unit, weekStartDay), 1, unit) - 1;
+    const start = this.startOf(ms, unit, weekStartDay);
+    return this.startOf(this.shift(start, 1, unit), unit, weekStartDay) - 1;
   }
 
   shift(ms: number, amount: number, unit: Unit): number {
@@ -391,14 +492,17 @@ export function normalizeTimeZone(value: string | undefined): string | undefined
   return trimmed;
 }
 
-/** Throws a message naming where an unusable zone came from, rather than silently resolving the window somewhere else. */
-export function assertKnownTimeZone(timeZone: string, source: string): void {
+/**
+ * Whether this runtime can resolve wall clocks in `timeZone`. A caller
+ * resolving a zone across several tiers uses this to skip an unusable value and
+ * fall through to the next one — rather than failing a call outright over a
+ * setting it may not even need (see resolveRenderWindow).
+ */
+export function isKnownTimeZone(timeZone: string): boolean {
   try {
-    new Zone(timeZone);
+    new Zone(timeZone).startOf(0, 's', 0);
+    return true;
   } catch {
-    throw new Error(
-      `Time zone "${timeZone}" (from ${source}) is not a zone this runtime knows — expected an IANA zone name ` +
-        '(e.g. "America/Los_Angeles") or "UTC". Pass fromMs/toMs explicitly to resolve the window yourself.',
-    );
+    return false;
   }
 }

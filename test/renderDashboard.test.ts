@@ -203,10 +203,66 @@ describe('resolveRenderWindow', () => {
       expect(lookup).not.toHaveBeenCalled();
     });
 
-    it('names where an unusable zone came from rather than quietly resolving somewhere else', async () => {
-      await expect(
-        resolveRenderWindow({ urlFromRaw: 'now/d', urlToRaw: 'now', dashboardTimezone: 'Mars/Olympus_Mons', nowMs }),
-      ).rejects.toThrow(/from the dashboard's saved timezone/);
+    it('skips a zone this runtime cannot resolve and reports what it discarded', async () => {
+      // Falling through beats failing: one typo'd (or ICU-unknown) `timezone`
+      // field on a dashboard would otherwise take out every window on it.
+      const result = await resolveRenderWindow({
+        urlFromRaw: 'now/d',
+        urlToRaw: 'now',
+        dashboardTimezone: 'Mars/Olympus_Mons',
+        nowMs,
+      });
+      expect(result.fromMs).toBe(at('2026-07-07T00:00:00.000Z'));
+      expect(result.relativeTime).toMatchObject({
+        timeZone: 'UTC',
+        timeZoneSource: 'default',
+        timeZoneIgnored: ['Mars/Olympus_Mons'],
+      });
+    });
+
+    it('falls through an unusable zone to the next tier that can answer', async () => {
+      const result = await resolveRenderWindow({
+        urlFromRaw: 'now/d',
+        urlToRaw: 'now',
+        urlTimezone: 'Mars/Olympus_Mons',
+        dashboardTimezone: 'America/Los_Angeles',
+        nowMs,
+      });
+      expect(result.relativeTime).toMatchObject({
+        timeZone: 'America/Los_Angeles',
+        timeZoneSource: 'dashboard',
+        timeZoneIgnored: ['Mars/Olympus_Mons'],
+      });
+    });
+
+    it('does not fail a window the zone plays no part in, which is what an unusable zone used to do', async () => {
+      // All three of these work with no zone at all; none should care that the
+      // dashboard's saved one is unusable.
+      for (const args of [
+        { urlFromRaw: 'now-1h', urlToRaw: 'now' },
+        { urlFromRaw: '100', urlToRaw: '200' },
+        { urlFromRaw: 'now-30d', urlToRaw: 'now' },
+      ]) {
+        const result = await resolveRenderWindow({ ...args, dashboardTimezone: 'Mars/Olympus_Mons', nowMs });
+        expect(result.toMs).toBeGreaterThan(result.fromMs);
+      }
+    });
+
+    it('resolves a zone-less absolute bound against the connection\'s zone, and reports it', async () => {
+      // Not "relative", but its instant still depends on a zone, so it is
+      // resolved and reported like one rather than falling to the host's zone.
+      const result = await resolveRenderWindow({
+        urlFromRaw: '2026-03-01T00:00:00',
+        urlToRaw: '2026-03-02T00:00:00',
+        dashboardTimezone: 'America/Los_Angeles',
+        nowMs,
+      });
+      expect(result.fromMs).toBe(at('2026-03-01T08:00:00Z'));
+      expect(result.relativeTime).toMatchObject({
+        from: '2026-03-01T00:00:00',
+        timeZone: 'America/Los_Angeles',
+        timeZoneSource: 'dashboard',
+      });
     });
   });
 });

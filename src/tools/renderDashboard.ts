@@ -8,10 +8,10 @@ import { parseGrafanaUrl } from '../alerts/urlParser.js';
 import type { ConnectionPreferences } from '../grafana/preferences.js';
 import { fetchConnectionPreferences } from '../grafana/preferences.js';
 import {
-  assertKnownTimeZone,
   DEFAULT_TIME_ZONE,
   DEFAULT_WEEK_START,
   describeGrafanaTimeExpr,
+  isKnownTimeZone,
   normalizeTimeZone,
   normalizeWeekStart,
   parseGrafanaTimeExpr,
@@ -91,6 +91,14 @@ export interface RelativeTimeResolution {
    */
   timeZone?: string;
   timeZoneSource?: 'url' | 'dashboard' | 'connection-preferences' | 'default';
+  /**
+   * Zone values found in the link/dashboard/preferences that this runtime
+   * can't resolve, and so skipped in favour of the next tier. Present only
+   * when there were any (and the zone mattered) — a configured-but-unusable
+   * zone is a different situation from nothing being configured, and only
+   * this field distinguishes them.
+   */
+  timeZoneIgnored?: string[];
   /** Present only when a "/w" round made the week-start matter. */
   weekStart?: WeekStart;
   weekStartSource?: 'dashboard' | 'connection-preferences' | 'default';
@@ -140,14 +148,29 @@ export async function resolveRenderWindow(input: ResolveRenderWindowInput): Prom
   }
 
   const shapes = [fromExpr, toExpr].filter((e): e is string => e !== undefined).map(describeGrafanaTimeExpr);
-  const anyRelative = shapes.some((s) => s.relative);
+  const anyToReport = shapes.some((s) => s.relative || s.zoneAnchored);
   const zoneSensitive = shapes.some((s) => s.zoneSensitive);
   const needsWeekStart = shapes.some((s) => s.roundsWeek);
 
-  let timeZone = normalizeTimeZone(input.urlTimezone);
+  // A configured zone this runtime can't resolve is skipped rather than
+  // fatal, and the next tier answers instead. Failing the call would mean one
+  // typo'd (or ICU-unknown) `timezone` field on a dashboard takes out
+  // render_dashboard/screenshot_panel/export_panel_csv for that dashboard
+  // entirely — including windows the zone plays no part in. The discarded
+  // value is reported as `timeZoneIgnored` so the fallback isn't mistaken for
+  // "nothing was configured".
+  const ignoredTimeZones: string[] = [];
+  const usable = (value: string | undefined): string | undefined => {
+    if (value === undefined) return undefined;
+    if (isKnownTimeZone(value)) return value;
+    ignoredTimeZones.push(value);
+    return undefined;
+  };
+
+  let timeZone = usable(normalizeTimeZone(input.urlTimezone));
   let timeZoneSource: NonNullable<RelativeTimeResolution['timeZoneSource']> = 'url';
   if (timeZone === undefined) {
-    timeZone = normalizeTimeZone(input.dashboardTimezone);
+    timeZone = usable(normalizeTimeZone(input.dashboardTimezone));
     timeZoneSource = 'dashboard';
   }
   let weekStart = normalizeWeekStart(input.dashboardWeekStart);
@@ -157,7 +180,7 @@ export async function resolveRenderWindow(input: ResolveRenderWindowInput): Prom
   if (wantsPreferences && input.preferences) {
     const prefs = await input.preferences();
     if (timeZone === undefined) {
-      timeZone = normalizeTimeZone(prefs.timezone);
+      timeZone = usable(normalizeTimeZone(prefs.timezone));
       timeZoneSource = 'connection-preferences';
     }
     if (weekStart === undefined) {
@@ -168,11 +191,6 @@ export async function resolveRenderWindow(input: ResolveRenderWindowInput): Prom
   if (timeZone === undefined) {
     timeZone = DEFAULT_TIME_ZONE;
     timeZoneSource = 'default';
-  } else if (zoneSensitive) {
-    // Only validated when it can actually move the window: a bogus zone saved
-    // on a dashboard shouldn't fail a plain "now-1h" render that would ignore
-    // it anyway.
-    assertKnownTimeZone(timeZone, TIME_ZONE_SOURCE_LABEL[timeZoneSource]);
   }
   if (weekStart === undefined) {
     weekStart = DEFAULT_WEEK_START;
@@ -183,7 +201,7 @@ export async function resolveRenderWindow(input: ResolveRenderWindowInput): Prom
   const fromMs = input.inputFromMs ?? parseGrafanaTimeExpr(fromExpr!, input.nowMs, opts);
   const toMs = input.inputToMs ?? parseGrafanaTimeExpr(toExpr!, input.nowMs, { ...opts, roundUp: true });
 
-  if (!anyRelative) return { fromMs, toMs };
+  if (!anyToReport) return { fromMs, toMs };
   return {
     fromMs,
     toMs,
@@ -196,17 +214,11 @@ export async function resolveRenderWindow(input: ResolveRenderWindowInput): Prom
       ...(fromExpr !== undefined ? { from: fromExpr } : {}),
       ...(toExpr !== undefined ? { to: toExpr } : {}),
       ...(zoneSensitive ? { timeZone, timeZoneSource } : {}),
+      ...(zoneSensitive && ignoredTimeZones.length > 0 ? { timeZoneIgnored: ignoredTimeZones } : {}),
       ...(needsWeekStart ? { weekStart, weekStartSource } : {}),
     },
   };
 }
-
-const TIME_ZONE_SOURCE_LABEL: Record<NonNullable<RelativeTimeResolution['timeZoneSource']>, string> = {
-  url: 'the link\'s "timezone" param',
-  dashboard: "the dashboard's saved timezone",
-  'connection-preferences': "the connection's Grafana preferences",
-  default: 'the documented default',
-};
 
 export function registerRenderDashboard(server: McpServer, { registry, config, activityLog }: ToolContext): void {
   server.registerTool(

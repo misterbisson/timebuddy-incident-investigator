@@ -332,8 +332,9 @@ these.
 Rounding to a day or a week names a *wall-clock* boundary, so the answer depends on your
 time zone and on which day your week starts. Those are read from your own Grafana, in this
 order: the link's `timezone` param, then the dashboard's saved timezone/week-start, then
-your Grafana user or org preferences. If none of them settle it, the window is resolved in
-**UTC** with a **Sunday** week start.
+your Grafana user or org preferences. If none of them settle it — or the zone one of them
+names isn't one this app can recognize — the window is resolved in **UTC** with a **Sunday**
+week start.
 
 You never have to guess which of those applied. When a link's time range was relative, the
 result reports what it resolved to, and where each piece came from:
@@ -350,7 +351,9 @@ result reports what it resolved to, and where each piece came from:
 ```
 
 A `Source` of `"default"` means nothing in the link, the dashboard, or your Grafana
-preferences answered the question — worth a look if the window isn't what you expected.
+preferences answered the question — worth a look if the window isn't what you expected. A
+`timeZoneIgnored` list means a timezone *was* configured somewhere but isn't one this app
+could use, so it was skipped.
 Full details, including why a range's start and end deliberately round in opposite
 directions, are in [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md#relative-time-params-rounding-week-start-and-time-zone).
 
