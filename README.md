@@ -481,13 +481,29 @@ project-scoped `.mcp.json` in the repo where you author dashboards:
 ```json
 {
   "mcpServers": {
-    "timebuddy": {
-      "command": "timebuddy",
+    "timebuddy-adhoc": {
+      "command": "/Applications/Timebuddy Incident Investigator.app/Contents/MacOS/Timebuddy Incident Investigator",
       "args": ["--mcp-server", "--allow-adhoc-queries=metrics.staging.example.com:influxdb"]
     }
   }
 }
 ```
+
+**Give this entry a name of its own** — `timebuddy-adhoc` above — rather than reusing the name
+of a Timebuddy server your client already has configured globally. Registering the app with
+Claude adds exactly such a server, without this flag, and a project entry sharing its name is
+ambiguous: MCP clients differ in which of the two wins, and in at least one combination the
+project entry is never offered for approval at all, so the flag silently does nothing. A
+distinct name sidesteps the question. Both servers then register and their tool lists overlap,
+which is expected: keep using the tools from your usual server and reach across for
+`execute_adhoc_query`, which arrives under the project server's name.
+
+**`command` is the app-bundle path**, the same one [Registering with Claude](#registering-with-claude)
+fills in for you — there's no `timebuddy` CLI on `PATH` to invoke instead. A checked-in
+`.mcp.json` therefore assumes everyone on the team installed the app to the same location; on a
+machine where that path doesn't exist the server just fails to start, which is why the distinct
+name matters — the failure costs only the ad-hoc tool and leaves your usual Timebuddy server
+working.
 
 The flag is `--allow-adhoc-queries=<host>:<datasourceType>[,<datasourceType>]`, repeatable once
 per endpoint. `<host>` is matched against each connection's URL host and its `matchHosts`
@@ -547,6 +563,23 @@ measures real scrape density instead of taking a stated interval on trust; a Met
 construct (`up default 0`) tells a VictoriaMetrics instance from a Prometheus one, which decides
 whether `increase(x[1m])` at a 60s scrape is exact or empty. Those are facts about the
 datasource, not about a service, so there is no dashboard that could have encoded them.
+
+#### If `execute_adhoc_query` doesn't appear
+
+Its absence always means the tool was never **registered** — never that a query was rejected.
+An MCP server advertises one tool list per session, so the flag is read once at startup:
+
+- **Adding or changing the flag needs a full restart of the client session.** Restarting the
+  Timebuddy app is not the same thing, and neither is resuming a session that began before you
+  wrote the file — that session's tool list is already fixed.
+- **A hostname that matches no connection doesn't register anything either.** `<host>` is
+  matched against your configured connections, so a typo, or an endpoint you haven't added yet,
+  leaves the tool absent. The server logs which hosts went unmatched on stderr, which your
+  client may not show you — so check the spelling against
+  [Multiple connections](#multiple-connections) rather than the log.
+- **A server that failed to start looks identical.** If the `command` path is wrong (an app
+  bundle that moved, or a `timebuddy` CLI that isn't on `PATH`), you get no tool and no flag
+  error — just a server that isn't there.
 
 ## Local data and disk usage
 
