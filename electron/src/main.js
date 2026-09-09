@@ -69,13 +69,43 @@ const isMcpMode = process.argv.includes('--mcp-server');
 // mid-investigation than one that vanishes, and this is the same
 // "log-and-continue" contract Electron's own default handler has, minus the
 // dialog.
+//
+// "Report to stderr" is the part that has to be made safe before the handler is
+// safe, and #252 is what it costs when it isn't. stderr is a pipe to the same
+// parent as stdout, so it dies at the same instant the client does — and an
+// unhandled 'error' on it is an uncaught exception, which lands *here*, which
+// writes to stderr. That is not a crash, it is a loop: one orphan was found
+// spinning at ~97% of a core for 14h45m, too busy for idleShutdown.js to reap,
+// because a spinning process is never idle.
+//
+// So the streams get their listeners before anything can write to them. This is
+// deliberately earlier and blunter than the engine's own guard: guardStdioPipe()
+// doesn't exist until startMcpServer() runs, and the gap before that is exactly
+// where the startup logging happens. Both listeners coexist — the engine's
+// still sees the event and still reports the client gone.
 if (isMcpMode) {
-  process.on('uncaughtException', (err) => {
-    console.error('[mcp-server] uncaught exception:', err && err.stack ? err.stack : err);
-  });
-  process.on('unhandledRejection', (reason) => {
-    console.error('[mcp-server] unhandled rejection:', reason && reason.stack ? reason.stack : reason);
-  });
+  // A dead log channel has nobody to report itself to; that is the whole reason
+  // it must not be raised as an exception. Swallowed unconditionally, the same
+  // bargain src/stdioPipe.ts's header sets out for stdout.
+  process.stderr.on('error', () => {});
+  process.stdout.on('error', () => {});
+
+  // Belt to those braces: any *other* unguarded stream added later could reopen
+  // the same loop, and a handler that cannot re-enter cannot spin. Latched
+  // rather than counted — after the first failure to log, every subsequent
+  // attempt is writing to the same dead pipe.
+  let logChannelDead = false;
+  const report = (label, value) => {
+    if (logChannelDead) return;
+    try {
+      console.error(`[mcp-server] ${label}:`, value && value.stack ? value.stack : value);
+    } catch {
+      logChannelDead = true;
+    }
+  };
+
+  process.on('uncaughtException', (err) => report('uncaught exception', err));
+  process.on('unhandledRejection', (reason) => report('unhandled rejection', reason));
 }
 
 /**
