@@ -408,9 +408,10 @@ limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LO
 - Queries normally come from a dashboard someone authored, never from the model. The one
   exception is **`execute_adhoc_query`**, which is **absent unless you explicitly turn it on
   for a specific workspace and endpoint** — see [Ad-hoc queries](#ad-hoc-queries-off-by-default)
-  below. When it is on, only single-statement `SELECT`/`SHOW` queries run, only against
-  datasource types you named, and every query (including refused ones) is recorded with a
-  Grafana Explore URL that replays it.
+  below. When it is on, it reaches only datasource types you named, in a language whose reads
+  can be told from its writes (single-statement `SELECT`/`SHOW` for InfluxQL; PromQL, which has
+  no write form at all), and every query — including refused ones — is recorded with a Grafana
+  Explore URL that replays it.
 - `security/limits.ts` caps query time-range span, max data points, and concurrent outgoing
   requests.
 - `security/redact.ts` masks secret-shaped fields and configured customer-identifier
@@ -455,15 +456,30 @@ manifest to enable it.
 
 What holds when it's on:
 
-- **Only reads.** Single-statement `SELECT`/`SHOW` only. Statement heads are allowlisted rather
-  than destructive verbs blocklisted, so `DROP`/`DELETE`/`ALTER`/`CREATE` — and anything
-  InfluxDB adds later — are refused by not being on the list. `SELECT … INTO` is refused
-  separately, since it writes despite starting with `SELECT`. Anything unclassifiable is
-  refused.
-- **Only datasource types with a guard.** InfluxQL today. A type you authorize but that has no
-  read-only guard yet (raw SQL, for instance) is still refused — being willing isn't the same
-  as being verifiable.
+- **Only reads.** For InfluxQL: single-statement `SELECT`/`SHOW` only. Statement heads are
+  allowlisted rather than destructive verbs blocklisted, so `DROP`/`DELETE`/`ALTER`/`CREATE` —
+  and anything InfluxDB adds later — are refused by not being on the list. `SELECT … INTO` is
+  refused separately, since it writes despite starting with `SELECT`. Anything unclassifiable is
+  refused. For PromQL there is no statement to classify: the language has no write, delete, or
+  DDL form, and Grafana's Prometheus backend only ever reaches its query endpoints. What the
+  PromQL guard does enforce is one expression per call (so the audit record, the `provenance`
+  marking, and the Explore URL each describe exactly what ran) and refusal of anything it can't
+  read as one — an unterminated string, an unbalanced bracket, a stray `;`.
+- **Only datasource types with a guard.** InfluxQL against `influxdb`, PromQL/MetricsQL against
+  `prometheus` (which is how most VictoriaMetrics instances are configured). A type you
+  authorize but that has no read-only guard yet (raw SQL, for instance) is still refused —
+  being willing isn't the same as being verifiable.
+- **A step you chose, and a step you can check.** A PromQL range query requires an explicit
+  `stepSeconds`; it is never inferred, because the step decides the answer of every
+  range-vector function (`rate`, `increase`, `delta`, `*_over_time`). The result then reports
+  what the returned timestamps say about the step the datasource actually used, and says it
+  carefully: a mismatch is reported only when the numbers *prove* one, because a sparse metric
+  returns widely spaced points at a perfectly honoured step and calling that a mismatch would
+  make a correct measurement look wrong. See
+  [PromQL step reporting](docs/TOOLS.md#promql-step-reporting).
 - **The same caps as everything else.** `MAX_LOOKBACK_HOURS`, `MAX_DATA_POINTS`, concurrency.
+  The step is bounded by the same `MAX_DATA_POINTS`: a step that would ask for more evaluation
+  points than that is refused, naming the finest one the window can carry.
 - **A replayable audit trail.** Every call records a Grafana Explore URL that re-runs exactly
   that query over exactly that window (absolute timestamps, never `now-1h`), in `audit.jsonl`
   and in the app's Activity window. Refused and failed queries are recorded too — those are the
@@ -478,6 +494,13 @@ right and be subtly wrong, and the analysis here will compute a confident z-scor
 Prefer `find_related_dashboards` → `resolve_panel_queries` → `execute_query_window`, and reach
 for this when that path comes up empty or when you're iterating on a query you intend to put on
 a dashboard.
+
+The one class of question where this tool is the *right* first move rather than a fallback:
+questions about the shape of the data itself, which no panel answers. `count_over_time(metric[1m])`
+measures real scrape density instead of taking a stated interval on trust; a MetricsQL-only
+construct (`up default 0`) tells a VictoriaMetrics instance from a Prometheus one, which decides
+whether `increase(x[1m])` at a 60s scrape is exact or empty. Those are facts about the
+datasource, not about a service, so there is no dashboard that could have encoded them.
 
 ## Local data and disk usage
 
