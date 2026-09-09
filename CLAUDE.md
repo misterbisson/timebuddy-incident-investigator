@@ -66,7 +66,8 @@ Three things shape almost every module here and are easy to miss from a partial 
 1. **The Grafana client is a closed allowlist, not a passthrough.** `src/grafana/client.ts`
    exposes exactly the read-only endpoints the tools need (search, dashboard-by-uid,
    datasources, `/api/ds/query`, alertmanager alerts, ruler rules, annotations, short-URL
-   resolution, and the Prometheus/Loki label-values *resources* proxy) and nothing else. Note
+   resolution, user/org preferences, and the Prometheus/Loki label-values *resources* proxy)
+   and nothing else. Note
    the last one:
    `getPrometheusLabelValues`/`getLokiLabelValues` hit `/api/datasources/uid/:uid/resources/...`,
    which *could* be a generic datasource-proxy escape hatch — they deliberately aren't. Each
@@ -160,6 +161,24 @@ is expected to write the human-readable note from that structured output, which 
 returns alongside its data, deliberately using the same `viewPanel` URL shape
 `urlParser.ts` parses on the way in, so a URL built here round-trips if it's ever pasted
 back into `get_alert_context`.
+
+A link's own `from`/`to` are a separate resolution problem, and it's more than a regex:
+`query/dateMath.ts` implements Grafana's full date-math grammar (`now/w-28d`, `now-1d/d`,
+`<iso>||-1d`) as zone-aware calendar arithmetic over `Intl.DateTimeFormat`, and
+`tools/renderDashboard.ts`'s `resolveRenderWindow` — shared by `render_dashboard`,
+`screenshot_panel`, and `export_panel_csv` via `tools/panelInvocation.ts` — assembles the
+context it needs. Three things there are load-bearing and easy to undo by accident. **A
+range's two bounds round in opposite directions** (`from` to a period's first millisecond,
+`to` to its last), matching Grafana's own `rangeUtil.convertRawToRange`; collapsing that to
+one edge silently shifts a `now/w-28d`/`now/w-7d` window by a week. **The zone and
+week-start are resolved per-connection, never assumed** — link param, then dashboard
+settings, then `grafana/preferences.ts` (lazily read and cached; a token that can't read
+preferences falls through rather than erroring), then the documented UTC/Sunday defaults —
+and whichever tier answered is *reported* on the result as `window.relativeTime`, because
+a wrong week-start is otherwise indistinguishable from a correct one. **An expression it
+can't classify is refused**, fiscal-period units by name; the whole hazard here is that a
+mis-resolved window looks like data rather than an error. See
+`docs/BEHAVIOR.md`'s "Relative time params" section, and keep it current.
 
 `index-builder/` is a separate concern: it crawls all dashboards (per connection) to
 build a metric/measurement -> dashboard reverse index, cached to

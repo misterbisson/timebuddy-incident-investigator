@@ -26,6 +26,13 @@ every call is audit-logged.
 | `fetch_dashboard` | Fetch a dashboard's metadata, panel list, and template variables — from a dashboard/panel/alert-rule URL (connection auto-detected) or a `dashboardUid`. Useful for finding a panel's id/type from its title before calling another tool. |
 | `resolve_panel_queries` | Extract a panel's query targets with variables substituted (using `var-*` overrides from the alert link where available). |
 
+`render_dashboard`, `export_panel_csv`, and `screenshot_panel` use a pasted link's own
+`from`/`to` when no explicit `fromMs`/`toMs` is given, resolving Grafana's full date-math
+grammar — including the period-rounding shorthand (`now/d`, `now/w-7d`, `now-1d/d`) — against
+the connection's own timezone and week-start, and reporting what it resolved to as
+`window.relativeTime`. See
+[Relative time params](BEHAVIOR.md#relative-time-params-rounding-week-start-and-time-zone).
+
 `fetch_dashboard`, `render_dashboard`, `export_panel_csv`, and `screenshot_panel` all accept
 a Grafana `/goto/<shortId>` share short-link ("Share → Link → Shorten URL") wherever they
 accept a URL — it's resolved to its canonical dashboard/panel link first, transparently, via

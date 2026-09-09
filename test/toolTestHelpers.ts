@@ -73,6 +73,8 @@ function numberSeriesResponse(refId: string, points: Array<[number, number]>): D
 export function fakeGrafanaClient(opts: {
   dashboard: DashboardGetResponse;
   liveValues?: string[];
+  /** Answers the org-preferences read that relative-time resolution makes for a rounding expression; defaults to "nothing configured". */
+  preferences?: { timezone?: string; weekStart?: string };
 }): { client: GrafanaClient; queryDs: ReturnType<typeof vi.fn>; listDatasources: ReturnType<typeof vi.fn> } {
   const queryDs = vi.fn(async (req: DsQueryRequest) => {
     const target = req.queries[0]!;
@@ -86,6 +88,8 @@ export function fakeGrafanaClient(opts: {
     getDashboard: vi.fn(async () => opts.dashboard),
     queryDs,
     listDatasources,
+    getUserPreferences: vi.fn(async () => ({})),
+    getOrgPreferences: vi.fn(async () => opts.preferences ?? {}),
   } as unknown as GrafanaClient;
   return { client, queryDs, listDatasources };
 }

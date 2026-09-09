@@ -51,6 +51,14 @@ yourself; don't just describe what could be done.
      result echoes the `renderWidth` used and lists any `warnings` (e.g. it was clamped, or it had no
      effect because the direct path was taken - `renderWidth` only steers the browser-render path).
      For the direct path, resolution is governed by the server's `maxDataPoints`, not `renderWidth`.
+   - **When `window.relativeTime` is present**, the link's time range was relative (e.g.
+     `from=now/w-28d&to=now/w-7d`) and the tool resolved it for you - no need to work out the week
+     boundaries or the org's week-start yourself, and don't substitute hand-computed `fromMs`/`toMs`
+     for a link that already carries one of these. State the window the export actually covers in
+     your report (from `window.fromMs`/`toMs`), and flag it if `timeZoneSource` or `weekStartSource`
+     is `"default"` - that means neither the link, the dashboard, nor the Grafana connection said
+     which zone or week-start to use, so the window was resolved in UTC with a Sunday week start and
+     may not be the one the person had in mind.
    - `formulaNeutralized` is always `true`: every file this tool writes has cells beginning with `=`,
      `+`, `-`, or `@` prefixed with an apostrophe, so a spreadsheet displays them instead of executing
      them on open. On the captured path (`transformationsApplied: true`) that's done by re-serializing

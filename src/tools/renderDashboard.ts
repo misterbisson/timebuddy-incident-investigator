@@ -4,7 +4,19 @@ import type { ToolContext } from './registerAll.js';
 import type { QuerySeries } from '../query/executor.js';
 import type { SeriesStats } from '../analysis/baseline.js';
 import type { PanelTarget } from '../grafana/types.js';
-import { parseGrafanaUrl, parseGrafanaTimeExpr } from '../alerts/urlParser.js';
+import { parseGrafanaUrl } from '../alerts/urlParser.js';
+import type { ConnectionPreferences } from '../grafana/preferences.js';
+import { fetchConnectionPreferences } from '../grafana/preferences.js';
+import {
+  assertKnownTimeZone,
+  DEFAULT_TIME_ZONE,
+  DEFAULT_WEEK_START,
+  describeGrafanaTimeExpr,
+  normalizeTimeZone,
+  normalizeWeekStart,
+  parseGrafanaTimeExpr,
+  type WeekStart,
+} from '../query/dateMath.js';
 import { flattenPanels, resolvePanelQueries } from '../dashboards/panelQueries.js';
 import { substituteTargetFields, mergeVariableOverrides } from '../dashboards/variables.js';
 import { executeQueryWindow } from '../query/executor.js';
@@ -46,32 +58,155 @@ export interface ResolveRenderWindowInput {
   inputToMs?: number;
   urlFromRaw?: string;
   urlToRaw?: string;
+  /** The link's own `timezone` param — highest-precedence zone for period rounding. */
+  urlTimezone?: string;
   dashboardTimeFrom?: string;
   dashboardTimeTo?: string;
+  dashboardTimezone?: string;
+  dashboardWeekStart?: string;
   nowMs: number;
+  /**
+   * Reads the connection's own Grafana timezone/week-start preferences. Called
+   * at most once, and only when a selected expression actually needs a tier
+   * the URL and dashboard didn't supply — a plain `now-1h` window never pays
+   * for it. Omit to resolve against the documented defaults alone.
+   */
+  preferences?: () => Promise<ConnectionPreferences>;
+}
+
+/**
+ * How a relative window was actually resolved, reported back on the result so
+ * a caller isn't left re-deriving it. Present only when at least one bound
+ * came from a relative expression; `weekStart` only when a `/w` round made it
+ * matter, so its presence means "this actually moved the window."
+ */
+export interface RelativeTimeResolution {
+  /** The raw expression each relative bound was resolved from (absent for a bound given as epoch ms). */
+  from?: string;
+  to?: string;
+  /**
+   * The zone the wall-clock boundaries were read in — present only when the
+   * expression was zone-sensitive (any period rounding, or a shift by a day or
+   * more), so its presence means the zone actually moved the window.
+   */
+  timeZone?: string;
+  timeZoneSource?: 'url' | 'dashboard' | 'connection-preferences' | 'default';
+  /** Present only when a "/w" round made the week-start matter. */
+  weekStart?: WeekStart;
+  weekStartSource?: 'dashboard' | 'connection-preferences' | 'default';
+}
+
+export interface ResolvedRenderWindow {
+  fromMs: number;
+  toMs: number;
+  relativeTime?: RelativeTimeResolution;
 }
 
 /**
  * Picks the render window: an explicit fromMs/toMs always wins, then the
  * url's own from/to (Grafana relative or absolute), then the dashboard's own
  * saved default time range — so a bare dashboardUid with no other time
- * context still works. Exported for direct testing of this fallback chain.
+ * context still works. Each bound is resolved independently across those
+ * tiers. Exported for direct testing of this fallback chain.
+ *
+ * Relative expressions go through query/dateMath.ts's full Grafana grammar,
+ * including period rounding (`now/d`, `now/w-7d`). Two things that resolution
+ * needs and this function is the place that assembles:
+ *
+ * - **`to` rounds up, `from` rounds down.** Grafana's own
+ *   `rangeUtil.convertRawToRange` parses the two bounds with opposite
+ *   `roundUp` flags, so `from=now/w-28d&to=now/w-7d` is a clean 28 days rather
+ *   than the ~21 you'd get by snapping both to the same week edge.
+ * - **The zone and week-start come from the connection, not from a guess.**
+ *   Precedence mirrors Grafana's own frontend: the link's `timezone` param,
+ *   then the dashboard's saved `timezone`/`weekStart`, then the connection's
+ *   user/org preferences, then the documented defaults in dateMath.ts. The
+ *   preferences read is lazy and skipped entirely for a zone-insensitive
+ *   expression, and whichever tier answered is reported in the result — a
+ *   wrong week-start is otherwise invisible.
  */
-export function resolveRenderWindow(input: ResolveRenderWindowInput): { fromMs: number; toMs: number } {
-  const fromMs = input.inputFromMs
-    ?? (input.urlFromRaw !== undefined ? parseGrafanaTimeExpr(input.urlFromRaw, input.nowMs) : undefined)
-    ?? (input.dashboardTimeFrom !== undefined ? parseGrafanaTimeExpr(input.dashboardTimeFrom, input.nowMs) : undefined);
-  const toMs = input.inputToMs
-    ?? (input.urlToRaw !== undefined ? parseGrafanaTimeExpr(input.urlToRaw, input.nowMs) : undefined)
-    ?? (input.dashboardTimeTo !== undefined ? parseGrafanaTimeExpr(input.dashboardTimeTo, input.nowMs) : undefined);
-  if (fromMs === undefined || toMs === undefined) {
+export async function resolveRenderWindow(input: ResolveRenderWindowInput): Promise<ResolvedRenderWindow> {
+  // Select the winning expression per bound *before* parsing anything: a
+  // dashboard's saved default range that this call will never use must not be
+  // able to fail the call, and only a selected expression should be able to
+  // trigger the preferences read.
+  const fromExpr = input.inputFromMs !== undefined ? undefined : (input.urlFromRaw ?? input.dashboardTimeFrom);
+  const toExpr = input.inputToMs !== undefined ? undefined : (input.urlToRaw ?? input.dashboardTimeTo);
+  if ((input.inputFromMs === undefined && fromExpr === undefined) || (input.inputToMs === undefined && toExpr === undefined)) {
     throw new Error(
       'Could not determine a time window: pass fromMs/toMs explicitly, or a url whose "from"/"to" query ' +
         'params are set (this dashboard has no saved default time range either).',
     );
   }
-  return { fromMs, toMs };
+
+  const shapes = [fromExpr, toExpr].filter((e): e is string => e !== undefined).map(describeGrafanaTimeExpr);
+  const anyRelative = shapes.some((s) => s.relative);
+  const zoneSensitive = shapes.some((s) => s.zoneSensitive);
+  const needsWeekStart = shapes.some((s) => s.roundsWeek);
+
+  let timeZone = normalizeTimeZone(input.urlTimezone);
+  let timeZoneSource: NonNullable<RelativeTimeResolution['timeZoneSource']> = 'url';
+  if (timeZone === undefined) {
+    timeZone = normalizeTimeZone(input.dashboardTimezone);
+    timeZoneSource = 'dashboard';
+  }
+  let weekStart = normalizeWeekStart(input.dashboardWeekStart);
+  let weekStartSource: NonNullable<RelativeTimeResolution['weekStartSource']> = 'dashboard';
+
+  const wantsPreferences = (zoneSensitive && timeZone === undefined) || (needsWeekStart && weekStart === undefined);
+  if (wantsPreferences && input.preferences) {
+    const prefs = await input.preferences();
+    if (timeZone === undefined) {
+      timeZone = normalizeTimeZone(prefs.timezone);
+      timeZoneSource = 'connection-preferences';
+    }
+    if (weekStart === undefined) {
+      weekStart = normalizeWeekStart(prefs.weekStart);
+      weekStartSource = 'connection-preferences';
+    }
+  }
+  if (timeZone === undefined) {
+    timeZone = DEFAULT_TIME_ZONE;
+    timeZoneSource = 'default';
+  } else if (zoneSensitive) {
+    // Only validated when it can actually move the window: a bogus zone saved
+    // on a dashboard shouldn't fail a plain "now-1h" render that would ignore
+    // it anyway.
+    assertKnownTimeZone(timeZone, TIME_ZONE_SOURCE_LABEL[timeZoneSource]);
+  }
+  if (weekStart === undefined) {
+    weekStart = DEFAULT_WEEK_START;
+    weekStartSource = 'default';
+  }
+
+  const opts = { timeZone, weekStart };
+  const fromMs = input.inputFromMs ?? parseGrafanaTimeExpr(fromExpr!, input.nowMs, opts);
+  const toMs = input.inputToMs ?? parseGrafanaTimeExpr(toExpr!, input.nowMs, { ...opts, roundUp: true });
+
+  if (!anyRelative) return { fromMs, toMs };
+  return {
+    fromMs,
+    toMs,
+    // Each field appears only when it actually bore on the result, so its
+    // presence is the signal: a reported weekStart means a "/w" round used it,
+    // and a reported timeZone means a boundary or calendar shift was read
+    // against it. Reporting the defaults unconditionally would imply the
+    // opposite for the common "now-1h" case, where neither matters.
+    relativeTime: {
+      ...(fromExpr !== undefined ? { from: fromExpr } : {}),
+      ...(toExpr !== undefined ? { to: toExpr } : {}),
+      ...(zoneSensitive ? { timeZone, timeZoneSource } : {}),
+      ...(needsWeekStart ? { weekStart, weekStartSource } : {}),
+    },
+  };
 }
+
+const TIME_ZONE_SOURCE_LABEL: Record<NonNullable<RelativeTimeResolution['timeZoneSource']>, string> = {
+  url: 'the link\'s "timezone" param',
+  dashboard: "the dashboard's saved timezone",
+  'connection-preferences': "the connection's Grafana preferences",
+  default: 'the documented default',
+};
 
 export function registerRenderDashboard(server: McpServer, { registry, config, activityLog }: ToolContext): void {
   server.registerTool(
@@ -87,7 +222,15 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
         'share short-link is resolved to its canonical link first, transparently (a dead/pruned one errors ' +
         'distinctly from an unrecognized URL); a folder link errors - use list_folder_dashboards instead. Alternatively ' +
         'pass dashboardUid + connection directly, with fromMs/toMs (falls back to the dashboard\'s own saved default ' +
-        'time range if omitted). Unlike execute_query_window, this uses exactly the one window given - no pre-window ' +
+        'time range if omitted). ' +
+        'A url\'s relative "from"/"to" support Grafana\'s full date-math grammar, including period rounding ("now/d", ' +
+        '"now/w-7d", "now-1d/d"): rounding resolves against the connection\'s own timezone and week-start (the link\'s ' +
+        '"timezone" param, else the dashboard\'s saved settings, else the Grafana user/org preferences, else UTC + ' +
+        'Sunday), and the "to" bound rounds up while "from" rounds down - the same asymmetry Grafana\'s own range parsing ' +
+        'uses, so from=now/w-28d&to=now/w-7d is a clean 28 days. Whenever a bound came from a relative expression, ' +
+        '"window.relativeTime" reports the expressions and which timezone/week-start actually resolved them (weekStart ' +
+        'only when a "/w" round made it matter) - read it rather than re-deriving the window yourself. ' +
+        'Unlike execute_query_window, this uses exactly the one window given - no pre-window ' +
         'buffer, no baseline control windows - since the point here is "what\'s on screen", not incident analysis; ' +
         'use execute_query_window/validate_baseline for that. Every panel appears in "panels": queryable ones carry ' +
         'their resolved query, series (each with stats), and per-panel errors; row/text/non-queryable panels are ' +
@@ -127,6 +270,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
           let urlVars: Record<string, string[]> = {};
           let urlFromRaw: string | undefined;
           let urlToRaw: string | undefined;
+          let urlTimezone: string | undefined;
 
           if (url) {
             const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, url);
@@ -136,6 +280,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
               urlVars = parsed.vars;
               urlFromRaw = parsed.from;
               urlToRaw = parsed.to;
+              urlTimezone = parsed.timezone;
             } else if (parsed.type === 'folder') {
               throw new Error(
                 `"${url}" is a folder link, not a dashboard - render_dashboard needs one specific dashboard. Use ` +
@@ -168,14 +313,18 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
           const variables = dashboard.templating?.list ?? [];
           const overrides = mergeVariableOverrides(urlVars, variableOverrides);
 
-          const { fromMs, toMs } = resolveRenderWindow({
+          const { fromMs, toMs, relativeTime } = await resolveRenderWindow({
             inputFromMs,
             inputToMs,
             urlFromRaw,
             urlToRaw,
+            urlTimezone,
             dashboardTimeFrom: dashboard.time?.from,
             dashboardTimeTo: dashboard.time?.to,
+            dashboardTimezone: dashboard.timezone,
+            dashboardWeekStart: dashboard.weekStart,
             nowMs: Date.now(),
+            preferences: () => fetchConnectionPreferences(client),
           });
           // Fail fast, before running a single query - same rationale as
           // execute_query_window's windowSizeWarning: a caller-visible error
@@ -183,6 +332,11 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
           enforceWindowLimit({ label: 'render', fromMs, toMs }, config);
 
           const window = { fromMs, toMs };
+          // Reported separately from `window` (which feeds variable
+          // substitution and query execution as a plain QueryWindow) so the
+          // resolution metadata rides on the result without leaking into
+          // everything downstream that takes a window.
+          const reportedWindow = { fromMs, toMs, ...(relativeTime ? { relativeTime } : {}) };
           // Live-resolve any query-type variable stuck at the unconstrained '.*'
           // fallback (see liveVariables.ts) — resolvedOverrides feeds the actual
           // queries; the original overrides (not the potentially large resolved
@@ -294,7 +448,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
             url: dashboardUrlFor(registry, connectionId, dashboardUid, { fromMs, toMs, variables: overrides }),
             dashboardUid,
             title: dashboard.title,
-            window,
+            window: reportedWindow,
             panelsTotal: queryablePanels.length,
             panelsExecuted: executedPanels.length,
             panelsSkipped: skippedPanels.length,

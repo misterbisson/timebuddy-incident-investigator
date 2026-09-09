@@ -84,6 +84,21 @@ export interface DashboardJson {
   panels?: Panel[];
   templating?: { list?: TemplateVariable[] };
   time?: { from: string; to: string };
+  /**
+   * The dashboard's own display timezone — an IANA zone name, Grafana's `utc`,
+   * or `''`/`browser` for "whatever the viewer's browser says". Load-bearing
+   * when `time.from`/`time.to` (or a link's own from/to) use Grafana's period
+   * rounding: `now/d` names a wall-clock boundary, so it lands on a different
+   * instant per zone. See query/dateMath.ts.
+   */
+  timezone?: string;
+  /**
+   * Per-dashboard override of the org/user week-start preference
+   * (`saturday`/`sunday`/`monday`, or empty to inherit) — what `now/w` snaps
+   * to. Grafana's own frontend gives this precedence over the user preference,
+   * and so does resolveRenderWindow.
+   */
+  weekStart?: string;
   /** Bumped by Grafana on every save; used to detect a changed dashboard without diffing its body. */
   version?: number;
 }
@@ -277,4 +292,15 @@ export interface GrafanaAnnotation {
   timeEnd?: number;
   text: string;
   tags?: string[];
+}
+
+/**
+ * Grafana's preferences payload (`/api/user/preferences`, `/api/org/preferences`).
+ * Only the two fields relative-time resolution needs are declared; an empty
+ * string in either means "inherit / ask the browser", not a real value. See
+ * grafana/preferences.ts.
+ */
+export interface PreferencesDto {
+  timezone?: string;
+  weekStart?: string;
 }
