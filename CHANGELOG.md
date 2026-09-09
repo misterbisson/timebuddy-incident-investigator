@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.3](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.2...v0.9.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump @xmldom/xmldom from 0.8.13 to 0.8.15 ([#235](https://github.com/misterbisson/timebuddy-incident-investigator/issues/235)) ([d03e5d7](https://github.com/misterbisson/timebuddy-incident-investigator/commit/d03e5d756fd2c29a890c21c622bf38d75426b4de))
+* **deps-dev:** bump electron-builder to 26.16.1 to unbreak macOS signing ([#242](https://github.com/misterbisson/timebuddy-incident-investigator/issues/242)) ([c44ecc8](https://github.com/misterbisson/timebuddy-incident-investigator/commit/c44ecc8904c6ccb01d5489ad799d491f81e01ad9))
+* **deps-dev:** bump vitest from 4.1.11 to 5.0.0 ([#238](https://github.com/misterbisson/timebuddy-incident-investigator/issues/238)) ([4645fac](https://github.com/misterbisson/timebuddy-incident-investigator/commit/4645fac993258f52d2663f20892f16c8dd472642))
+* **deps:** bump fast-uri from 3.1.5 to 3.1.7 ([#234](https://github.com/misterbisson/timebuddy-incident-investigator/issues/234)) ([4f58fd4](https://github.com/misterbisson/timebuddy-incident-investigator/commit/4f58fd45d584fc959999b2004344dfba27a12407))
+* **deps:** bump hono from 4.13.0 to 4.13.7 ([#239](https://github.com/misterbisson/timebuddy-incident-investigator/issues/239)) ([dfba890](https://github.com/misterbisson/timebuddy-incident-investigator/commit/dfba89059a0c66f2f16960fe3230b4a0e7a0ccc0))
+* **deps:** bump js-yaml from 4.3.1 to 4.3.2 ([#240](https://github.com/misterbisson/timebuddy-incident-investigator/issues/240)) ([a4981eb](https://github.com/misterbisson/timebuddy-incident-investigator/commit/a4981eb95b2f37f6d79420117d6ae8ddc77fdc48))
+* **deps:** bump qs from 6.15.3 to 6.16.0 ([#236](https://github.com/misterbisson/timebuddy-incident-investigator/issues/236)) ([2447330](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2447330f8c08b7e3d23b6327086bbc1399b22e7e))
+* **deps:** bump the minor-and-patch group across 1 directory with 5 updates ([#237](https://github.com/misterbisson/timebuddy-incident-investigator/issues/237)) ([0a9db18](https://github.com/misterbisson/timebuddy-incident-investigator/commit/0a9db183cf234ac48c26acbe6fc7cccc74380045))
+
 ## [0.9.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.1...v0.9.2) (2026-09-07)
 
 
