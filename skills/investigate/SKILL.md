@@ -208,6 +208,23 @@ skill exists to handle for them.
        owner made and validated. A query you write can look right and be subtly wrong — `mean()`
        over a counter, the wrong retention policy — and `validate_baseline` will compute a
        perfectly confident z-score on it regardless. Nothing downstream can detect this for you.
+     - **The exception, where it's the right first move:** questions about the *data's own
+       shape*, which no panel answers. `count_over_time(metric[1m])` measures the real scrape
+       density rather than taking a stated interval on trust; a MetricsQL-only construct
+       (`up default 0`) tells a VictoriaMetrics instance from a Prometheus one, which decides
+       whether `increase(x[1m])` at a 60s scrape is exact or empty. Ask the datasource instead
+       of asking a person, when the fact is about the datasource.
+     - It takes InfluxQL against an InfluxDB datasource and PromQL/MetricsQL against a
+       Prometheus-type one. A **PromQL range query requires `stepSeconds`** — it is never
+       inferred, because the step decides the answer of every range-vector function
+       (`rate`/`increase`/`delta`/`*_over_time`). Pass the scrape interval (e.g. 15 or 60) when
+       you want real samples. Then read the result's `step.consistentWithRequested`: `false`
+       means the returned timestamps *prove* the datasource evaluated at its own resolution, so
+       every number in that response answers at that step rather than yours — reinterpret
+       accordingly, or re-run at a step it will honour. `true` means the response is consistent
+       with the step you asked for; widely spaced points there are a sparse metric, not a
+       mismatch, so read the numbers as they are. Use `queryType: "instant"` for a single value
+       at the window end.
      - Its results carry `provenance: "adhoc"`. Pass that through on the matching `evidence`
        entries in step 7, and say so in the written note. A verdict resting on queries nobody
        validated must not read like one resting on a panel a team maintains.

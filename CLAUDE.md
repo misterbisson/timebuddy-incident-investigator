@@ -88,8 +88,34 @@ Three things shape almost every module here and are easy to miss from a partial 
    (never blocklists destructive verbs) and refuses anything it can't classify, and the tool
    refuses any datasource type it has no guard for — raw SQL included — even when a workspace
    authorized it. Authorization itself is per-workspace, not per-connection: see
-   `config.ts`'s `AdhocQueryPolicy`. Don't widen `GUARDABLE_TYPES` without writing a real
-   guard for that query language.
+   `config.ts`'s `AdhocQueryPolicy`. `GUARDABLE_TYPES` is a map of **dialects**
+   (`classify` + `prepare`), one per datasource type, and widening it means writing a real
+   guard for that query language — not adding a key.
+
+   The second dialect shows what "a real guard" means when the language differs.
+   `query/promqlGuard.ts` (PromQL/MetricsQL against `prometheus`, issue #212) deliberately does
+   *not* classify statements, because for PromQL read-only-ness isn't a property of the
+   statement at all: the language has no write/delete/DDL form, and Grafana's Prometheus
+   backend only reaches `/api/v1/query{,_range,_exemplars}` with the expression as a request
+   *parameter*, never as a path. So that guard asserts what it can — one expression per call
+   (the audit record, the `provenance` marking, and the Explore URL are all one-per-call), and
+   refusal of anything it can't read as one expression (unterminated literal, unbalanced
+   bracket, top-level `;`) — and its own header says explicitly that its lighter touch is
+   earned by that one fact and is not a template for the next dialect. Note it also never
+   rewrites: `classifyPromQL` returns the caller's text verbatim, which satisfies the
+   execute-what-you-scanned invariant below trivially rather than carefully.
+
+   The PromQL path also refuses to infer a **step**. `stepSeconds` is required on a range
+   query — that's issue #200's lesson applied where it's cheap: a step nobody chose decides the
+   answer of every range-vector function, and #200 is what that costs when it's invisible.
+   Don't add a default. What the result reports back about the step is deliberately *not* an
+   "effective step": since Prometheus returns a point only where the range vector had samples,
+   a sparse metric's timestamps are wide multiples of a perfectly honoured step, and a median
+   gap would flag that as a 15x mismatch on the exact `count_over_time` probe #212 wanted. So
+   `reportedStep` states the one thing timestamps license — the step divides the GCD of the
+   gaps, measured across every series and *before* `clampSeriesPoints` strides the emitted
+   points — and names the field `consistentWithRequested`, false being proof of an override and
+   true being consistency rather than a match. Keep that asymmetry if you touch it.
 
    Two invariants in there that a partial read will miss, both load-bearing. **The tool
    executes `verdict.statement`, the text the guard scanned — never the caller's raw input.**
