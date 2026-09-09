@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.3...v0.10.0) (2026-09-09)
+
+
+### Features
+
+* accept PromQL in execute_adhoc_query, with a caller-chosen step ([#243](https://github.com/misterbisson/timebuddy-incident-investigator/issues/243)) ([c3006f0](https://github.com/misterbisson/timebuddy-incident-investigator/commit/c3006f08f6fa194f297badffc51f38519e91dce1))
+
 ## [0.9.3](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.2...v0.9.3) (2026-09-09)
 
 
