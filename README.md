@@ -433,9 +433,12 @@ What holds when it's on:
   being willing isn't the same as being verifiable.
 - **A step you chose, and a step you can check.** A PromQL range query requires an explicit
   `stepSeconds`; it is never inferred, because the step decides the answer of every
-  range-vector function (`rate`, `increase`, `delta`, `*_over_time`). The result reports the
-  step the datasource *actually* evaluated at — measured from the returned timestamps —
-  alongside the one you asked for, and flags them when they differ.
+  range-vector function (`rate`, `increase`, `delta`, `*_over_time`). The result then reports
+  what the returned timestamps say about the step the datasource actually used, and says it
+  carefully: a mismatch is reported only when the numbers *prove* one, because a sparse metric
+  returns widely spaced points at a perfectly honoured step and calling that a mismatch would
+  make a correct measurement look wrong. See
+  [PromQL step reporting](docs/TOOLS.md#promql-step-reporting).
 - **The same caps as everything else.** `MAX_LOOKBACK_HOURS`, `MAX_DATA_POINTS`, concurrency.
   The step is bounded by the same `MAX_DATA_POINTS`: a step that would ask for more evaluation
   points than that is refused, naming the finest one the window can carry.

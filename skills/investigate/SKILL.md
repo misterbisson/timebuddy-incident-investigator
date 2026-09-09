@@ -218,10 +218,13 @@ skill exists to handle for them.
        Prometheus-type one. A **PromQL range query requires `stepSeconds`** — it is never
        inferred, because the step decides the answer of every range-vector function
        (`rate`/`increase`/`delta`/`*_over_time`). Pass the scrape interval (e.g. 15 or 60) when
-       you want real samples. Read the result's `step.effectiveMs`, which is measured from the
-       returned timestamps: when it doesn't match what you asked for, the datasource evaluated
-       at its own resolution and every number in that response answers at *that* step. Use
-       `queryType: "instant"` for a single value at the window end.
+       you want real samples. Then read the result's `step.consistentWithRequested`: `false`
+       means the returned timestamps *prove* the datasource evaluated at its own resolution, so
+       every number in that response answers at that step rather than yours — reinterpret
+       accordingly, or re-run at a step it will honour. `true` means the response is consistent
+       with the step you asked for; widely spaced points there are a sparse metric, not a
+       mismatch, so read the numbers as they are. Use `queryType: "instant"` for a single value
+       at the window end.
      - Its results carry `provenance: "adhoc"`. Pass that through on the matching `evidence`
        entries in step 7, and say so in the written note. A verdict resting on queries nobody
        validated must not read like one resting on a panel a team maintains.

@@ -9,7 +9,6 @@ import { classifyInfluxQL, type AdhocVerdict } from '../query/adhocGuard.js';
 import { MAX_STEP_SECONDS, classifyPromQL, resolvePromqlStep } from '../query/promqlGuard.js';
 import { computeStats } from '../analysis/baseline.js';
 import { clampSeriesPoints } from '../security/limits.js';
-import { resolutionFromTimestamps } from '../export/csv.js';
 import { buildExploreUrl } from '../grafana/urlBuilder.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -230,50 +229,120 @@ async function resolveAuthorizedDatasource(
   return { uid: found.uid, type };
 }
 
+/** Greatest common divisor, for reducing observed gaps to the coarsest step that could have produced them all. */
+function gcd(a: number, b: number): number {
+  let x = a;
+  let y = b;
+  while (y !== 0) {
+    const t = y;
+    y = x % y;
+    x = t;
+  }
+  return x;
+}
+
 /**
- * Reports the resolution the query *actually* came back at, next to the one it
- * asked for.
+ * Reports what the returned timestamps say about the step the datasource used,
+ * next to the step that was requested.
  *
  * This is the smaller half of issue #200's ask ("report the step") applied where
- * it's cheapest to honour: the requested step is a request, and Grafana's
+ * it's cheapest to honour: a requested step is a request, and Grafana's
  * Prometheus backend can still enlarge it (its own safe-resolution clamp), or an
- * older instance can read a field we didn't send. Rather than assert the step
- * held, derive it from the returned timestamps — the median gap, exact — and say
- * plainly when the two disagree. A caller measuring scrape density with
- * `count_over_time(x[1m])` is asking a question *about* the step; handing them an
- * unverified echo of their own input would be the wrong answer to give
- * confidently.
+ * older instance can read a field this client didn't send. A caller measuring
+ * scrape density with `count_over_time(x[1m])` is asking a question *about* the
+ * step, so an unverified echo of their own input would be the wrong answer to
+ * give confidently.
+ *
+ * ## Why this reports a divisor and not "the observed step"
+ *
+ * The obvious implementation — median gap between timestamps, called the
+ * effective step — is confidently wrong on sparse data, and wrong in the
+ * direction that matters. Prometheus evaluates a range query on a fixed grid but
+ * only *returns* a point where the range vector had samples, so a metric that
+ * emits a handful of events an hour comes back as isolated points 15 minutes
+ * apart even though the step was honoured exactly. A median-gap report would
+ * call that a 900000ms step, flag a mismatch, and — because
+ * `skills/investigate/SKILL.md` tells the agent to reread every number against
+ * the reported step — turn a correct scrape-density measurement into an apparent
+ * 15x error, on the exact query this tool is the right first move for.
+ *
+ * What the timestamps actually license is one inference, in one direction: every
+ * gap is an integer multiple of the step that produced it, so **the step divides
+ * the GCD of the gaps**. If the requested step does not divide that GCD, the
+ * datasource cannot have used it — that is proof of an override (the #200 case:
+ * gaps of 15000ms against a requested 60000ms). If it does divide it, the data
+ * is *consistent with* the request and any wider spacing is sparsity. That is
+ * strictly weaker than "the step was honoured" — a datasource that coarsened
+ * 60000ms to 120000ms is indistinguishable from a metric that is simply sparse
+ * at 60000ms — so the field is named for consistency rather than for a match it
+ * can't establish.
+ *
+ * Measured across **every** series, not the first one that happens to have two
+ * points: a response's first series can be a single-point outlier while the rest
+ * are dense, and the datasource's step is a floor on the spacing any of them can
+ * show, so more series can only sharpen the divisor.
  *
  * Deliberately measured on the pre-clamp series: clampSeriesPoints downsamples
  * with a uniform stride for the response, so measuring after it would report the
- * stride rather than the datasource's step.
+ * stride rather than anything about the datasource.
  */
 function reportedStep(series: QuerySeries[], requestedStepMs: number): Record<string, unknown> {
-  const measurable = series.find((s) => s.points.length >= 2);
-  const observed = measurable ? resolutionFromTimestamps(measurable.points.map((p) => p.t)) : undefined;
-  if (!observed) {
+  let gapGcdMs = 0;
+  let minGapMs = Number.POSITIVE_INFINITY;
+  let seriesMeasured = 0;
+
+  for (const s of series) {
+    const ts = [...new Set(s.points.map((p) => p.t))].filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+    if (ts.length < 2) continue;
+    seriesMeasured += 1;
+    for (let i = 1; i < ts.length; i += 1) {
+      const gap = ts[i]! - ts[i - 1]!;
+      if (gap <= 0) continue;
+      gapGcdMs = gcd(gapGcdMs, gap);
+      if (gap < minGapMs) minGapMs = gap;
+    }
+  }
+
+  if (gapGcdMs === 0) {
     return {
       step: {
         requestedMs: requestedStepMs,
-        note: 'Too few points returned to measure the effective step — the datasource may have no data in this window.',
+        note:
+          'No series came back with two or more distinct timestamps, so nothing here can be said about the step ' +
+          'the datasource used — most likely the query matched no data in this window.',
       },
     };
   }
-  const matchesRequested = observed.effectiveBucketMs === requestedStepMs;
+
+  const consistentWithRequested = gapGcdMs % requestedStepMs === 0;
+  const exact = consistentWithRequested && minGapMs === requestedStepMs;
   return {
     step: {
       requestedMs: requestedStepMs,
-      effectiveMs: observed.effectiveBucketMs,
-      points: observed.points,
-      matchesRequested,
-      ...(matchesRequested
+      /** GCD of every gap between consecutive returned timestamps: the step must divide this. */
+      observedGapGcdMs: gapGcdMs,
+      /** Tightest spacing any series came back with — an upper bound on the step. */
+      observedMinGapMs: minGapMs,
+      seriesMeasured,
+      consistentWithRequested,
+      ...(exact
         ? {}
-        : {
-            note:
-              `The datasource evaluated this at ${observed.effectiveBucketMs}ms, not the requested ` +
-              `${requestedStepMs}ms. Any range-vector function here (rate/increase/delta/*_over_time) answered at ` +
-              'the effective step, so read the numbers against that one.',
-          }),
+        : consistentWithRequested
+          ? {
+              note:
+                `Points came back no closer than ${minGapMs}ms apart, but every gap is a multiple of the ` +
+                `requested ${requestedStepMs}ms step — which is what a sparse metric looks like at that step, ` +
+                'since Prometheus returns a point only where the range vector had samples. Consistent with the ' +
+                'datasource honouring the request; not evidence of a different step, so read the numbers as they ' +
+                'are.',
+            }
+          : {
+              note:
+                `Gaps between returned points share a divisor of ${gapGcdMs}ms, which is not a multiple of the ` +
+                `requested ${requestedStepMs}ms — so the datasource did not evaluate at the requested step. Any ` +
+                'range-vector function here (rate/increase/delta/*_over_time) answered at the step it did use, ' +
+                'so read the numbers against that one.',
+            }),
     },
   };
 }
@@ -296,8 +365,10 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
         'about the data\'s own shape that no panel answers, e.g. count_over_time(metric[1m]) to measure real ' +
         'scrape density, or a MetricsQL-only construct to tell a VictoriaMetrics instance from a Prometheus one. ' +
         'PromQL range queries require an explicit stepSeconds: the step decides the answer for every ' +
-        'range-vector function, so it is never inferred, and the result reports the step the datasource actually ' +
-        'used alongside the one you asked for. Read-only: PromQL has no write form and Grafana only reaches its ' +
+        'range-vector function, so it is never inferred, and the result reports what the returned timestamps say ' +
+        'about the step the datasource actually used (step.consistentWithRequested: false is proof it used a ' +
+        'different one, so reread the numbers against that; true means widely spaced points are sparsity, not a ' +
+        'mismatch). Read-only: PromQL has no write form and Grafana only reaches its ' +
         'query endpoints, while InfluxQL is restricted to single-statement SELECT/SHOW — and only datasource ' +
         'types this workspace explicitly authorized are reachable at all. Goes through the same connection ' +
         'resolution, limits, redaction, and audit logging as every other tool.',
@@ -378,18 +449,25 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
             // query" link docs/TOOLS.md promises.
             const verdict = dialect.classify(query);
 
-            // Prepared before the URL is built, because the pane needs the
-            // same step and mode the query ran with — a link that replays a
-            // range query without its step can disagree with the numbers
-            // returned. Only on the allowed path: a refused query has no shape
-            // to prepare, so its dialect parameters go unchecked and the guard's
-            // reason (the thing that has to be fixed first) is what comes back.
-            const prepared = verdict.allowed
-              ? dialect.prepare(verdict.statement, { fromMs, toMs, queryType, stepSeconds }, config)
-              : undefined;
-
+            // Recorded *before* anything else can throw, then refined once the
+            // query's final shape is known. Both halves matter:
+            //
+            // - Every refusal past this point lands in audit.jsonl with a
+            //   replayable link, which is what README and docs/TOOLS.md promise
+            //   ("refused and failed queries are recorded too") and what an
+            //   auditor most wants. An earlier version built the URL after
+            //   dialect.prepare(), so the newly-required-stepSeconds refusal —
+            //   the likeliest first attempt against Prometheus — was audited
+            //   with no URL at all, while a guard refusal on the same call
+            //   carried one.
+            // - The step and mode only exist after prepare(), and a range-query
+            //   link that omits its step can replay at a resolution that
+            //   disagrees with the numbers returned. So the successful path
+            //   rebuilds with those extras; a query whose step was never valid
+            //   keeps the plain link, which is the honest shape for it.
             const baseUrl = registry.list().find((c) => c.id === connectionId)?.url;
-            if (baseUrl) {
+            const recordExploreUrl = (extras: { instant?: boolean; stepSeconds?: number }) => {
+              if (!baseUrl) return;
               exploreUrl = buildExploreUrl(baseUrl, {
                 datasourceUid: datasource.uid,
                 datasourceType: datasource.type,
@@ -400,10 +478,11 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
                 query: verdict.allowed ? verdict.statement : query,
                 fromMs,
                 toMs,
-                ...(prepared?.explore ?? {}),
+                ...extras,
               });
               auditArgs.exploreUrl = exploreUrl;
-            }
+            };
+            recordExploreUrl({});
 
             if (!verdict.allowed) {
               // Naming the dialect makes the dispatch visible: an agent that
@@ -412,10 +491,13 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
               throw new Error(`${dialect.language} query refused: ${verdict.reason}`);
             }
 
+            const prepared = dialect.prepare(verdict.statement, { fromMs, toMs, queryType, stepSeconds }, config);
+            recordExploreUrl(prepared.explore);
+
             const target: ResolvedTarget = {
               refId: 'A',
               datasourceUid: datasource.uid,
-              raw: { refId: 'A', ...prepared!.raw },
+              raw: { refId: 'A', ...prepared.raw },
             };
             // executeQueryWindow applies enforceWindowLimit and
             // clampMaxDataPoints itself, so an ad-hoc window is bounded by
@@ -438,9 +520,9 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
               provenance: 'adhoc' as const,
               query: verdict.statement,
               window: { fromMs, toMs },
-              ...prepared!.resultFields,
-              ...(prepared!.requestedStepMs !== undefined
-                ? reportedStep(executed.series, prepared!.requestedStepMs)
+              ...prepared.resultFields,
+              ...(prepared.requestedStepMs !== undefined
+                ? reportedStep(executed.series, prepared.requestedStepMs)
                 : {}),
               exploreUrl,
               series: clamped.map((s, i) => {

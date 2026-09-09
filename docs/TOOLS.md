@@ -114,20 +114,46 @@ account of what that costs — a replay at an unrequested 15s step reported ~0.7
 from a counter that had been flat for eight days, and several layers of analysis were built on
 that number before the step was suspected.
 
-Because a requested step is still only a request, the result reports both:
+Because a requested step is still only a request — Grafana's Prometheus backend can enlarge one
+(its own safe-resolution limit), and an older instance may read a field this client didn't
+send — the result reports what the returned timestamps say about it:
 
 ```json
-"step": { "requestedMs": 60000, "effectiveMs": 15000, "points": 241, "matchesRequested": false,
-          "note": "The datasource evaluated this at 15000ms, not the requested 60000ms. ..." }
+"step": { "requestedMs": 60000, "observedGapGcdMs": 15000, "observedMinGapMs": 15000,
+          "seriesMeasured": 1, "consistentWithRequested": false,
+          "note": "Gaps between returned points share a divisor of 15000ms, which is not a
+                   multiple of the requested 60000ms — so the datasource did not evaluate at
+                   the requested step. ..." }
 ```
 
-`effectiveMs` is the **median gap between the returned timestamps** — measured, not echoed, and
-measured before the response-shaping clamp (`clampSeriesPoints`) strides the emitted points, so
-it reports the datasource's step rather than the clamp's stride. Grafana's Prometheus backend
-can enlarge a step (its own safe-resolution limit), and an older instance may read a field this
-client didn't send, so a caller measuring scrape density — a question *about* the step — gets
-the number to read the answer against instead of a confident echo of their own input. When too
-few points come back to measure a gap, `step` says so rather than omitting the field.
+Note what is *not* reported: an "effective step". The obvious version of this field — the median
+gap between timestamps — is confidently wrong on sparse data, in the direction that matters.
+Prometheus evaluates a range query on a fixed grid but returns a point only where the range
+vector had samples, so a metric emitting a few events an hour comes back as isolated points 15
+minutes apart *even when the step was honoured exactly*. A median-gap report would call that a
+900000ms step and flag a mismatch, and since [`skills/investigate/SKILL.md`](../skills/investigate/SKILL.md)
+tells the agent to reread every number against the reported step, a correct scrape-density
+measurement would be read as a 15x error — on the very query this tool is the right first move
+for.
+
+What the timestamps license is one inference, in one direction: every gap is an integer multiple
+of the step that produced it, so **the step divides the GCD of the gaps**.
+
+- `consistentWithRequested: false` is *proof* of an override — the requested step does not divide
+  `observedGapGcdMs`, so the datasource cannot have used it (the #200 case: 15000ms gaps against
+  a requested 60000ms).
+- `consistentWithRequested: true` is weaker on purpose: the data is consistent with the request,
+  and wider spacing is sparsity. A datasource that coarsened 60000ms to 120000ms is
+  indistinguishable from a metric that is simply sparse at 60000ms, so the field is named for the
+  consistency it can establish rather than a match it can't. When no gap is as tight as the step,
+  the `note` says so explicitly — "not evidence of a different step, so read the numbers as they
+  are" — because silence there reads like a mismatch.
+
+Both figures are measured across **every** returned series, not the first one with two points (a
+response's first series can be a single-point outlier while the rest are dense), and measured
+before the response-shaping clamp (`clampSeriesPoints`) strides the emitted points, so they
+describe the datasource rather than the clamp. When no series has two distinct timestamps, `step`
+says that plainly instead of omitting the field.
 
 `queryType: "instant"` has no step at all: Prometheus evaluates an instant query at a single
 timestamp, so the result carries `evaluatedAtMs` (the window end) instead, and passing

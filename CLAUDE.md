@@ -106,11 +106,16 @@ Three things shape almost every module here and are easy to miss from a partial 
    execute-what-you-scanned invariant below trivially rather than carefully.
 
    The PromQL path also refuses to infer a **step**. `stepSeconds` is required on a range
-   query, and the result reports the step measured from the returned timestamps (median gap,
-   taken *before* `clampSeriesPoints` strides the emitted points) next to the requested one.
-   That's issue #200's lesson applied where it's cheap: a step nobody chose decides the answer
-   of every range-vector function, and #200 is what that costs when it's invisible. Don't add a
-   default.
+   query — that's issue #200's lesson applied where it's cheap: a step nobody chose decides the
+   answer of every range-vector function, and #200 is what that costs when it's invisible.
+   Don't add a default. What the result reports back about the step is deliberately *not* an
+   "effective step": since Prometheus returns a point only where the range vector had samples,
+   a sparse metric's timestamps are wide multiples of a perfectly honoured step, and a median
+   gap would flag that as a 15x mismatch on the exact `count_over_time` probe #212 wanted. So
+   `reportedStep` states the one thing timestamps license — the step divides the GCD of the
+   gaps, measured across every series and *before* `clampSeriesPoints` strides the emitted
+   points — and names the field `consistentWithRequested`, false being proof of an override and
+   true being consistency rather than a match. Keep that asymmetry if you touch it.
 
    Two invariants in there that a partial read will miss, both load-bearing. **The tool
    executes `verdict.statement`, the text the guard scanned — never the caller's raw input.**

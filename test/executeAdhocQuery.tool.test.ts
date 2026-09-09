@@ -420,27 +420,29 @@ describe('execute_adhoc_query audit and redaction', () => {
 
 const PROM: DatasourceInfo[] = [{ uid: 'prom1', id: 3, name: 'Prometheus', type: 'prometheus' }];
 
-/** A Prometheus-shaped range response: `count` points spaced `stepMs` apart from FROM. */
-function promResponse(stepMs: number, count: number): DsQueryResponse {
-  const times = Array.from({ length: count }, (_, i) => FROM + i * stepMs);
+/** A Prometheus-shaped range response: one frame per series, at the exact timestamps given. */
+function promFrames(...seriesTimes: number[][]): DsQueryResponse {
   return {
     results: {
       A: {
-        frames: [
-          {
-            schema: {
-              refId: 'A',
-              fields: [
-                { name: 'Time', type: 'time' },
-                { name: 'Value', type: 'number', labels: { job: 'web' } },
-              ],
-            },
-            data: { values: [times, times.map(() => 1)] },
+        frames: seriesTimes.map((times, i) => ({
+          schema: {
+            refId: 'A',
+            fields: [
+              { name: 'Time', type: 'time' },
+              { name: 'Value', type: 'number', labels: { job: `web-${i}` } },
+            ],
           },
-        ],
+          data: { values: [times, times.map(() => 1)] },
+        })),
       },
     },
   };
+}
+
+/** One series of `count` points spaced `stepMs` apart from FROM — the dense, unsparse case. */
+function promResponse(stepMs: number, count: number): DsQueryResponse {
+  return promFrames(Array.from({ length: count }, (_, i) => FROM + i * stepMs));
 }
 
 describe('execute_adhoc_query PromQL', () => {
@@ -469,24 +471,72 @@ describe('execute_adhoc_query PromQL', () => {
     expect(queryDs.mock.calls[0]![0].queries[0]!.rawQuery).toBeUndefined();
   });
 
-  it('reports the effective step measured from the returned timestamps', async () => {
+  it('reports a dense series as exactly the requested step, with nothing to reinterpret', async () => {
     const cfg = authorized();
     const { client } = fakeClient(PROM, promResponse(60_000, 61));
     const body = payload(await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 60 }));
-    expect(body.step).toMatchObject({ requestedMs: 60_000, effectiveMs: 60_000, points: 61, matchesRequested: true });
+    expect(body.step).toMatchObject({
+      requestedMs: 60_000,
+      observedGapGcdMs: 60_000,
+      observedMinGapMs: 60_000,
+      seriesMeasured: 1,
+      consistentWithRequested: true,
+    });
     expect(body.step.note).toBeUndefined();
   });
 
   it('flags a datasource that evaluated at a different step than requested', async () => {
-    // The failure #200 documents, made visible instead of assumed away: the
-    // requested step is a request, and a caller measuring scrape density is
-    // asking a question *about* the step.
+    // The failure #200 documents, made visible instead of assumed away: 15000ms
+    // gaps cannot be produced by a 60000ms step, so this is proof rather than
+    // inference.
     const cfg = authorized();
     const { client } = fakeClient(PROM, promResponse(15_000, 241));
     const body = payload(await callTool(cfg, client, { ...base, query: 'increase(x[1m])', stepSeconds: 60 }));
-    expect(body.step.matchesRequested).toBe(false);
-    expect(body.step.effectiveMs).toBe(15_000);
-    expect(body.step.note).toContain('15000ms, not the requested 60000ms');
+    expect(body.step.consistentWithRequested).toBe(false);
+    expect(body.step.observedGapGcdMs).toBe(15_000);
+    expect(body.step.note).toContain('divisor of 15000ms, which is not a multiple of the requested 60000ms');
+  });
+
+  it('does not mistake a sparse metric for a step override', async () => {
+    // The headline probe in #212 — count_over_time on a metric that emits a few
+    // events an hour. Prometheus evaluates on the 60s grid but returns a point
+    // only where the range vector had samples, so the gaps are wide *multiples*
+    // of the step. Calling that a 900000ms step would turn a correct
+    // scrape-density measurement into an apparent 15x error, because the skill
+    // tells the agent to reread every number against the reported step.
+    const cfg = authorized();
+    const sparse = [FROM, FROM + 60_000, FROM + 960_000, FROM + 1_020_000, FROM + 2_460_000];
+    const { client } = fakeClient(PROM, promFrames(sparse));
+    const body = payload(
+      await callTool(cfg, client, { ...base, query: 'count_over_time(app_action_total[1m])', stepSeconds: 60 }),
+    );
+    expect(body.step.consistentWithRequested).toBe(true);
+    expect(body.step.observedGapGcdMs).toBe(60_000);
+    expect(body.step.observedMinGapMs).toBe(60_000);
+    expect(body.step.note).toBeUndefined();
+  });
+
+  it('explains wide-but-consistent spacing as sparsity rather than a mismatch', async () => {
+    // Same shape, but with no gap as tight as the step: every gap is still a
+    // multiple of it, so the note says "not evidence of a different step".
+    const cfg = authorized();
+    const { client } = fakeClient(PROM, promFrames([FROM, FROM + 300_000, FROM + 900_000]));
+    const body = payload(await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 60 }));
+    expect(body.step).toMatchObject({ consistentWithRequested: true, observedGapGcdMs: 300_000, observedMinGapMs: 300_000 });
+    expect(body.step.note).toContain('not evidence of a different step');
+  });
+
+  it('measures across every series, not the first one that has two points', async () => {
+    // A single-point first series used to decide the whole report — either
+    // claiming nothing was measurable, or reporting that one series' spacing
+    // while denser ones went unread.
+    const cfg = authorized();
+    const { client } = fakeClient(
+      PROM,
+      promFrames([FROM], [FROM, FROM + 120_000], [FROM, FROM + 60_000, FROM + 120_000]),
+    );
+    const body = payload(await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 60 }));
+    expect(body.step).toMatchObject({ seriesMeasured: 2, observedMinGapMs: 60_000, consistentWithRequested: true });
   });
 
   it('measures the step before the response clamp downsamples the series', async () => {
@@ -499,18 +549,19 @@ describe('execute_adhoc_query PromQL', () => {
     const body = payload(
       await callTool(cfg, client, { ...base, query: 'up', toMs: FROM + 100_000, stepSeconds: 1 }),
     );
-    expect(body.step).toMatchObject({ effectiveMs: 1_000, matchesRequested: true, points: 500 });
+    expect(body.step).toMatchObject({ observedMinGapMs: 1_000, observedGapGcdMs: 1_000, consistentWithRequested: true });
     expect(body.series[0].pointsTotal).toBe(500);
     expect(body.series[0].points.length).toBe(101);
   });
 
-  it('says so when there are too few points to measure a step', async () => {
+  it('says nothing can be measured when no series has two distinct timestamps', async () => {
     const cfg = authorized();
-    const { client } = fakeClient(PROM, { results: { A: { frames: [] } } });
+    const { client } = fakeClient(PROM, promFrames([FROM], [FROM + 30_000]));
     const body = payload(await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 60 }));
     expect(body.step.requestedMs).toBe(60_000);
-    expect(body.step.effectiveMs).toBeUndefined();
-    expect(body.step.note).toContain('Too few points');
+    expect(body.step.observedGapGcdMs).toBeUndefined();
+    expect(body.step.consistentWithRequested).toBeUndefined();
+    expect(body.step.note).toContain('matched no data in this window');
   });
 
   it('refuses a range query with no stepSeconds instead of inferring one', async () => {
@@ -570,6 +621,36 @@ describe('execute_adhoc_query PromQL', () => {
     // An InfluxQL-shaped pane would open Explore empty against Prometheus.
     expect(pane.queries[0].query).toBeUndefined();
     expect(pane.range).toEqual({ from: String(FROM), to: String(TO) });
+  });
+
+  it('records a replayable URL for a dialect-parameter refusal, not just a guard refusal', async () => {
+    // The likeliest first attempt now that stepSeconds is required. The refusal
+    // comes from dialect.prepare(), which used to run before the URL was built,
+    // so this record had no link — while a guard refusal on the same call did.
+    // README and docs/TOOLS.md both promise refused queries are recorded with
+    // one, so the trail can't be selective about which refusals qualify.
+    const cfg = authorized();
+    const { client } = fakeClient(PROM);
+    await callTool(cfg, client, { ...base, query: 'rate(x[1m])' });
+    const raw = await readFile(join(dataDir, 'audit.jsonl'), 'utf8');
+    const record = JSON.parse(raw.trim().split('\n')[0]!);
+    expect(record.outcome).toBe('error');
+    expect(record.argsSummary.exploreUrl).toContain('/explore');
+    const pane = JSON.parse(new URL(record.argsSummary.exploreUrl).searchParams.get('panes')!).timebuddy;
+    expect(pane.queries[0].expr).toBe('rate(x[1m])');
+    // No step in the link, because the step was never valid — replaying at a
+    // resolution nobody chose is the thing this whole path refuses to do.
+    expect(pane.queries[0].interval).toBeUndefined();
+  });
+
+  it('records a replayable URL when the step exceeds the point budget', async () => {
+    const cfg = { ...authorized(), maxDataPoints: 100 };
+    const { client } = fakeClient(PROM);
+    await callTool(cfg, client, { ...base, query: 'up', stepSeconds: 1 });
+    const raw = await readFile(join(dataDir, 'audit.jsonl'), 'utf8');
+    const record = JSON.parse(raw.trim().split('\n')[0]!);
+    expect(record.outcome).toBe('error');
+    expect(record.argsSummary.exploreUrl).toContain('/explore');
   });
 
   it('records queryType and stepSeconds in the audit record', async () => {
