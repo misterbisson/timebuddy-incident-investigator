@@ -489,21 +489,26 @@ project-scoped `.mcp.json` in the repo where you author dashboards:
 }
 ```
 
-**Give this entry a name of its own** — `timebuddy-adhoc` above — rather than reusing the name
-of a Timebuddy server your client already has configured globally. Registering the app with
-Claude adds exactly such a server, without this flag, and a project entry sharing its name is
-ambiguous: MCP clients differ in which of the two wins, and in at least one combination the
-project entry is never offered for approval at all, so the flag silently does nothing. A
-distinct name sidesteps the question. Both servers then register and their tool lists overlap,
-which is expected: keep using the tools from your usual server and reach across for
-`execute_adhoc_query`, which arrives under the project server's name.
+**Give this entry a name of its own** — `timebuddy-adhoc` above — rather than reusing the name of
+the Timebuddy server you already have configured (registering the app with Claude adds one,
+without this flag). A shared name doesn't give you a second server; the project entry *replaces*
+the configured one inside that workspace. Sometimes replacing is the point — this repo's own dev
+setup shares the name deliberately, to run a local build instead of the installed release (see
+[CONTRIBUTING](CONTRIBUTING.md#using-the-local-build-in-claude-code)) — but for ad-hoc queries it
+means your everyday tools start coming from whatever `command` the checked-in file names, so a
+path that's stale or wrong for someone's machine takes all of them down rather than just this one.
 
-**`command` is the app-bundle path**, the same one [Registering with Claude](#registering-with-claude)
-fills in for you — there's no `timebuddy` CLI on `PATH` to invoke instead. A checked-in
-`.mcp.json` therefore assumes everyone on the team installed the app to the same location; on a
-machine where that path doesn't exist the server just fails to start, which is why the distinct
-name matters — the failure costs only the ad-hoc tool and leaves your usual Timebuddy server
-working.
+A distinct name keeps the capability additive: both servers register, their tool lists overlap
+(expected, not a misconfiguration), and `execute_adhoc_query` arrives under the project server's
+name.
+
+**`command` is the path to the installed app**, not a `timebuddy` CLI — none is published. The
+example above is the **macOS** location; the path's shape differs per platform, and the app's own
+"Register with Claude" block fills in the right one for whichever platform you're on, so copy it
+from there rather than from here. A checked-in `.mcp.json` therefore assumes every teammate
+installed the app to the same place — same OS included — and on a machine where that path doesn't
+resolve the server simply fails to start, which is the other reason the distinct name matters: the
+failure then costs only the ad-hoc tool and leaves your usual Timebuddy server working.
 
 The flag is `--allow-adhoc-queries=<host>:<datasourceType>[,<datasourceType>]`, repeatable once
 per endpoint. `<host>` is matched against each connection's URL host and its `matchHosts`
@@ -572,14 +577,20 @@ An MCP server advertises one tool list per session, so the flag is read once at 
 - **Adding or changing the flag needs a full restart of the client session.** Restarting the
   Timebuddy app is not the same thing, and neither is resuming a session that began before you
   wrote the file — that session's tool list is already fixed.
-- **A hostname that matches no connection doesn't register anything either.** `<host>` is
-  matched against your configured connections, so a typo, or an endpoint you haven't added yet,
-  leaves the tool absent. The server logs which hosts went unmatched on stderr, which your
-  client may not show you — so check the spelling against
-  [Multiple connections](#multiple-connections) rather than the log.
+- **A malformed flag registers nothing.** `--allow-adhoc-queries=metrics.staging.example.com`
+  with no `:<datasourceType>`, or a bare `--allow-adhoc-queries`, is skipped rather than fatal —
+  a typo in a checked-in file leaves the capability off (its safe state) instead of taking every
+  other tool down with it. The reason is logged as `Ignoring ad-hoc query flag: ...` on a stderr
+  your client may not show you, so check the flag's shape against the example above.
 - **A server that failed to start looks identical.** If the `command` path is wrong (an app
-  bundle that moved, or a `timebuddy` CLI that isn't on `PATH`), you get no tool and no flag
-  error — just a server that isn't there.
+  bundle that moved, or one installed somewhere else on a teammate's machine), you get no tool
+  and no flag error — just a server that isn't there.
+
+A **hostname that matches no connection is the opposite symptom**, and worth separating: the tool
+still registers, and every call refuses with "This connection is not authorized for ad-hoc
+queries." `<host>` is matched against your configured connections, so check the spelling against
+[Multiple connections](#multiple-connections) — the server also logs which hosts went unmatched,
+on that same stderr.
 
 ## Local data and disk usage
 
