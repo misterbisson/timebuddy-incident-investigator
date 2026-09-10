@@ -122,6 +122,49 @@ h1 {
   margin: 0 0 8px;
 }
 
+.about-info {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.about-info h2 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.app-version {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+
+/* Sized to hold the longest message without the row reflowing as the status
+   changes — the button must not shift under a cursor mid-click. */
+.update-status {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  flex: 1 1 240px;
+}
+
+.update-status.ok {
+  color: var(--color-status-ok);
+}
+
+.update-status.warn {
+  color: var(--color-status-warn);
+}
+
+.update-status.err {
+  color: var(--color-status-err);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
