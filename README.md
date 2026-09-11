@@ -29,6 +29,44 @@ Give it an alert (a link, alert JSON, or webhook payload) and it will:
 - **Report** — a verdict (`real-anomaly` / `likely-false-positive` / `inconclusive`) with
   a clickable link to every piece of evidence.
 
+## Where Timebuddy stops
+
+A real estate holds more than metrics and logs: tickets, wiki pages, chat history, inventory
+and DCIM systems, plus site-specific services whose shapes nobody could predict. Timebuddy
+neither discovers nor reaches any of them. That's a boundary, not a gap waiting to be filled.
+
+**Inside the boundary, discovery is normalized.** A Grafana connection and a Graylog connection
+pair by shared `tags`: `list_datasources` returns each connection's `connectionTags`,
+`list_log_sources` returns each log connection's `tags`, and `/timebuddy:investigate` matches
+them instead of asking which log source belongs to which Grafana. `/timebuddy:explore` flags
+mismatched tags before an incident, when there's time to fix them. That works because both
+sides are things Timebuddy connects to — see [Multiple connections](#multiple-connections).
+
+**Outside it, your own skills own your own resources, and they call these tools rather than the
+reverse.** A skill that owns your inventory can answer "what is this host, what else shares its
+rack, which services declare it" and then hand the dashboard to `find_related_dashboards` /
+`execute_query_window` for the actual timeseries. The direction is one-way by construction:
+Timebuddy has no way to reach into a ticket tracker or a CMDB, because the
+[read-only endpoint allowlists](#security) are the only network surface its tool layer has.
+
+Composition happens in the agent, not through pipes — it reads one tool's output and decides
+what to call next. So the contract that makes it work is that **every output states what it
+covers**: which connection, which window, which datasource, and `provenance: "adhoc"` when a
+query wasn't a human's. An empty result that doesn't say *why* it's empty is indistinguishable
+from a real negative, which is why these tools return structured fields rather than prose.
+
+**Why there's no generic "find the related tickets and chat messages" tool.** Linking a metric
+dip to the human discussion of it is a join, and the key has to be a string that appears
+verbatim on both sides. Free text isn't that key — ordinary ops words are also service names,
+so matching prose to services is wrong often enough to be worse than not doing it. And an
+identifier has to be judged by whether it *circulates*, not by whether it's unique: a trace id
+is perfectly unique and nobody ever pastes one into a chat message, so a search for it returns
+zero *by construction* — which reads exactly like a clean search. "I looked and found nothing"
+is worth something only if the search could have found something, so a generic version of this
+would mostly manufacture confident negatives. Timebuddy instead sticks to identifiers it
+already has in hand — host, IP, request/trace id — against log sources you configured; see
+[Searching logs](#searching-logs).
+
 ## Skills
 
 Three bundled Claude Code skills chain the [tools](#mcp-tools) in the right order, so nobody
