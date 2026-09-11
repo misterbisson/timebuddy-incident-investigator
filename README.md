@@ -119,6 +119,15 @@ open the app yourself, this is the path that keeps you current.
 A failed or offline check is silent and just retried later — it never interrupts an
 investigation, and a broken update check can never take the MCP server down with it.
 
+**To check right now**, open the app and use **Check for Updates…** (in the Timebuddy menu on
+macOS, under **File** on Windows and Linux), or the **Check for updates** button in the
+**About** section at the bottom of the Connections window. Either one always asks — it ignores
+the six-hourly interval that paces the background checks — and always tells you what it found,
+including "you're up to date" and why a check couldn't run. It's the same button whether you
+opened the app yourself or Claude is running it: if Claude has it open as an MCP server, a
+manual check still downloads the update but won't restart anything mid-session, so it's applied
+when that session ends, same as always.
+
 - **macOS** updates are Apple Developer ID signed and notarized, same as the build you first
   installed. Builds after 0.9.1 require **macOS 13 (Ventura) or later** — Chromium dropped
   macOS 12 (Monterey), so the Electron runtime underneath did too. On an older macOS the
@@ -130,7 +139,7 @@ investigation, and a broken update check can never take the MCP server down with
   [Known limitations](#known-limitations-mvp)).
 
 Only the packaged app auto-updates; a checkout run from source has nothing to update and skips
-the check.
+the check — a manual check there says so rather than appearing to do nothing.
 
 ## Configuring connections
 

@@ -47,6 +47,73 @@ function isUpdateDownloadInProgress() {
   return downloadInProgress;
 }
 
+// Named by 'update-available', cleared once the download settles — so a status
+// query can say *which* version is being fetched rather than just "something".
+let pendingVersion = null;
+
+// Set by 'update-downloaded' and deliberately never cleared: once a build is on
+// disk it stays there until this process exits and autoInstallOnAppQuit applies
+// it, so a second manual check should report that already-downloaded version
+// rather than re-asking the feed and finding the same answer.
+let downloadedVersion = null;
+
+// The one wired electron-updater instance. setupAutoUpdater() and
+// checkForUpdatesNow() are two entry points onto ONE updater, and wiring the
+// listeners twice would mean two restart dialogs for a single download — so both
+// go through wireUpdater() and the first caller wins.
+let wired = null;
+
+// Dedupes a mashed button: every click made while a check is outstanding gets
+// the same promise back instead of starting a second feed request.
+let checkInFlight = null;
+
+// Resolvers for manual checks still waiting to hear what the feed said. The
+// events below are the only thing that knows — electron-updater reports the
+// outcome by event, and its checkForUpdates() promise resolves the same shape
+// whether or not there was anything to update.
+let pendingChecks = [];
+
+// manualCheckPending is true between a user-initiated check and the event that
+// answers it; watchedDownload latches it when that answer turns out to be
+// "downloading". Together they are how the download-complete handler knows
+// somebody is actually waiting to hear how this ends — which is the one thing
+// that makes a dialog in --mcp-server mode appropriate rather than exactly the
+// unasked-for interruption constraint 3 below exists to prevent.
+let manualCheckPending = false;
+let watchedDownload = false;
+
+/**
+ * Answers every check waiting on this outcome. Called from the event handlers
+ * and, as a backstop, from checkForUpdates()'s own rejection — settling twice is
+ * harmless (the queue is emptied first) and never settling would leave a button
+ * spinning forever.
+ */
+function settleChecks(result) {
+  const waiting = pendingChecks;
+  pendingChecks = [];
+  for (const resolve of waiting) resolve(result);
+  return result;
+}
+
+/**
+ * What the UI needs to render the update controls before anything is clicked:
+ * the running version, and whether this build can update itself at all. The two
+ * unsupported reasons are the same ones setupAutoUpdater() returns null for, and
+ * they're reported rather than hidden — a "Check for updates" button that
+ * silently does nothing on a dev build or an out-of-support macOS is worse than
+ * no button, since the user can't tell "up to date" from "never even asked".
+ */
+function getUpdateStatus() {
+  const reason = !app.isPackaged ? 'dev-build' : isOsTooOldForUpdates() ? 'os-too-old' : null;
+  return {
+    version: app.getVersion(),
+    supported: reason === null,
+    reason,
+    downloadInProgress,
+    downloadedVersion,
+  };
+}
+
 // Wires electron-updater into the packaged GUI app. On launch it checks the
 // GitHub Releases feed (configured by electron-builder's `build.publish` block
 // in package.json, which electron-builder bakes into app-update.yml at pack
@@ -127,6 +194,27 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
   // run" signal as the unpackaged path — nothing downstream distinguishes them.
   if (isMcpMode && !claimUpdateCheck(app.getPath('userData'))) return null;
 
+  return runCheck(wireUpdater({ isMcpMode }));
+}
+
+/**
+ * Builds the single wired autoUpdater, or returns the one already built.
+ *
+ * Everything above this point in setupAutoUpdater() is a *policy* guard (is this
+ * build updatable, and should this particular process be the one to check);
+ * everything below is the wiring itself, which is identical no matter which
+ * entry point asked for it. Keeping them apart is what lets
+ * checkForUpdatesNow() reuse the policy guards it shares and skip the election
+ * it doesn't — a user who clicked a button is not a background process that
+ * needs rate-limiting.
+ *
+ * Callers must apply their own guards first: this function assumes the app is
+ * packaged and the OS is supported, and reaching it otherwise would load
+ * electron-updater on a path that has already decided not to update.
+ */
+function wireUpdater({ isMcpMode = false } = {}) {
+  if (wired) return wired;
+
   // Lazy require: keeps electron-updater and its transitive deps out of the
   // process entirely on the paths above, loaded only once we've decided we
   // actually intend to check for updates.
@@ -160,18 +248,38 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
   // autoDownload=true means the download starts the instant this fires —
   // isUpdateDownloadInProgress() above must read true from here through
   // whichever of 'update-downloaded'/'error' below settles it, with no gap.
-  autoUpdater.on('update-available', () => {
+  autoUpdater.on('update-available', (info) => {
     downloadInProgress = true;
+    pendingVersion = (info && info.version) || null;
+    // Latch before settling: the click that started this is answered here, but
+    // the person who made it is still owed the *end* of the story below.
+    watchedDownload = manualCheckPending;
+    manualCheckPending = false;
+    settleChecks({ status: 'downloading', version: pendingVersion });
   });
   // No newer version — nothing was ever downloading, but set it anyway
   // rather than assuming: cheap, and correct even if a future
   // electron-updater version ever fires this after 'update-available'.
   autoUpdater.on('update-not-available', () => {
     downloadInProgress = false;
+    pendingVersion = null;
+    manualCheckPending = false;
+    settleChecks({ status: 'up-to-date', version: app.getVersion() });
   });
 
   autoUpdater.on('error', (err) => {
     downloadInProgress = false;
+    pendingVersion = null;
+    manualCheckPending = false;
+    watchedDownload = false;
+    // A manual check is the one caller that DOES hear about a failure. The
+    // silence below is right for a background check nobody asked for; it would
+    // be a bug for a button, which must never leave the user unable to tell a
+    // failed check from a successful one.
+    settleChecks({
+      status: 'error',
+      message: (err && (err.message || String(err))) || 'Update check failed.',
+    });
     // Never surface an update failure as a modal: a transient network error,
     // an offline launch, or a build with no matching release must not
     // interrupt the app. Log for diagnosis; the next launch retries. (stderr,
@@ -183,6 +291,18 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
   autoUpdater.on('update-downloaded', async (info) => {
     downloadInProgress = false;
     const version = info && info.version ? info.version : '';
+    pendingVersion = null;
+    downloadedVersion = version || downloadedVersion;
+    manualCheckPending = false;
+    // Read once and cleared here: a second download in the same process (there
+    // shouldn't be one, but the handler must not assume) is not still owed the
+    // answer to a click that was already answered.
+    const wasWatched = watchedDownload;
+    watchedDownload = false;
+    // Only reaches a caller that arrived while the download was already running
+    // — the click that started it was settled at 'update-available'. Harmless
+    // otherwise: settleChecks on an empty queue does nothing.
+    settleChecks({ status: 'downloaded', version });
 
     if (isMcpMode) {
       // Passive by design — see constraints 2 and 3 in the header. The update
@@ -192,6 +312,30 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
       // dialog, and above all no quitAndInstall(): killing this process would
       // drop the stdio transport in the middle of whatever the agent is doing.
       console.error(`[auto-update] ${version} downloaded; installs when this MCP server next exits`);
+      // The single exception to constraint 3, and only to constraint 3: a
+      // download this user personally asked for, from a window they have open
+      // in front of them. What that constraint forbids is an *unasked-for*
+      // modal landing on someone mid-session; answering a question they just
+      // asked is the opposite of that. Constraint 2 is untouched — this offers
+      // no restart and never calls quitAndInstall(), because the reason not to
+      // tear down the agent's stdio session doesn't soften just because the
+      // user is watching. So the dialog's whole job is to say where the update
+      // went, since otherwise a click that worked perfectly looks like nothing
+      // happened at all.
+      if (wasWatched) {
+        await dialog.showMessageBox({
+          type: 'info',
+          buttons: ['OK'],
+          defaultId: 0,
+          title: 'Update downloaded',
+          message: `Timebuddy ${version} is downloaded.`,
+          detail:
+            'Claude is running Timebuddy right now, so it will not restart on its own. ' +
+            'The update is applied automatically the next time this server exits — when you ' +
+            'quit Claude, or once the session has been idle for a while.',
+          noLink: true,
+        });
+      }
       return;
     }
 
@@ -215,23 +359,115 @@ function setupAutoUpdater({ isMcpMode = false } = {}) {
     }
   });
 
-  // Fire-and-forget. Two independent promises can reject here, and BOTH must
-  // be caught or Electron logs an unhandledRejection (the 'error' listener
-  // above is where failures are actually reported — these catches only stop
-  // the noise):
-  //   1. checkForUpdates() itself, on a failed check.
-  //   2. the result's downloadPromise — because autoDownload is true,
-  //      checkForUpdates() kicks off a *separate* background download whose
-  //      promise nothing else consumes (unlike checkForUpdatesAndNotify). On
-  //      macOS with no zip, or any mid-download network failure, it rejects.
+  wired = autoUpdater;
+  return autoUpdater;
+}
+
+/**
+ * Asks the feed, and returns the same autoUpdater so setupAutoUpdater()'s
+ * contract ("the updater, or null if this process isn't checking") is unchanged.
+ *
+ * Fire-and-forget. Two independent promises can reject here, and BOTH must
+ * be caught or Electron logs an unhandledRejection (the 'error' listener
+ * above is where failures are actually reported — these catches only stop
+ * the noise):
+ *   1. checkForUpdates() itself, on a failed check.
+ *   2. the result's downloadPromise — because autoDownload is true,
+ *      checkForUpdates() kicks off a *separate* background download whose
+ *      promise nothing else consumes (unlike checkForUpdatesAndNotify). On
+ *      macOS with no zip, or any mid-download network failure, it rejects.
+ *
+ * The one addition for manual checks: settleChecks() on rejection. Every normal
+ * failure also emits 'error', which settles a waiting check already — but "also"
+ * is not "always", and a rejection that somehow didn't emit would leave a button
+ * spinning with no way back. Settling twice costs nothing; not settling strands
+ * the user.
+ */
+function runCheck(autoUpdater) {
   autoUpdater
     .checkForUpdates()
     .then((result) => {
       if (result && result.downloadPromise) result.downloadPromise.catch(() => {});
     })
-    .catch(() => {});
-
+    .catch((err) => {
+      settleChecks({
+        status: 'error',
+        message: (err && (err.message || String(err))) || 'Update check failed.',
+      });
+    });
   return autoUpdater;
 }
 
-module.exports = { setupAutoUpdater, isUpdateDownloadInProgress, isOsTooOldForUpdates };
+/**
+ * The user asked, explicitly, right now. Returns a promise for what the feed
+ * said, in a shape a UI can render:
+ *
+ *   { status: 'unsupported', reason: 'dev-build' | 'os-too-old', version }
+ *   { status: 'up-to-date',  version }            // version = what's running
+ *   { status: 'downloading', version }            // version = what's coming
+ *   { status: 'downloaded',  version }            // already on disk, awaiting exit
+ *   { status: 'error',       message }
+ *
+ * Three deliberate differences from the automatic path:
+ *
+ *   1. **No election.** updateCheckClaim.js exists to stop ~11 background MCP
+ *      processes each downloading the same 120MB, which is a statement about
+ *      *unprompted* checks. A person clicking a button is not that, and
+ *      answering "no" because a sibling process stamped a file four hours ago
+ *      would be indistinguishable from the button being broken. This is the
+ *      same reasoning that already exempts GUI launches (see the header) —
+ *      and, like a GUI launch, it doesn't write the stamp either, so it neither
+ *      consults nor consumes the background interval.
+ *
+ *   2. **The unsupported cases are reported, not silent.** setupAutoUpdater()
+ *      returns null for a dev build or an out-of-support macOS because there is
+ *      nobody to tell; here there is, and "nothing happened" is the one answer
+ *      a button must never give.
+ *
+ *   3. **Deduped.** Rapid clicks share one in-flight check rather than stacking
+ *      feed requests and duplicate downloads.
+ */
+function checkForUpdatesNow({ isMcpMode = false } = {}) {
+  const status = getUpdateStatus();
+  if (!status.supported) {
+    return Promise.resolve({ status: 'unsupported', reason: status.reason, version: status.version });
+  }
+  // Already on disk from an earlier check in this process: don't re-ask the feed
+  // just to be told the same thing, and above all don't restart the download.
+  if (downloadedVersion) {
+    return Promise.resolve({ status: 'downloaded', version: downloadedVersion });
+  }
+  if (checkInFlight) return checkInFlight;
+  // A download already running (from the launch check) has no check to wait on —
+  // 'update-available' fired before this click — so answer from state, and mark
+  // the caller as watching so the completion dialog below still reaches them.
+  if (downloadInProgress) {
+    watchedDownload = true;
+    return Promise.resolve({ status: 'downloading', version: pendingVersion });
+  }
+
+  const settled = new Promise((resolve) => pendingChecks.push(resolve));
+  manualCheckPending = true;
+  checkInFlight = settled.finally(() => {
+    checkInFlight = null;
+  });
+  try {
+    runCheck(wireUpdater({ isMcpMode }));
+  } catch (err) {
+    // wireUpdater() throwing means electron-updater itself failed to load —
+    // no event will ever arrive, so settle here or the promise never resolves.
+    settleChecks({
+      status: 'error',
+      message: (err && (err.message || String(err))) || 'Update check failed.',
+    });
+  }
+  return checkInFlight;
+}
+
+module.exports = {
+  setupAutoUpdater,
+  checkForUpdatesNow,
+  getUpdateStatus,
+  isUpdateDownloadInProgress,
+  isOsTooOldForUpdates,
+};
