@@ -25,8 +25,11 @@ const path = require('node:path');
 const UPDATER = path.join(__dirname, '..', 'src', 'updater.js');
 const CLAIM = path.join(__dirname, '..', 'src', 'updateCheckClaim.js');
 
+const RUNNING_VERSION = '0.10.0';
+
 let dialogCalls;
 let quitAndInstallCalls;
+let checkCalls;
 let autoUpdater;
 let dialogResponse;
 let isPackaged;
@@ -50,9 +53,10 @@ function freshUserData(label) {
 }
 
 /** Fresh stubs + a fresh module registry entry, so each case starts clean. */
-function loadUpdater({ packaged = true, response = 0, dataDir = null, osRelease = null, platform = null } = {}) {
+function loadUpdaterModule({ packaged = true, response = 0, dataDir = null, osRelease = null, platform = null } = {}) {
   dialogCalls = [];
   quitAndInstallCalls = [];
+  checkCalls = 0;
   dialogResponse = response;
   isPackaged = packaged;
   userDataDir = dataDir || freshUserData('case');
@@ -66,12 +70,15 @@ function loadUpdater({ packaged = true, response = 0, dataDir = null, osRelease 
   autoUpdater.quitAndInstall = (...args) => quitAndInstallCalls.push(args);
   // Resolved rather than pending: setupAutoUpdater consumes both this and the
   // downloadPromise, and an unhandled rejection here would fail the run.
-  autoUpdater.checkForUpdates = () => Promise.resolve({ downloadPromise: Promise.resolve() });
+  autoUpdater.checkForUpdates = () => {
+    checkCalls += 1;
+    return Promise.resolve({ downloadPromise: Promise.resolve() });
+  };
 
   Module._load = function (request) {
     if (request === 'electron') {
       return {
-        app: { isPackaged, getPath: () => userDataDir },
+        app: { isPackaged, getPath: () => userDataDir, getVersion: () => RUNNING_VERSION },
         dialog: {
           showMessageBox: async (opts) => {
             dialogCalls.push(opts);
@@ -95,7 +102,13 @@ function loadUpdater({ packaged = true, response = 0, dataDir = null, osRelease 
   };
 
   delete require.cache[UPDATER];
-  return require(UPDATER).setupAutoUpdater;
+  return require(UPDATER);
+}
+
+/** Back-compat shim: every case below this file's manual-check block wants only
+ * setupAutoUpdater, and reads better without a destructure at each call. */
+function loadUpdater(opts) {
+  return loadUpdaterModule(opts).setupAutoUpdater;
 }
 
 /** Runs fn with stdout/stderr captured, returning everything written to each. */
@@ -358,6 +371,142 @@ const settle = async () => {
       'os-floor: declining does NOT consume the election claim',
       setupAutoUpdater({ isMcpMode: true }) !== null,
     );
+  }
+
+  // --- The manual check (checkForUpdatesNow): the "Check for updates" button ---
+  //
+  // Its defining property is that it answers. Every automatic path in this file
+  // is allowed to be silent — that's the right behavior for a check nobody
+  // asked for — but a control the user clicked must produce a message in every
+  // branch, including the branches where setupAutoUpdater() returns null and
+  // says nothing. Each case below asserts a *specific* answer for exactly the
+  // reason that "no answer" would be indistinguishable from a broken button.
+  {
+    const { checkForUpdatesNow, getUpdateStatus } = loadUpdaterModule({ packaged: false });
+    const status = getUpdateStatus();
+    let result;
+    try {
+      result = await checkForUpdatesNow({ isMcpMode: false });
+    } catch {
+      result = { status: 'threw' }; // a throw means the lazy require ran
+    }
+    check('manual/dev: reports unsupported rather than silently no-opping', result.status === 'unsupported');
+    check('manual/dev: names the reason', result.reason === 'dev-build');
+    check('manual/dev: still reports the running version', result.version === RUNNING_VERSION);
+    check('manual/dev: electron-updater is never loaded', status.supported === false && checkCalls === 0);
+  }
+
+  {
+    const { checkForUpdatesNow } = loadUpdaterModule({ packaged: true, osRelease: '21.6.0', platform: 'darwin' });
+    const result = await checkForUpdatesNow({ isMcpMode: false });
+    check('manual/old-macOS: unsupported, with the reason', result.status === 'unsupported' && result.reason === 'os-too-old');
+    check('manual/old-macOS: asks the feed nothing', checkCalls === 0);
+    setPlatform(null);
+  }
+
+  {
+    const { checkForUpdatesNow } = loadUpdaterModule({ packaged: true });
+    const pending = checkForUpdatesNow({ isMcpMode: false });
+    autoUpdater.emit('update-not-available', { version: RUNNING_VERSION });
+    const result = await pending;
+    check('manual/up-to-date: resolves up-to-date', result.status === 'up-to-date');
+    check('manual/up-to-date: names the version the user is on', result.version === RUNNING_VERSION);
+  }
+
+  {
+    const { checkForUpdatesNow } = loadUpdaterModule({ packaged: true });
+    let result;
+    const { stdout } = await captureOutput(async () => {
+      const pending = checkForUpdatesNow({ isMcpMode: true });
+      autoUpdater.emit('error', new Error('getaddrinfo ENOTFOUND github.com'));
+      result = await pending;
+    });
+    // The automatic path deliberately swallows this (a background failure has
+    // nobody to tell). A manual one must not: the user is owed the difference
+    // between "checked, you're current" and "couldn't check".
+    check('manual/error: surfaces the failure instead of swallowing it', result.status === 'error');
+    check('manual/error: carries the message', /ENOTFOUND/.test(result.message || ''));
+    check('manual/error: still writes nothing to stdout', stdout === '');
+  }
+
+  {
+    // A rejection that never emits 'error' would otherwise leave the button
+    // spinning forever — runCheck()'s catch is the backstop being asserted here.
+    const { checkForUpdatesNow } = loadUpdaterModule({ packaged: true });
+    autoUpdater.checkForUpdates = () => Promise.reject(new Error('config not found'));
+    const result = await checkForUpdatesNow({ isMcpMode: false });
+    check('manual/silent-rejection: settles rather than hanging', result.status === 'error');
+  }
+
+  // --- The election does not gate a manual check ---
+  {
+    const shared = freshUserData('manual-claim');
+    let mod = loadUpdaterModule({ packaged: true, dataDir: shared });
+    await captureOutput(async () => mod.setupAutoUpdater({ isMcpMode: true }));
+    check('manual/election: precondition — the automatic check claimed the interval', checkCalls === 1);
+
+    mod = loadUpdaterModule({ packaged: true, dataDir: shared });
+    check('manual/election: a sibling automatic check now stands down', mod.setupAutoUpdater({ isMcpMode: true }) === null);
+    const pending = mod.checkForUpdatesNow({ isMcpMode: true });
+    autoUpdater.emit('update-not-available', { version: RUNNING_VERSION });
+    const result = await pending;
+    // The whole point of the button: a user asking is not the fan-out the
+    // election exists to prevent, so a stamp written minutes ago must not turn
+    // their click into silence.
+    check('manual/election: the click checks anyway', checkCalls === 1 && result.status === 'up-to-date');
+  }
+
+  // --- Two entry points, one wired updater ---
+  {
+    const mod = loadUpdaterModule({ packaged: true, response: 1 });
+    mod.setupAutoUpdater({ isMcpMode: false });
+    const pending = mod.checkForUpdatesNow({ isMcpMode: false });
+    autoUpdater.emit('update-available', { version: '0.11.0' });
+    const result = await pending;
+    check('manual/shared: reports the version being downloaded', result.status === 'downloading' && result.version === '0.11.0');
+    check('manual/shared: download is in progress, so the idle watchdog defers', mod.isUpdateDownloadInProgress() === true);
+    autoUpdater.emit('update-downloaded', { version: '0.11.0' });
+    await settle();
+    // The real regression this guards: wiring listeners twice would show the
+    // restart prompt twice for one download.
+    check('manual/shared: exactly ONE restart dialog for one download', dialogCalls.length === 1);
+    check('manual/shared: the download flag is cleared again', mod.isUpdateDownloadInProgress() === false);
+    check('manual/shared: a later check reports the downloaded build, not a new download',
+      (await mod.checkForUpdatesNow({ isMcpMode: false })).status === 'downloaded');
+    check('manual/shared: and does not re-ask the feed', checkCalls === 2);
+  }
+
+  // --- --mcp-server: a watched download gets an answer; an unwatched one still doesn't ---
+  {
+    const mod = loadUpdaterModule({ packaged: true });
+    let result;
+    const { stdout } = await captureOutput(async () => {
+      const pending = mod.checkForUpdatesNow({ isMcpMode: true });
+      autoUpdater.emit('update-available', { version: '0.11.0' });
+      result = await pending;
+      autoUpdater.emit('update-downloaded', { version: '0.11.0' });
+      await settle();
+    });
+    check('manual/mcp: the click is answered', result.status === 'downloading');
+    check('manual/mcp: the completed download is reported to the user who asked', dialogCalls.length === 1);
+    check('manual/mcp: with no restart button', JSON.stringify((dialogCalls[0] || {}).buttons) === '["OK"]');
+    // Constraint 2 is untouched by the dialog above: a user watching is a reason
+    // to explain, never a reason to tear down the agent's stdio session.
+    check('manual/mcp: quitAndInstall is STILL never called', quitAndInstallCalls.length === 0);
+    check('manual/mcp: nothing reaches stdout', stdout === '');
+  }
+
+  {
+    // Regression guard on constraint 3: an update found by the *automatic*
+    // six-hourly check must remain completely silent in --mcp-server mode.
+    const mod = loadUpdaterModule({ packaged: true });
+    await captureOutput(async () => {
+      mod.setupAutoUpdater({ isMcpMode: true });
+      autoUpdater.emit('update-available', { version: '0.11.0' });
+      autoUpdater.emit('update-downloaded', { version: '0.11.0' });
+      await settle();
+    });
+    check('mcp/unwatched: an unasked-for download still shows NO dialog', dialogCalls.length === 0);
   }
 
   Module._load = realLoad;

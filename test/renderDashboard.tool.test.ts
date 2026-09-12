@@ -223,3 +223,54 @@ describe('render_dashboard tool', () => {
     expect(panel.series[0].stats).toBeDefined();
   });
 });
+
+describe('render_dashboard relative-time resolution', () => {
+  function plainDashboard(): DashboardGetResponse {
+    return {
+      dashboard: {
+        uid: 'dash2',
+        title: 'Requests',
+        timezone: 'America/Los_Angeles',
+        weekStart: 'monday',
+        time: { from: 'now-6h', to: 'now' },
+        panels: [{ id: 1, title: 'Requests', targets: [{ refId: 'A', datasource: { uid: 'influx1' }, query: 'SELECT 1', rawQuery: true }] }],
+      },
+      meta: {},
+    };
+  }
+
+  async function render(args: Record<string, unknown>) {
+    const { client } = fakeGrafanaClient({ dashboard: plainDashboard() });
+    const { server, call } = fakeServer();
+    registerRenderDashboard(server, { registry: fakeRegistry(connections, client), config: config() });
+    const result = (await call('render_dashboard', args)) as { content: Array<{ text: string }> };
+    return JSON.parse(result.content[0]!.text) as { window: Record<string, unknown> };
+  }
+
+  it("resolves a link's rounding shorthand against the dashboard's own zone and week-start", async () => {
+    const { window } = await render({ url: 'https://grafana.example.com/d/dash2?from=now%2Fw&to=now%2Fw' });
+    expect(window.relativeTime).toEqual({
+      from: 'now/w',
+      to: 'now/w',
+      timeZone: 'America/Los_Angeles',
+      timeZoneSource: 'dashboard',
+      weekStart: 'monday',
+      weekStartSource: 'dashboard',
+    });
+    // A Monday-start week in Los Angeles, from its first millisecond to its last.
+    expect((window.toMs as number) - (window.fromMs as number)).toBe(7 * 86_400_000 - 1);
+  });
+
+  it("resolves the dashboard's own saved default range when the call carries no window at all", async () => {
+    const { window } = await render({ dashboardUid: 'dash2', connection: 'test' });
+    // A fixed-duration shift is the same instant in every zone, so the
+    // dashboard's zone isn't reported here — it didn't bear on the result.
+    expect(window.relativeTime).toEqual({ from: 'now-6h', to: 'now' });
+    expect((window.toMs as number) - (window.fromMs as number)).toBe(6 * 3_600_000);
+  });
+
+  it('reports a plain window with no resolution metadata when both bounds were passed as epoch ms', async () => {
+    const { window } = await render({ dashboardUid: 'dash2', connection: 'test', fromMs: 1_000, toMs: 2_000 });
+    expect(window).toEqual({ fromMs: 1_000, toMs: 2_000 });
+  });
+});

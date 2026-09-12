@@ -7,7 +7,7 @@ const { testConnection } = require('./grafanaTest.js');
 const { testGraylogConnection } = require('./graylogTest.js');
 const { createScreenshotter } = require('./screenshotter.js');
 const { attachAuthHeaders } = require('./authGuard.js');
-const { setupAutoUpdater, isUpdateDownloadInProgress } = require('./updater.js');
+const { setupAutoUpdater, checkForUpdatesNow, getUpdateStatus, isUpdateDownloadInProgress } = require('./updater.js');
 
 // Populated once runMcpServer() has dynamically imported the engine package —
 // null in the normal (non --mcp-server) GUI launch, since there's no
@@ -153,16 +153,117 @@ function openOrFocusConnectionsWindow() {
 }
 
 /**
+ * Turns a checkForUpdatesNow() result into what to say about it. Shared so the
+ * menu item and the Connections window's button can't drift into describing the
+ * same outcome differently — the renderer builds its inline text from the same
+ * five statuses (renderer/connections.js), this builds the modal's two lines.
+ *
+ * 'downloading' is a genuine end state for this dialog, not a missing case: the
+ * updater's own 'update-downloaded' handler owns the sequel (a restart prompt in
+ * GUI mode, an install-on-exit notice in --mcp-server mode), so saying more here
+ * would either duplicate it or contradict it.
+ */
+function describeUpdateCheck(result) {
+  switch (result.status) {
+    case 'unsupported':
+      return result.reason === 'dev-build'
+        ? {
+            message: `Timebuddy ${result.version} (development build)`,
+            detail:
+              'This copy is running from a source checkout, which has nothing to update — ' +
+              'only an installed build updates itself.',
+          }
+        : {
+            message: `Timebuddy ${result.version} can't update on this macOS`,
+            detail:
+              'Builds after 0.9.1 require macOS 13 (Ventura) or later. Timebuddy stays on the ' +
+              'version you have rather than installing one that would not launch; updating macOS ' +
+              'resumes updates.',
+          };
+    case 'up-to-date':
+      return { message: `Timebuddy ${result.version} is up to date.`, detail: 'No newer version is available.' };
+    case 'downloading':
+      return {
+        message: `Downloading Timebuddy ${result.version}…`,
+        detail: "It's being fetched in the background. You'll be told when it's ready to install.",
+      };
+    case 'downloaded':
+      return {
+        message: `Timebuddy ${result.version} is downloaded.`,
+        detail: 'It installs the next time Timebuddy exits.',
+      };
+    default:
+      return {
+        message: 'Could not check for updates.',
+        detail: `${result.message || 'Unknown error.'}\n\nThis is usually a network problem — Timebuddy keeps checking on its own.`,
+      };
+  }
+}
+
+/**
+ * The menu item's half of the manual check. The window's button reports inline
+ * instead (it has somewhere to put the answer); a menu item has nowhere, so it
+ * gets a modal — which is fine in --mcp-server mode too, because unlike the
+ * automatic path this modal is the answer to a question the user just asked.
+ */
+async function runManualUpdateCheckFromMenu() {
+  let result;
+  try {
+    result = await checkForUpdatesNow({ isMcpMode });
+  } catch (err) {
+    result = { status: 'error', message: err && err.message ? err.message : String(err) };
+  }
+  const { message, detail } = describeUpdateCheck(result);
+  await dialog.showMessageBox({
+    type: result.status === 'error' ? 'warning' : 'info',
+    buttons: ['OK'],
+    title: 'Check for updates',
+    message,
+    detail,
+    noLink: true,
+  });
+}
+
+/**
  * Replaces Electron's default menu (generic Electron-branded Help links, a
  * File menu with nothing relevant to this app, etc.) with one scoped to what
  * this app actually does. Built fresh in both launch modes — macOS always
  * shows an app-level menu bar even when --mcp-server mode never opens a
  * window, and "Connections…" is how that mode's user reaches the GUI at all.
+ *
+ * The macOS app menu is spelled out rather than left as { role: 'appMenu' }
+ * for one reason: "Check for Updates…" belongs directly under "About" on that
+ * platform, and a role-built submenu can't be inserted into. Everything else in
+ * it is the exact default role list, so this stays a placement change and not a
+ * redesign.
  */
 function buildMenu() {
   const isMac = process.platform === 'darwin';
+  const checkForUpdatesItem = {
+    label: 'Check for Updates…',
+    click: () => runManualUpdateCheckFromMenu(),
+  };
   const template = [
-    ...(isMac ? [{ role: 'appMenu' }] : []),
+    ...(isMac
+      ? [
+          {
+            role: 'appMenu',
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              checkForUpdatesItem,
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
+          },
+        ]
+      : []),
     {
       label: 'File',
       submenu: [
@@ -171,6 +272,9 @@ function buildMenu() {
           accelerator: 'CmdOrCtrl+,',
           click: () => openOrFocusConnectionsWindow(),
         },
+        // Non-mac only: on macOS this already sits in the app menu above, where
+        // that platform's users look for it.
+        ...(isMac ? [] : [{ type: 'separator' }, checkForUpdatesItem, { type: 'separator' }]),
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
     },
@@ -492,6 +596,14 @@ ipcMain.handle('activity:revealInFolder', (_event, filePath) => {
     shell.showItemInFolder(path.resolve(String(filePath)));
   }
 });
+
+// The Connections window's update controls. `updates:status` is the pre-click
+// render (version, and whether this build can update at all); `updates:check` is
+// the click itself, deliberately bypassing updateCheckClaim.js's election — see
+// checkForUpdatesNow()'s header for why a person clicking a button is not the
+// thing that election exists to rate-limit.
+ipcMain.handle('updates:status', () => getUpdateStatus());
+ipcMain.handle('updates:check', () => checkForUpdatesNow({ isMcpMode }));
 
 ipcMain.handle('connections:registrationInfo', () => ({
   execPath: app.getPath('exe'),

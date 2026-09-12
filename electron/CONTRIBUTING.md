@@ -183,6 +183,20 @@ dev (unpackaged). It runs in **both** launch modes, but they behave differently 
   Claude Code owns, mid-conversation. `autoInstallOnAppQuit` applies the update when that
   server process next exits, which for an MCP server is the end of every session, so the
   user picks it up at their next session having been interrupted by nothing.
+- **Manual** (`checkForUpdatesNow()`, behind the "Check for Updates…" menu item and the
+  Connections window's About button): a third entry point onto the *same* wired updater.
+  `setupAutoUpdater()` and `checkForUpdatesNow()` both go through `wireUpdater()`, which is a
+  singleton for a concrete reason — wiring electron-updater's listeners twice would show the
+  restart dialog twice for one download. What the manual path drops is the election (a person
+  clicking a button is not the unprompted fan-out that exists to rate-limit, exactly as a GUI
+  launch isn't) and the silence (it returns a status for every outcome, since a button that
+  appears to do nothing is worse than no button — including the `null`-returning cases,
+  unpackaged and out-of-support macOS, which it reports rather than hides). It does *not* drop
+  the `quitAndInstall()` prohibition in `--mcp-server` mode: a user watching is a reason to
+  explain where the update went, never a reason to kill the agent's stdio transport. That's
+  the one dialog `--mcp-server` mode will show, and only for a download the user personally
+  asked for — `updaterBehavior.test.js` asserts both halves (`manual/mcp:` and
+  `mcp/unwatched:`).
 
 The election exists because there's no `requestSingleInstanceLock`: every Claude Code
 session/worktree spawns its own process (11 were observed at once), so an unconditional

@@ -29,6 +29,44 @@ Give it an alert (a link, alert JSON, or webhook payload) and it will:
 - **Report** — a verdict (`real-anomaly` / `likely-false-positive` / `inconclusive`) with
   a clickable link to every piece of evidence.
 
+## Where Timebuddy stops
+
+A real estate holds more than metrics and logs: tickets, wiki pages, chat history, inventory
+and DCIM systems, plus site-specific services whose shapes nobody could predict. Timebuddy
+neither discovers nor reaches any of them. That's a boundary, not a gap waiting to be filled.
+
+**Inside the boundary, discovery is normalized.** A Grafana connection and a Graylog connection
+pair by shared `tags`: `list_datasources` returns each connection's `connectionTags`,
+`list_log_sources` returns each log connection's `tags`, and `/timebuddy:investigate` matches
+them instead of asking which log source belongs to which Grafana. `/timebuddy:explore` flags
+mismatched tags before an incident, when there's time to fix them. That works because both
+sides are things Timebuddy connects to — see [Multiple connections](#multiple-connections).
+
+**Outside it, your own skills own your own resources, and they call these tools rather than the
+reverse.** A skill that owns your inventory can answer "what is this host, what else shares its
+rack, which services declare it" and then hand the dashboard to `find_related_dashboards` /
+`execute_query_window` for the actual timeseries. The direction is one-way by construction:
+Timebuddy has no way to reach into a ticket tracker or a CMDB, because the
+[read-only endpoint allowlists](#security) are the only network surface its tool layer has.
+
+Composition happens in the agent, not through pipes — it reads one tool's output and decides
+what to call next. So the contract that makes it work is that **every output states what it
+covers**: which connection, which window, which datasource, and `provenance: "adhoc"` when a
+query wasn't a human's. An empty result that doesn't say *why* it's empty is indistinguishable
+from a real negative, which is why these tools return structured fields rather than prose.
+
+**Why there's no generic "find the related tickets and chat messages" tool.** Linking a metric
+dip to the human discussion of it is a join, and the key has to be a string that appears
+verbatim on both sides. Free text isn't that key — ordinary ops words are also service names,
+so matching prose to services is wrong often enough to be worse than not doing it. And an
+identifier has to be judged by whether it *circulates*, not by whether it's unique: a trace id
+is perfectly unique and nobody ever pastes one into a chat message, so a search for it returns
+zero *by construction* — which reads exactly like a clean search. "I looked and found nothing"
+is worth something only if the search could have found something, so a generic version of this
+would mostly manufacture confident negatives. Timebuddy instead sticks to identifiers it
+already has in hand — host, IP, request/trace id — against log sources you configured; see
+[Searching logs](#searching-logs).
+
 ## Skills
 
 Three bundled Claude Code skills chain the [tools](#mcp-tools) in the right order, so nobody
@@ -119,6 +157,15 @@ open the app yourself, this is the path that keeps you current.
 A failed or offline check is silent and just retried later — it never interrupts an
 investigation, and a broken update check can never take the MCP server down with it.
 
+**To check right now**, open the app and use **Check for Updates…** (in the Timebuddy menu on
+macOS, under **File** on Windows and Linux), or the **Check for updates** button in the
+**About** section at the bottom of the Connections window. Either one always asks — it ignores
+the six-hourly interval that paces the background checks — and always tells you what it found,
+including "you're up to date" and why a check couldn't run. It's the same button whether you
+opened the app yourself or Claude is running it: if Claude has it open as an MCP server, a
+manual check still downloads the update but won't restart anything mid-session, so it's applied
+when that session ends, same as always.
+
 - **macOS** updates are Apple Developer ID signed and notarized, same as the build you first
   installed. Builds after 0.9.1 require **macOS 13 (Ventura) or later** — Chromium dropped
   macOS 12 (Monterey), so the Electron runtime underneath did too. On an older macOS the
@@ -130,7 +177,7 @@ investigation, and a broken update check can never take the MCP server down with
   [Known limitations](#known-limitations-mvp)).
 
 Only the packaged app auto-updates; a checkout run from source has nothing to update and skips
-the check.
+the check — a manual check there says so rather than appearing to do nothing.
 
 ## Configuring connections
 
@@ -318,7 +365,44 @@ link points at. Add the host to that connection's `matchHosts` if it's an alias.
 See [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md) for a few Grafana edge cases: the
 product-knowledge-dashboard convention for publishing institutional knowledge (what a panel
 means, known false positives, runbook links), live resolution of "all" dashboard variables,
-and Grafana's "-- Dashboard --" pseudo-datasource panels.
+Grafana's "-- Dashboard --" pseudo-datasource panels, and how relative time params are
+resolved (see below).
+
+## Pasting a link with a relative time range
+
+Paste any Grafana dashboard/panel link and its own `from`/`to` are used as-is, including
+Grafana's period-rounding shorthand — `now/d` ("today"), `now/M` ("month to date"),
+`now/w-28d`&`now/w-7d` ("28 days ending at the end of last week"), `now-1d/d`
+("yesterday"). `render_dashboard`, `screenshot_panel`, and `export_panel_csv` all accept
+these.
+
+Rounding to a day or a week names a *wall-clock* boundary, so the answer depends on your
+time zone and on which day your week starts. Those are read from your own Grafana, in this
+order: the link's `timezone` param, then the dashboard's saved timezone/week-start, then
+your Grafana user or org preferences. If none of them settle it — or the zone one of them
+names isn't one this app can recognize — the window is resolved in **UTC** with a **Sunday**
+week start.
+
+You never have to guess which of those applied. When a link's time range was relative, the
+result reports what it resolved to, and where each piece came from:
+
+```json
+"window": {
+  "fromMs": 1780531200000, "toMs": 1782950399999,
+  "relativeTime": {
+    "from": "now/w-28d", "to": "now/w-7d",
+    "timeZone": "UTC", "timeZoneSource": "url",
+    "weekStart": "monday", "weekStartSource": "connection-preferences"
+  }
+}
+```
+
+A `Source` of `"default"` means nothing in the link, the dashboard, or your Grafana
+preferences answered the question — worth a look if the window isn't what you expected. A
+`timeZoneIgnored` list means a timezone *was* configured somewhere but isn't one this app
+could use, so it was skipped.
+Full details, including why a range's start and end deliberately round in opposite
+directions, are in [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md#relative-time-params-rounding-week-start-and-time-zone).
 
 ## Searching logs
 

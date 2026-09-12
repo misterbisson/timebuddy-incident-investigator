@@ -11,6 +11,14 @@ Drive the tools below yourself; don't just describe what could be done. The pers
 generally won't know the tool names or the right order to call them in — that's exactly what this
 skill exists to handle for them.
 
+**Scope.** These tools reach the Grafana and Graylog connections configured in this app, and
+nothing else. If the investigation wants a ticket, a chat thread, an inventory record, or any
+other system, that belongs to another skill or to the person you're helping — don't improvise a
+`curl` at it. Join only on identifiers you actually hold (host, IP, request/trace id), never on
+prose: ordinary ops words double as service names. And when there's no such identifier, say
+there's no mechanical join rather than reporting a time-window sweep as though it were a clean
+search.
+
 ## Pipeline
 
 1. **Normalize whatever was given.** Call `get_alert_context` with whichever of `url`,

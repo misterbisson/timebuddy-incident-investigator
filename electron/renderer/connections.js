@@ -433,5 +433,91 @@ async function loadRegistrationInfo() {
   $('copyClaudePluginBtn').addEventListener('click', () => navigator.clipboard.writeText(pluginCommand));
 }
 
+/**
+ * The update controls. The button exists because both automatic paths are
+ * deliberately quiet — a GUI launch checks once at startup and says nothing when
+ * there's nothing to say, and an MCP-server process checks at most once every six
+ * hours and never prompts at all (see src/updater.js) — which leaves someone who
+ * just wants to know where they stand with no way to ask.
+ *
+ * Every branch below writes a message. That's the whole point of the control: the
+ * one outcome it must never produce is a click that looks like nothing happened,
+ * which is also why an un-updatable build (dev checkout, out-of-support macOS)
+ * reports its reason here instead of quietly disabling the button.
+ */
+async function loadUpdateControls() {
+  const versionEl = $('appVersion');
+  const button = $('checkUpdatesBtn');
+  const status = $('updateStatus');
+
+  const setStatus = (text, kind) => {
+    status.textContent = text;
+    status.className = `update-status${kind ? ` ${kind}` : ''}`;
+  };
+
+  let info;
+  try {
+    info = await window.connectionManager.updateStatus();
+  } catch {
+    // The version line is cosmetic; a failure to read it shouldn't cost the
+    // button, which can still report its own outcome.
+    info = null;
+  }
+  versionEl.textContent = info && info.version ? `Timebuddy ${info.version}` : 'Timebuddy';
+  if (info && !info.supported) {
+    setStatus(
+      info.reason === 'dev-build'
+        ? 'Development build — only an installed build updates itself.'
+        : 'This macOS is older than Timebuddy updates support (macOS 13+).',
+      'warn',
+    );
+  } else if (info && info.downloadedVersion) {
+    setStatus(`${info.downloadedVersion} downloaded — installs when Timebuddy exits.`, 'ok');
+  } else if (info && info.downloadInProgress) {
+    setStatus('Downloading an update…');
+  }
+
+  button.addEventListener('click', async () => {
+    // Disabled for the duration rather than relying on checkForUpdatesNow()'s
+    // own dedupe: that guarantees correctness, this one makes the wait visible.
+    button.disabled = true;
+    setStatus('Checking…');
+    let result;
+    try {
+      result = await window.connectionManager.checkForUpdates();
+    } catch (err) {
+      result = { status: 'error', message: err && err.message ? err.message : String(err) };
+    }
+    button.disabled = false;
+
+    // Same five statuses main.js's describeUpdateCheck() renders for the menu
+    // item; kept short here because there's a line, not a dialog, to put them in.
+    switch (result.status) {
+      case 'unsupported':
+        setStatus(
+          result.reason === 'dev-build'
+            ? 'Development build — nothing to update.'
+            : 'This macOS is older than Timebuddy updates support (macOS 13+).',
+          'warn',
+        );
+        break;
+      case 'up-to-date':
+        setStatus(`Up to date (${result.version}).`, 'ok');
+        break;
+      case 'downloading':
+        setStatus(
+          `Downloading ${result.version || 'an update'}… you'll be told when it's ready.`,
+        );
+        break;
+      case 'downloaded':
+        setStatus(`${result.version} downloaded — installs when Timebuddy exits.`, 'ok');
+        break;
+      default:
+        setStatus(`Couldn't check: ${result.message || 'unknown error'}`, 'err');
+    }
+  });
+}
+
 loadRegistrationInfo();
+loadUpdateControls();
 renderConnections();

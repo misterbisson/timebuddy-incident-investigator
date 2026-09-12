@@ -40,19 +40,20 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-function dashboard(): DashboardGetResponse {
+function dashboard(extra: Partial<DashboardGetResponse['dashboard']> = {}): DashboardGetResponse {
   return {
     dashboard: {
       uid: 'reqs',
       title: 'Requests',
       panels: [{ id: 2, title: 'Requests', type: 'timeseries', targets: [{ refId: 'A', datasource: { uid: 'ds1' }, expr: 'up' }] }],
+      ...extra,
     },
     meta: {},
   };
 }
 
 /** Records what capturePanel was actually asked for — the value that would reach BrowserWindow. */
-function harness() {
+function harness(opts: { dashboard?: DashboardGetResponse; preferences?: { timezone?: string; weekStart?: string } } = {}) {
   const captured: CapturePanelRequest[] = [];
   const capturePanel = vi.fn(async (req: CapturePanelRequest) => {
     captured.push(req);
@@ -62,7 +63,13 @@ function harness() {
     return { png: Buffer.from('fake-png'), width: req.width, height: req.height };
   });
   const screenshotter = { capturePanel, exportPanelCsv: vi.fn() } as unknown as Screenshotter;
-  const client = { getDashboard: vi.fn(async () => dashboard()) } as unknown as GrafanaClient;
+  const getUserPreferences = vi.fn(async () => ({}));
+  const getOrgPreferences = vi.fn(async () => opts.preferences ?? {});
+  const client = {
+    getDashboard: vi.fn(async () => opts.dashboard ?? dashboard()),
+    getUserPreferences,
+    getOrgPreferences,
+  } as unknown as GrafanaClient;
   const { server, call } = fakeServer();
   registerScreenshotPanel(server, {
     registry: fakeRegistry(connections, client),
@@ -70,7 +77,7 @@ function harness() {
     screenshotter,
     activityLog: undefined,
   } as never);
-  return { call, captured };
+  return { call, captured, getOrgPreferences };
 }
 
 const baseArgs = { dashboardUid: 'reqs', panelId: 2, fromMs: 1_000_000, toMs: 2_000_000 };
@@ -281,5 +288,70 @@ describe('screenshot_panel capture concurrency', () => {
 
     expect(peak).toBe(MAX_CONC); // filled the gate but never exceeded it
     expect(capturePanel).toHaveBeenCalledTimes(6);
+  });
+});
+
+// Issue #216: a Grafana-authored link using the rounding shorthand used to be
+// refused outright, forcing the caller to resolve it by hand — including
+// reproducing the asymmetric /w snap and discovering the org's week-start.
+describe('screenshot_panel relative-time resolution', () => {
+  const url = (params: string) => `https://grafana.example.com/d/reqs?viewPanel=2&${params}`;
+
+  it("serves a rounding-shorthand link and reports the window it resolved", async () => {
+    const { call } = harness({ preferences: { weekStart: 'monday' } });
+    const result = await call('screenshot_panel', {
+      url: url('from=now%2Fw-28d&to=now%2Fw-7d&timezone=UTC'),
+    });
+    const window = payload(result).window as Record<string, unknown>;
+    expect((window.toMs as number) - (window.fromMs as number)).toBe(28 * 86_400_000 - 1);
+    expect(window.relativeTime).toEqual({
+      from: 'now/w-28d',
+      to: 'now/w-7d',
+      timeZone: 'UTC',
+      timeZoneSource: 'url',
+      weekStart: 'monday',
+      weekStartSource: 'connection-preferences',
+    });
+  });
+
+  it("uses the dashboard's own week-start over the org preference", async () => {
+    const { call, getOrgPreferences } = harness({
+      dashboard: dashboard({ weekStart: 'sunday' }),
+      preferences: { weekStart: 'monday' },
+    });
+    const result = await call('screenshot_panel', { url: url('from=now%2Fw&to=now&timezone=UTC') });
+    expect((payload(result).window as Record<string, unknown>).relativeTime).toMatchObject({
+      weekStart: 'sunday',
+      weekStartSource: 'dashboard',
+    });
+    expect(getOrgPreferences).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the documented default, and says so, when the connection can't tell it the week-start", async () => {
+    const { call } = harness({ preferences: {} });
+    const result = await call('screenshot_panel', { url: url('from=now%2Fw&to=now&timezone=UTC') });
+    expect((payload(result).window as Record<string, unknown>).relativeTime).toMatchObject({
+      weekStart: 'sunday',
+      weekStartSource: 'default',
+    });
+  });
+
+  it('pins the captured render to the zone the window was resolved in', async () => {
+    const { call, captured } = harness();
+    await call('screenshot_panel', { url: url('from=now%2Fd&to=now%2Fd&timezone=America%2FLos_Angeles') });
+    expect(captured[0]!.url).toContain('timezone=America%2FLos_Angeles');
+  });
+
+  it('leaves an absolute-window capture alone, with no timezone stamped on the render', async () => {
+    const { call, captured } = harness();
+    const result = await call('screenshot_panel', baseArgs);
+    expect(captured[0]!.url).not.toContain('timezone=');
+    expect(payload(result).window).toEqual({ fromMs: 1_000_000, toMs: 2_000_000 });
+  });
+
+  it('still refuses an expression it cannot classify, rather than resolving it approximately', async () => {
+    const { call } = harness();
+    const result = await call('screenshot_panel', { url: url('from=now%2FfQ&to=now') });
+    expect(JSON.stringify(result)).toMatch(/fiscal-period unit/);
   });
 });

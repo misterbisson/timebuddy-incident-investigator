@@ -111,6 +111,144 @@ There is a third outcome worth stating explicitly, because it isn't an error at 
 neither returned nor reported — it is simply absent from the results, which a caller should not
 read as "checked and found unrelated."
 
+## Relative time params: rounding, week-start, and time zone
+
+`render_dashboard`, `screenshot_panel`, and `export_panel_csv` all resolve their window
+through the same code (`resolveRenderWindow` in `src/tools/renderDashboard.ts`, on top of
+`src/query/dateMath.ts`). A link's `from`/`to` — and a dashboard's own saved default range
+— carry Grafana's full date-math grammar, not just `now-1h`
+([#216](https://github.com/misterbisson/timebuddy-incident-investigator/issues/216)):
+
+```
+now                     the reference time
+now-90m / now+1d        shift (units: s m h d w M Q y)
+now/d                   round to a period boundary
+now/w-28d               round, then shift — operators apply left to right
+now-1d/d                shift, then round
+2026-06-08T00:00:00Z||-1d   absolute anchor plus date math
+1780704000000           absolute epoch ms
+```
+
+Grafana's fiscal-period units (`fQ`, `fy`) are refused by name: their boundaries depend on a
+dashboard's fiscal-year start month this client never reads. Anything else unclassifiable is
+refused too, rather than resolved approximately — a mis-resolved window looks like data, not
+like an error.
+
+An absolute bound that carries **no** zone designator (`2026-03-01`,
+`2026-03-01T00:00:00`) is a wall clock, and is read in the resolved zone below — the way
+Grafana's own `dateTimeParse` reads it. It deliberately does not go through `Date.parse`,
+whose answer for these is neither Grafana's nor self-consistent: a zone-less date-*time* is
+specified as the *host process's* local time, so the same link would resolve differently
+depending on which machine runs the MCP server, while a date-only string is specified as
+UTC, so adding a time component would silently shift the window by the host's offset. A bound
+that carries its own offset (`...Z`, `...+02:00`) already names one instant and is left
+alone.
+
+### Why the two bounds of a range don't round the same way
+
+Grafana's own `rangeUtil.convertRawToRange` parses `from` with `roundUp: false` and `to` with
+`roundUp: true`. So in `from=now/w-28d&to=now/w-7d`, the two `/w`s land on *opposite edges of
+the same week*: `from` on its first millisecond, `to` on its last — and only then does each
+day offset apply. The pair is exactly 28 days. Snapping both to the same edge (the natural
+mistake when resolving this by hand) shifts the window by up to a week while still looking
+plausible.
+
+### Wall clocks that name no instant, or two
+
+A period boundary is a local wall clock, and in some zones the DST transition happens *at
+midnight* — exactly where day, week, and month rounding lands. There, midnight either
+doesn't exist or happens twice, and both cases are resolved the way moment (and therefore
+Grafana) normalizes them:
+
+- **Nonexistent** — `America/Havana` springs forward at 00:00 on 2026-03-08, clocks going
+  straight to 01:00. `now/d` resolves *forward*, past the gap, to 01:00 local.
+- **Ambiguous** — the same zone falls back at 01:00 on 2026-11-01, so 00:00 runs twice.
+  `now/d` resolves to the *first* occurrence, making that local day 25 hours long.
+
+The end of a period is "the start of the next one, minus a millisecond", and the next one's
+start is found by *rounding* a point inside it rather than by shifting this one's start.
+Shifting alone preserves wall-clock time, which on the gap day above would carry the start's
+01:00 into 2026-03-09 and run the "day" an hour past the one it reports.
+
+`test/dateMathZones.test.ts` pins all of this against an independent specification —
+`startOf` is the first instant whose local period matches, `endOf` the last, found by
+bisecting raw `Intl` output — across thirteen zone/date combinations including midnight
+transitions, 30-minute DST shifts, and `+05:45`/`+12:45` offsets. That shape of test exists
+because the bug it caught (a two-pass offset fixpoint that resolved gaps backwards) looked
+correct for every 02:00 transition.
+
+### Where the zone and the week-start come from
+
+A period boundary is a *wall-clock* boundary, so `now/d` is a different instant per time
+zone; the same goes for any shift of a day or more, which is calendar arithmetic that
+preserves wall-clock time across a DST transition rather than adding a fixed number of
+milliseconds. `/w` additionally depends on which day the week starts. Both are resolved
+per-connection, in Grafana's own precedence order:
+
+| | Time zone | Week start |
+| --- | --- | --- |
+| 1 | the link's `timezone` query param | — |
+| 2 | the dashboard's saved `timezone` | the dashboard's saved `weekStart` |
+| 3 | the connection's Grafana preferences (`/api/user/preferences` over `/api/org/preferences`) | same |
+| 4 | **`UTC`** | **Sunday** |
+
+Grafana's `''`, `browser`, and `default` all mean "ask the viewer's browser", which this side
+has no way to do — they fall through to the next tier. So does a zone name this runtime's ICU
+can't resolve (a typo in a dashboard's saved JSON, or a zone newer than the bundled tz data);
+the discarded value comes back as `timeZoneIgnored`, since "configured but unusable" is a
+different situation from "not configured" and only that field distinguishes them. Falling
+through rather than failing is deliberate: one bad `timezone` field on a dashboard would
+otherwise take out every window on it, including the majority that need no zone at all.
+
+The tier-4 fallbacks are the documented defaults: UTC because there is no browser here to
+inherit a zone from, and Sunday because that is what Grafana itself resolves an unset
+`week_start` to in an `en` locale.
+
+The preferences read is lazy and cached per connection: it happens only when a selected
+expression actually needs a tier the link and dashboard didn't supply, so a plain
+`from=now-1h&to=now` window makes no extra API call. A token that can't read preferences (no
+`org.preferences:read`) isn't an error — the resolution falls through to the defaults and
+*says so*, which is the point of the next section.
+
+### What gets reported back
+
+When either bound came from an expression that had to be *resolved* — anything anchored on
+`now`, carrying date math, or a zone-less timestamp — the result's `window` carries a
+`relativeTime` object alongside the absolute `fromMs`/`toMs`:
+
+```json
+{
+  "window": {
+    "fromMs": 1780531200000,
+    "toMs": 1782950399999,
+    "relativeTime": {
+      "from": "now/w-28d",
+      "to": "now/w-7d",
+      "timeZone": "UTC",
+      "timeZoneSource": "url",
+      "weekStart": "monday",
+      "weekStartSource": "connection-preferences"
+    }
+  }
+}
+```
+
+Each field is present only when it actually bore on the result, so its presence is the signal:
+a reported `weekStart` means a `/w` round used it, and a reported `timeZone` means a boundary,
+a calendar shift, or a zone-less timestamp was read against it. A `from=now-1h` window reports
+the expressions and nothing else, because neither moved it. `*Source: "default"` is the flag
+worth reading — it means nothing in the link, the dashboard, or the connection settled the
+question — and `timeZoneIgnored`, when present, says a zone *was* configured but couldn't be
+used.
+
+A window given entirely as epoch ms reports a bare `{fromMs, toMs}` and never reads a zone at
+all, so nothing about it can fail on one.
+
+`screenshot_panel` and the Electron CSV-capture path additionally stamp the resolved zone onto
+the URL they render, so a captured chart labels its axis in the same zone the window was
+computed in instead of the capturing machine's local one. An absolute-window capture is left
+alone.
+
 ## `export_panel_csv` resolution: render width, not time range
 
 `export_panel_csv` has two internal paths, and which one runs decides how the exported

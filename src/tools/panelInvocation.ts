@@ -34,7 +34,8 @@ import {
 } from '../export/csv.js';
 import { buildAuthHeader } from '../grafana/client.js';
 import { buildInspectDataUrl, buildSoloPanelUrl } from '../grafana/urlBuilder.js';
-import { resolveRenderWindow } from './renderDashboard.js';
+import { resolveRenderWindow, type RelativeTimeResolution } from './renderDashboard.js';
+import { fetchConnectionPreferences } from '../grafana/preferences.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { resolveGotoUrl, resolveTargetDatasource, resolveToolClient } from './shared.js';
@@ -66,6 +67,13 @@ export interface PanelInvocation {
   panelId: number;
   fromMs: number;
   toMs: number;
+  /**
+   * Set when either bound came from Grafana relative-time shorthand, carrying
+   * the expressions and the zone/week-start that turned them into the absolute
+   * fromMs/toMs above — reported on the tool result so a caller can see which
+   * window it actually got. See resolveRenderWindow.
+   */
+  relativeTime?: RelativeTimeResolution;
   overrides: Record<string, string[]>;
 }
 
@@ -114,6 +122,7 @@ export async function resolvePanelInvocation(
   let urlVars: Record<string, string[]> = {};
   let urlFromRaw: string | undefined;
   let urlToRaw: string | undefined;
+  let urlTimezone: string | undefined;
 
   if (input.url) {
     const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, input.url);
@@ -124,6 +133,7 @@ export async function resolvePanelInvocation(
       urlVars = parsed.vars;
       urlFromRaw = parsed.from;
       urlToRaw = parsed.to;
+      urlTimezone = parsed.timezone;
     } else if (parsed.type === 'folder') {
       throw new Error(
         `"${input.url}" is a folder link, not a dashboard - ${toolName} needs one specific panel to ${verb}. Use ` +
@@ -166,14 +176,18 @@ export async function resolvePanelInvocation(
   }
   const overrides = mergeVariableOverrides(urlVars, input.variableOverrides);
 
-  const { fromMs, toMs } = resolveRenderWindow({
+  const { fromMs, toMs, relativeTime } = await resolveRenderWindow({
     inputFromMs: input.fromMs,
     inputToMs: input.toMs,
     urlFromRaw,
     urlToRaw,
+    urlTimezone,
     dashboardTimeFrom: dashboard.time?.from,
     dashboardTimeTo: dashboard.time?.to,
+    dashboardTimezone: dashboard.timezone,
+    dashboardWeekStart: dashboard.weekStart,
     nowMs: Date.now(),
+    preferences: () => fetchConnectionPreferences(client),
   });
   enforceWindowLimit({ label: windowLabel, fromMs, toMs }, config);
 
@@ -182,7 +196,19 @@ export async function resolvePanelInvocation(
     throw new Error(`Unknown Grafana connection "${connectionId}".`);
   }
 
-  return { client, connectionId, rawConnection, dashboard, panel, dashboardUid, panelId, fromMs, toMs, overrides };
+  return {
+    client,
+    connectionId,
+    rawConnection,
+    dashboard,
+    panel,
+    dashboardUid,
+    panelId,
+    fromMs,
+    toMs,
+    ...(relativeTime ? { relativeTime } : {}),
+    overrides,
+  };
 }
 
 export interface GeneratedPng {
@@ -236,6 +262,12 @@ export async function generatePanelPng(
     fromMs: inv.fromMs,
     toMs: inv.toMs,
     variables: inv.overrides,
+    // Pin the render to the zone the window was resolved in, so a capture of a
+    // "now/d"-style window doesn't label its axis against the capturing
+    // machine's local clock while the window itself was computed against
+    // another. Only set when a relative expression was actually resolved —
+    // an absolute-window capture keeps whatever the dashboard itself says.
+    ...(inv.relativeTime ? { timeZone: inv.relativeTime.timeZone } : {}),
   });
   const w = clampScreenshotDimension(requested.width, DEFAULT_SCREENSHOT_WIDTH);
   const h = clampScreenshotDimension(requested.height, DEFAULT_SCREENSHOT_HEIGHT);
@@ -336,6 +368,10 @@ async function tryBrowserTransformedCsv(
     fromMs: inv.fromMs,
     toMs: inv.toMs,
     variables: inv.overrides,
+    // Same reasoning as generatePanelPng's soloUrl: the captured CSV's time
+    // column is formatted by Grafana in the dashboard's zone, so pin it to the
+    // one the window was resolved in.
+    ...(inv.relativeTime ? { timeZone: inv.relativeTime.timeZone } : {}),
   });
   try {
     const result = await screenshotter.exportPanelCsv({
