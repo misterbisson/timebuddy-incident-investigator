@@ -1,0 +1,50 @@
+name: PR message
+
+# Separate from ci.yml on purpose, for the same reason ci.yml is separate from
+# release.yml: triggers, not tidiness. This check has to re-run when someone
+# edits a PR's title or description, which means the `edited` activity type —
+# and `types:` applies to every job in a workflow file, so folding this into
+# ci.yml would re-run the full test matrix (including the ~45s Electron job
+# that downloads a ~100MB binary) every time a typo is fixed in a description.
+#
+# `ready_for_review` is here because a draft PR's description is usually the
+# one still being written.
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, edited, reopened, synchronize, ready_for_review ]
+
+# The PR title and body are attacker-controlled text on a fork PR. They are
+# passed to the script through the environment and never interpolated into a
+# shell command, so no `${{ }}` expansion of them reaches a `run:` line.
+# Read-only token: this job reports, it never writes.
+permissions:
+  contents: read
+
+jobs:
+  squash-message:
+    name: Squash message parses for release-please
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      # Engine-only install, as in ci.yml's `test` job: this needs one
+      # devDependency (@conventional-commits/parser) and none of the Electron
+      # workspace's ~100MB of binary.
+      - name: Install dependencies
+        run: npm ci --workspaces=false --include-workspace-root
+
+      - name: Check squash commit message
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/checkSquashMessage.mjs
