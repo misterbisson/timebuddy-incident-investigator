@@ -3,6 +3,16 @@ export interface DashboardUrlOptions {
   fromMs?: number;
   toMs?: number;
   variables?: Record<string, string[]>;
+  /**
+   * Emitted as Grafana's `timezone` param. `from`/`to` here are always
+   * absolute epoch-ms, so this doesn't change *which* instants the link
+   * covers — it decides which wall clock they're labeled against. Set it when
+   * a relative expression was resolved in a specific zone (see
+   * tools/renderDashboard.ts's resolveRenderWindow), so the panel a caller
+   * opens or a screenshot captures reads its axis in the same zone the window
+   * was computed in; omit it to let Grafana use the dashboard's own setting.
+   */
+  timeZone?: string;
 }
 
 /**
@@ -23,6 +33,7 @@ export function buildDashboardUrl(baseUrl: string, dashboardUid: string, opts: D
   if (opts.panelId !== undefined) url.searchParams.set('viewPanel', String(opts.panelId));
   if (opts.fromMs !== undefined) url.searchParams.set('from', String(opts.fromMs));
   if (opts.toMs !== undefined) url.searchParams.set('to', String(opts.toMs));
+  if (opts.timeZone) url.searchParams.set('timezone', opts.timeZone);
   if (opts.variables) {
     for (const [name, values] of Object.entries(opts.variables)) {
       for (const value of values) url.searchParams.append(`var-${name}`, value);
@@ -193,6 +204,7 @@ export function buildSoloPanelUrl(
   url.searchParams.set('panelId', String(panelId));
   if (opts.fromMs !== undefined) url.searchParams.set('from', String(opts.fromMs));
   if (opts.toMs !== undefined) url.searchParams.set('to', String(opts.toMs));
+  if (opts.timeZone) url.searchParams.set('timezone', opts.timeZone);
   if (opts.variables) {
     for (const [name, values] of Object.entries(opts.variables)) {
       for (const value of values) url.searchParams.append(`var-${name}`, value);

@@ -72,7 +72,15 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         'formulaNeutralizationNote. Pass a dashboard/panel ' +
         'URL (its own "from"/"to" and var-* overrides are used automatically) or an alert-rule URL (resolved to its ' +
         'linked dashboard+panel, the same way get_alert_context does), or dashboardUid + panelId + connection ' +
-        'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). A ' +
+        'directly with fromMs/toMs (falls back to the dashboard\'s own saved default time range if omitted). ' +
+        'A url\'s relative "from"/"to" support Grafana\'s full date-math grammar, including period rounding ("now/d", ' +
+        '"now/w-7d", "now-1d/d"): rounding resolves against the connection\'s own timezone and week-start (the link\'s ' +
+        '"timezone" param, else the dashboard\'s saved settings, else the Grafana user/org preferences, else UTC + ' +
+        'Sunday), and the "to" bound rounds up while "from" rounds down - the same asymmetry Grafana\'s own range parsing ' +
+        'uses, so from=now/w-28d&to=now/w-7d is a clean 28 days. Whenever a bound came from a relative expression, ' +
+        '"window.relativeTime" reports the expressions and which timezone/week-start actually resolved them (weekStart ' +
+        'only when a "/w" round made it matter) - read it rather than re-deriving the window yourself. ' +
+        'A ' +
         '"/goto/<id>" share short-link is resolved to its canonical link first, transparently (a dead/pruned one ' +
         'errors distinctly from an unrecognized URL); a folder link errors - use list_folder_dashboards instead. Returns ' +
         '"files": each with its absolute path, row count, column names, and (when the file has a time axis) a ' +
@@ -160,7 +168,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
             panelId: inv.panelId,
             title: inv.panel.title,
             type: inv.panel.type,
-            window: { fromMs: inv.fromMs, toMs: inv.toMs },
+            window: { fromMs: inv.fromMs, toMs: inv.toMs, ...(inv.relativeTime ? { relativeTime: inv.relativeTime } : {}) },
             transformationsApplied: generated.transformationsApplied,
             files,
             // Both paths are neutralized now: the direct exports at cell level,

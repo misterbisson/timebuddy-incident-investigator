@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseGotoShortId, parseGrafanaTimeExpr, parseGrafanaUrl } from '../src/alerts/urlParser.js';
+import { parseGotoShortId, parseGrafanaUrl } from '../src/alerts/urlParser.js';
 
 describe('parseGrafanaUrl', () => {
   it('parses a dashboard URL with panel, vars, and time range', () => {
@@ -15,6 +15,13 @@ describe('parseGrafanaUrl', () => {
       from: 'now-1h',
       to: 'now',
     });
+  });
+
+  it("carries the link's own timezone param, which decides where a rounded relative range's boundaries fall", () => {
+    const parsed = parseGrafanaUrl(
+      'https://grafana.example.com/d/abc123/my-dashboard?viewPanel=2&from=now%2Fw-28d&to=now%2Fw-7d&timezone=UTC',
+    );
+    expect(parsed).toMatchObject({ from: 'now/w-28d', to: 'now/w-7d', timezone: 'UTC' });
   });
 
   it('parses a d-solo panel embed URL', () => {
@@ -115,38 +122,5 @@ describe('parseGotoShortId', () => {
 
   it('returns undefined for an alert-rule URL', () => {
     expect(parseGotoShortId('https://grafana.example.com/alerting/grafana/rule-uid-1/view')).toBeUndefined();
-  });
-});
-
-describe('parseGrafanaTimeExpr', () => {
-  const nowMs = Date.parse('2026-07-07T12:00:00Z');
-
-  it('resolves "now" to the reference time', () => {
-    expect(parseGrafanaTimeExpr('now', nowMs)).toBe(nowMs);
-  });
-
-  it('resolves "now-<N><unit>" for seconds/minutes/hours/days/weeks', () => {
-    expect(parseGrafanaTimeExpr('now-30s', nowMs)).toBe(nowMs - 30_000);
-    expect(parseGrafanaTimeExpr('now-15m', nowMs)).toBe(nowMs - 15 * 60_000);
-    expect(parseGrafanaTimeExpr('now-1h', nowMs)).toBe(nowMs - 3_600_000);
-    expect(parseGrafanaTimeExpr('now-30d', nowMs)).toBe(nowMs - 30 * 86_400_000);
-    expect(parseGrafanaTimeExpr('now-2w', nowMs)).toBe(nowMs - 14 * 86_400_000);
-  });
-
-  it('resolves months and years using calendar arithmetic, not a fixed-day approximation', () => {
-    expect(parseGrafanaTimeExpr('now-1M', nowMs)).toBe(Date.parse('2026-06-07T12:00:00Z'));
-    expect(parseGrafanaTimeExpr('now-1y', nowMs)).toBe(Date.parse('2025-07-07T12:00:00Z'));
-  });
-
-  it('parses an absolute epoch-ms numeric string', () => {
-    expect(parseGrafanaTimeExpr('1780704000000', nowMs)).toBe(1780704000000);
-  });
-
-  it('parses an ISO 8601 date/time string', () => {
-    expect(parseGrafanaTimeExpr('2026-06-08T00:00:00Z', nowMs)).toBe(Date.parse('2026-06-08T00:00:00Z'));
-  });
-
-  it('throws a clear error for an unsupported expression, e.g. Grafana rounding shorthand', () => {
-    expect(() => parseGrafanaTimeExpr('now/d', nowMs)).toThrow(/Could not parse Grafana time param "now\/d"/);
   });
 });

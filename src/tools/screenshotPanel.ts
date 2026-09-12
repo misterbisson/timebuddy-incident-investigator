@@ -53,7 +53,15 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
         'A "/goto/<id>" share short-link is resolved to its canonical link first, transparently (a dead/pruned ' +
         'one errors distinctly from an unrecognized URL); a folder link errors - use list_folder_dashboards instead. ' +
         'Alternatively pass dashboardUid + panelId + connection directly, with fromMs/toMs (falls back to the ' +
-        "dashboard's own saved default time range if omitted). Best used selectively on the 1-2 panels that matter " +
+        "dashboard's own saved default time range if omitted). " +
+        'A url\'s relative "from"/"to" support Grafana\'s full date-math grammar, including period rounding ("now/d", ' +
+        '"now/w-7d", "now-1d/d"): rounding resolves against the connection\'s own timezone and week-start (the link\'s ' +
+        '"timezone" param, else the dashboard\'s saved settings, else the Grafana user/org preferences, else UTC + ' +
+        'Sunday), and the "to" bound rounds up while "from" rounds down - the same asymmetry Grafana\'s own range parsing ' +
+        'uses, so from=now/w-28d&to=now/w-7d is a clean 28 days. Whenever a bound came from a relative expression, ' +
+        '"window.relativeTime" reports the expressions and which timezone/week-start actually resolved them (weekStart ' +
+        'only when a "/w" round made it matter) - read it rather than re-deriving the window yourself. ' +
+        'Best used selectively on the 1-2 panels that matter ' +
         "for an investigation, not as a substitute for execute_query_window/render_dashboard's structured data. " +
         'The image is also written to disk and its path returned as "savedTo" - the inline image lets you (the ' +
         "model) see the panel, but the person you're talking to may not see inline image content the same way you " +
@@ -125,7 +133,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
             panelId: inv.panelId,
             title: inv.panel.title,
             type: inv.panel.type,
-            window: { fromMs: inv.fromMs, toMs: inv.toMs },
+            window: { fromMs: inv.fromMs, toMs: inv.toMs, ...(inv.relativeTime ? { relativeTime: inv.relativeTime } : {}) },
             // The dimensions the capture actually came back at, observed from
             // the returned image (image.getSize()) rather than asserted from
             // the requested-then-clamped values — the OS, useContentSize, the

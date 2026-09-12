@@ -66,7 +66,8 @@ Three things shape almost every module here and are easy to miss from a partial 
 1. **The Grafana client is a closed allowlist, not a passthrough.** `src/grafana/client.ts`
    exposes exactly the read-only endpoints the tools need (search, dashboard-by-uid,
    datasources, `/api/ds/query`, alertmanager alerts, ruler rules, annotations, short-URL
-   resolution, and the Prometheus/Loki label-values *resources* proxy) and nothing else. Note
+   resolution, user/org preferences, and the Prometheus/Loki label-values *resources* proxy)
+   and nothing else. Note
    the last one:
    `getPrometheusLabelValues`/`getLokiLabelValues` hit `/api/datasources/uid/:uid/resources/...`,
    which *could* be a generic datasource-proxy escape hatch — they deliberately aren't. Each
@@ -186,6 +187,43 @@ is expected to write the human-readable note from that structured output, which 
 returns alongside its data, deliberately using the same `viewPanel` URL shape
 `urlParser.ts` parses on the way in, so a URL built here round-trips if it's ever pasted
 back into `get_alert_context`.
+
+A link's own `from`/`to` are a separate resolution problem, and it's more than a regex:
+`query/dateMath.ts` implements Grafana's full date-math grammar (`now/w-28d`, `now-1d/d`,
+`<iso>||-1d`) as zone-aware calendar arithmetic over `Intl.DateTimeFormat`, and
+`tools/renderDashboard.ts`'s `resolveRenderWindow` — shared by `render_dashboard`,
+`screenshot_panel`, and `export_panel_csv` via `tools/panelInvocation.ts` — assembles the
+context it needs. Three things there are load-bearing and easy to undo by accident. **A
+range's two bounds round in opposite directions** (`from` to a period's first millisecond,
+`to` to its last), matching Grafana's own `rangeUtil.convertRawToRange`; collapsing that to
+one edge silently shifts a `now/w-28d`/`now/w-7d` window by a week. **The zone and
+week-start are resolved per-connection, never assumed** — link param, then dashboard
+settings, then `grafana/preferences.ts` (lazily read and cached; a token that can't read
+preferences falls through rather than erroring), then the documented UTC/Sunday defaults —
+and whichever tier answered is *reported* on the result as `window.relativeTime`, because
+a wrong week-start is otherwise indistinguishable from a correct one. **An expression it
+can't classify is refused**, fiscal-period units by name; the whole hazard here is that a
+mis-resolved window looks like data rather than an error.
+
+Two deliberate non-refusals sit inside that last rule, both because the alternative fails
+calls that need nothing from the thing that's broken. A configured zone this runtime can't
+resolve is *skipped* (next tier answers, discarded value reported as `timeZoneIgnored`)
+rather than fatal — one typo'd `timezone` field on a dashboard would otherwise take out
+every window on it. And `Zone` validates its zone lazily, on first wall-clock read, so
+`now-1h` and bare epoch-ms bounds never touch it; validating in the constructor made them
+fail too.
+
+`Zone.toInstant`'s DST handling is also load-bearing and looks over-built until it isn't:
+a wall clock can name no instant (a spring-forward gap) or two (a fall-back hour), and in
+zones that transition *at midnight* — `America/Havana`, `America/Santiago` — that is
+exactly where day/week/month rounding lands. Candidate offsets are round-tripped, gaps
+resolve forward and ambiguity to the first occurrence (moment's normalization, hence
+Grafana's), and `endOf` finds the next period's start by *rounding* into it rather than
+shifting this one's start. `test/dateMathZones.test.ts` pins all of it against an
+independent bisect-the-`Intl`-output spec across thirteen zone/date cases; keep that test
+rather than trimming it to the obvious zones — the predecessor bug was invisible in every
+02:00-transition zone. See `docs/BEHAVIOR.md`'s "Relative time params" section, and keep
+it current.
 
 `index-builder/` is a separate concern: it crawls all dashboards (per connection) to
 build a metric/measurement -> dashboard reverse index, cached to

@@ -8,6 +8,7 @@ import type {
   FolderInfo,
   GrafanaAnnotation,
   LabelValuesResponse,
+  PreferencesDto,
   RulerAlertRule,
   RulerRuleEntry,
   RulerRuleGroup,
@@ -277,6 +278,23 @@ export class GrafanaClient {
    */
   async getRulerRuleByUid(uid: string): Promise<RulerRuleEntry> {
     return this.request<RulerRuleEntry>('GET', `/api/ruler/grafana/api/v1/rule/${encodeURIComponent(uid)}`);
+  }
+
+  /**
+   * The token's own user preferences — read only for `timezone`/`weekStart`,
+   * which decide where a relative-time expression's period boundaries fall
+   * (see query/dateMath.ts). Grafana's real precedence is user -> team -> org
+   * -> server default; team preferences need team membership this client
+   * doesn't enumerate, so preferences.ts merges just these two tiers and
+   * reports which one it used.
+   */
+  async getUserPreferences(): Promise<PreferencesDto> {
+    return this.request<PreferencesDto>('GET', '/api/user/preferences');
+  }
+
+  /** Org-wide counterpart to getUserPreferences(), used for any field the user hasn't overridden. */
+  async getOrgPreferences(): Promise<PreferencesDto> {
+    return this.request<PreferencesDto>('GET', '/api/org/preferences');
   }
 
   async getAnnotations(params: {

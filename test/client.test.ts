@@ -112,6 +112,28 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
   });
 });
 
+describe('GrafanaClient preferences endpoints', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('hits the fixed user and org preferences paths', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return new Response(JSON.stringify({ timezone: 'utc', weekStart: 'monday' }), { status: 200 });
+      }),
+    );
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    await expect(client.getUserPreferences()).resolves.toEqual({ timezone: 'utc', weekStart: 'monday' });
+    await expect(client.getOrgPreferences()).resolves.toEqual({ timezone: 'utc', weekStart: 'monday' });
+    expect(urls.map((u) => new URL(u).pathname)).toEqual(['/api/user/preferences', '/api/org/preferences']);
+  });
+});
+
 describe('GrafanaClient.resolveShortUrl', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
