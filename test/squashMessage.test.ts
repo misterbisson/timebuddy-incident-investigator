@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parser } from '@conventional-commits/parser';
+// @ts-expect-error - plain .mjs script, no type declarations
+import { wrapBody } from '../scripts/checkSquashMessage.mjs';
 
 /**
  * Pins the parser behavior `.github/workflows/pr-message.yml` exists to enforce.
@@ -78,5 +80,58 @@ describe('squash message parseability', () => {
         body('* resolve the thing ([#246](https://example.test/246)) ([3657d45](https://example.test/c))'),
       ),
     ).toBe(true);
+  });
+});
+
+/**
+ * The wrap is the other half of the check's fidelity: what release-please parses is
+ * the body *after* GitHub re-wraps it, and wrapping is what moves a token into
+ * column 1 in the first place. These cases pin the emulation's shape. The
+ * byte-for-byte agreement with real merged bodies (#253, #246, #249, #250) is what
+ * established the 72/fence rules; reproducing it here would mean fetching commits,
+ * so what is pinned is the behavior those commits demonstrated.
+ */
+describe('GitHub squash-body wrap emulation', () => {
+  it('fills greedily at 72 columns', () => {
+    const line = 'word '.repeat(30).trim();
+    for (const out of wrapBody(line).split('\n')) expect(out.length).toBeLessThanOrEqual(72);
+  });
+
+  it('leaves fenced code blocks untouched, however long', () => {
+    const long = "process.on('uncaughtException', (err) => { console.error('a very long line indeed, well past the limit'); });";
+    const body = ['```js', long, '```'].join('\n');
+    expect(wrapBody(body)).toBe(body);
+  });
+
+  it('counts characters, not bytes — an em-dash is one column', () => {
+    // 72 chars containing em-dashes: a byte-counting wrap would split this.
+    const line = `${'—'.repeat(36)}${'a'.repeat(36)}`;
+    expect([...line].length).toBe(72);
+    expect(wrapBody(line)).toBe(line);
+  });
+
+  it('emits an unbreakable word on its own overlong line rather than splitting it', () => {
+    const url = `https://example.test/${'x'.repeat(90)}`;
+    expect(wrapBody(`see ${url} ok`).split('\n')).toEqual(['see', url, 'ok']);
+  });
+
+  it('normalizes CRLF', () => {
+    expect(wrapBody('a\r\nb')).toBe('a\nb');
+  });
+
+  // The regression this whole change is about: fine as typed, broken once wrapped.
+  it('turns a mid-paragraph inline-code token into a column-1 failure', () => {
+    const para =
+      'release-please does not stop at the PEG parse. It runs the tree through ' +
+      '`toConventionalChangelogFormat(parser(msg))`, and a commit that trips either ' +
+      'half is counted as absent rather than reported.';
+    expect(parses(`fix: s\n\n${para}`)).toBe(true);
+    expect(parses(`fix: s\n\n${wrapBody(para)}`)).toBe(false);
+  });
+
+  it('leaves an indented line indented, so the documented fix survives the wrap', () => {
+    const body = "  process.on('uncaughtException', (err) => {";
+    expect(wrapBody(body)).toBe(body);
+    expect(parses(`fix: s\n\n${wrapBody(body)}`)).toBe(true);
   });
 });

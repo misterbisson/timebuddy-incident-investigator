@@ -63,11 +63,24 @@ indenting it one space, or putting a space before the `(`, passes. Backticks are
 shelter. This is what happened to #253: the fix shipped to `main` and no release PR ever
 opened, with `version` still reporting success.
 
-`.github/workflows/pr-message.yml` now runs `scripts/checkSquashMessage.mjs` on every PR
-(and on every title/body edit) to catch both cases before merge, using the same parser
-release-please pins. `test/squashMessage.test.ts` pins the grammar quirks the check's advice
-depends on, so a parser bump that changes them fails the suite rather than the next
-release. See `electron/CONTRIBUTING.md`'s "Building, signing, and releasing"
+Note the line in question can be one **the wrap created**, not one anybody typed. GitHub
+re-wraps the description into the commit body as a 72-column greedy fill that leaves ```
+fences alone — deterministic, and reproduced byte-for-byte against #253/#246/#249/#250 — so
+an inline-code token sitting mid-paragraph (`toConventionalChangelogFormat(parser(msg))`)
+is fine as typed and fails once the wrap lands it in column 1. That inverts which case
+looks dangerous: fenced code is *exempt* from wrapping and only bites when it is already
+column-1 (the #253 shape), while ordinary prose is what the wrap can break.
+
+`.github/workflows/pr-message.yml` runs `scripts/checkSquashMessage.mjs` on every PR (and
+on every title/body edit) to catch all of this before merge, using the same parser
+release-please pins and checking the body **as wrapped** rather than as typed.
+`test/squashMessage.test.ts` pins both the grammar quirks the check's advice depends on and
+the wrap's shape, so a parser bump that changes them fails the suite rather than the next
+release. One deliberate hole: a **bot-authored** description that won't parse is reported
+but not blocking, because Dependabot regenerates its body on every rebase and `strict: true`
+makes rebases routine — so the failure isn't durably fixable there, and wedging dependency
+updates costs more than the dropped CHANGELOG line, which can be restored by hand on the
+release PR. See `electron/CONTRIBUTING.md`'s "Building, signing, and releasing"
 section for the full release flow.
 
 ## Architecture
