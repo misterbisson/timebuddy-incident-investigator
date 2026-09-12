@@ -58,9 +58,11 @@ parses the whole thing — so an unparseable *body* discards the commit exactly 
 unparseable title does. The trap is narrow and easy to hit: a body line beginning in
 **column 1** with a bare word immediately followed by `(` is read as a header's
 `type(scope)`, so that paren must close on the same line with nothing nested inside it.
-`process.on('uncaughtException', (err) => {` — the first line of a JS fence — fails;
-indenting it one space, or putting a space before the `(`, passes. Backticks are not a
-shelter. This is what happened to #253: the fix shipped to `main` and no release PR ever
+`process.on('uncaughtException', (err) => {` — the first line of a JS fence — fails.
+The fix that always works is a space before the `(`; a wrapped line may then begin with
+`(`, which is harmless, but never with the word. **Indenting is not a general fix**: it
+works inside a fence (fences aren't re-wrapped) but not in prose, because GitHub strips
+the indentation of any line it has to wrap. Backticks are not a shelter either. This is what happened to #253: the fix shipped to `main` and no release PR ever
 opened, with `version` still reporting success.
 
 Note the line in question can be one **the wrap created**, not one anybody typed. GitHub
@@ -74,9 +76,14 @@ column-1 (the #253 shape), while ordinary prose is what the wrap can break.
 `.github/workflows/pr-message.yml` runs `scripts/checkSquashMessage.mjs` on every PR (and
 on every title/body edit) to catch all of this before merge, using the same parser
 release-please pins and checking the body **as wrapped** rather than as typed.
-`test/squashMessage.test.ts` pins both the grammar quirks the check's advice depends on and
-the wrap's shape, so a parser bump that changes them fails the suite rather than the next
-release. One deliberate hole: a **bot-authored** description that won't parse is reported
+`test/squashMessage.test.ts` pins both the grammar quirks and the wrap's shape — including
+the three details each worth a real commit's disagreement (whitespace runs collapse; a line
+beginning with an over-width word gets a blank line before it; indentation is dropped on a
+wrapped line) — so a parser bump or a "simplification" of the wrap fails the suite rather
+than the next release. `scripts/wrapSquashBody.mjs` is deliberately a separate module so the
+checker can be an unconditional program: when it exported the wrap and gated itself on a
+main-module check, that check was false under a symlinked or percent-encoded path and the
+script exited 0 having verified nothing. One deliberate hole: a **bot-authored** description that won't parse is reported
 but not blocking, because Dependabot regenerates its body on every rebase and `strict: true`
 makes rebases routine — so the failure isn't durably fixable there, and wedging dependency
 updates costs more than the dropped CHANGELOG line, which can be restored by hand on the

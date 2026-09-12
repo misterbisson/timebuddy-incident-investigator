@@ -1,7 +1,12 @@
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parser } from '@conventional-commits/parser';
-// @ts-expect-error - plain .mjs script, no type declarations
-import { wrapBody } from '../scripts/checkSquashMessage.mjs';
+// Plain .mjs with no type declarations. tsconfig excludes test/, so this is never
+// typechecked and vitest strips types without checking — don't add a @ts-expect-error
+// here, nothing evaluates it and it would only imply a guarantee that doesn't exist.
+import { wrapBody } from '../scripts/wrapSquashBody.mjs';
 
 /**
  * Pins the parser behavior `.github/workflows/pr-message.yml` exists to enforce.
@@ -92,9 +97,53 @@ describe('squash message parseability', () => {
  * so what is pinned is the behavior those commits demonstrated.
  */
 describe('GitHub squash-body wrap emulation', () => {
-  it('fills greedily at 72 columns', () => {
-    const line = 'word '.repeat(30).trim();
-    for (const out of wrapBody(line).split('\n')) expect(out.length).toBeLessThanOrEqual(72);
+  // Each case below corresponds to a real merged commit whose body the emulation
+  // disagreed with at some point. `wrapBody` reproduces 63 of the 65 observable
+  // merged bodies in this repo; the assertions here stand in for that corpus, which
+  // can't be checked from a unit test without network and git access. A mutation that
+  // breaks any of them puts the check back to parsing text GitHub will not commit.
+
+  it('fills greedily at exactly 72 columns, not 71 or 73', () => {
+    const w72 = 'a'.repeat(70) + ' b'; // 72 chars exactly
+    expect([...w72].length).toBe(72);
+    expect(wrapBody(w72)).toBe(w72);
+
+    const w73 = 'a'.repeat(71) + ' b'; // 73 chars — must wrap
+    expect([...w73].length).toBe(73);
+    expect(wrapBody(w73)).toBe(`${'a'.repeat(71)}\nb`);
+  });
+
+  // #239: GitHub splits on runs of whitespace and rejoins with single spaces.
+  it('collapses runs of ASCII whitespace when it wraps a line', () => {
+    const line = `${'word '.repeat(20)}alpha  beta`;
+    expect(wrapBody(line)).not.toContain('alpha  beta');
+    expect(wrapBody(line)).toContain('alpha beta');
+  });
+
+  // #238/#225: Ruby's \s excludes NBSP, so those stay glued. This is why the split
+  // is an explicit ASCII class rather than /\s+/.
+  it('does not collapse a non-breaking space', () => {
+    const line = `${'word '.repeat(20)}alpha\u00A0\u00A0beta`;
+    expect(wrapBody(line)).toContain('alpha\u00A0\u00A0beta');
+  });
+
+  // #242: when a line BEGINS with an over-width word, the empty accumulator is pushed
+  // like any other line, so GitHub emits a leading blank. Re-adding an
+  // empty-accumulator guard drops corpus fidelity from 63/65 to 62/65 on exactly #242.
+  it('emits a blank line when a line begins with an over-width word', () => {
+    const url = `https://example.test/${'x'.repeat(90)}`;
+    expect(wrapBody(`${url} tail`).split('\n')).toEqual(['', url, 'tail']);
+  });
+
+  it('does not emit a blank line when the over-width word is mid-line', () => {
+    const url = `https://example.test/${'x'.repeat(90)}`;
+    expect(wrapBody(`short lead ${url} tail`).split('\n')).toEqual(['short lead', url, 'tail']);
+  });
+
+  it('counts characters, not bytes — an em-dash is one column', () => {
+    const line = `${'—'.repeat(36)}${'a'.repeat(36)}`;
+    expect([...line].length).toBe(72);
+    expect(wrapBody(line)).toBe(line);
   });
 
   it('leaves fenced code blocks untouched, however long', () => {
@@ -103,23 +152,17 @@ describe('GitHub squash-body wrap emulation', () => {
     expect(wrapBody(body)).toBe(body);
   });
 
-  it('counts characters, not bytes — an em-dash is one column', () => {
-    // 72 chars containing em-dashes: a byte-counting wrap would split this.
-    const line = `${'—'.repeat(36)}${'a'.repeat(36)}`;
-    expect([...line].length).toBe(72);
-    expect(wrapBody(line)).toBe(line);
-  });
-
-  it('emits an unbreakable word on its own overlong line rather than splitting it', () => {
-    const url = `https://example.test/${'x'.repeat(90)}`;
-    expect(wrapBody(`see ${url} ok`).split('\n')).toEqual(['see', url, 'ok']);
+  it('recognizes an indented fence', () => {
+    const long = `${'word '.repeat(30)}end`;
+    const body = ['  ```', long, '  ```'].join('\n');
+    expect(wrapBody(body)).toBe(body);
   });
 
   it('normalizes CRLF', () => {
     expect(wrapBody('a\r\nb')).toBe('a\nb');
   });
 
-  // The regression this whole change is about: fine as typed, broken once wrapped.
+  // The regression this change is about: fine as typed, broken once wrapped.
   it('turns a mid-paragraph inline-code token into a column-1 failure', () => {
     const para =
       'release-please does not stop at the PEG parse. It runs the tree through ' +
@@ -128,10 +171,82 @@ describe('GitHub squash-body wrap emulation', () => {
     expect(parses(`fix: s\n\n${para}`)).toBe(true);
     expect(parses(`fix: s\n\n${wrapBody(para)}`)).toBe(false);
   });
+});
 
-  it('leaves an indented line indented, so the documented fix survives the wrap', () => {
-    const body = "  process.on('uncaughtException', (err) => {";
-    expect(wrapBody(body)).toBe(body);
+describe('what the check tells people to do about it', () => {
+  // These pin the remediation text in checkSquashMessage.mjs. An earlier version led
+  // with "indent the line by one space", which is false for prose: GitHub strips the
+  // indentation of any line it has to wrap (confirmed against #257's own merged body).
+  const offender = 'foo(bar(baz))';
+
+  it('indentation does NOT save an over-width prose line', () => {
+    const line = `  ${'word '.repeat(14)}${offender} tail`;
+    expect([...line].length).toBeGreaterThan(72);
+    expect(parses(`fix: s\n\n${wrapBody(line)}`)).toBe(false);
+  });
+
+  it('indentation DOES save a line inside a fence, which is never wrapped', () => {
+    const body = ['```js', `  ${'word '.repeat(14)}${offender} tail`, '```'].join('\n');
     expect(parses(`fix: s\n\n${wrapBody(body)}`)).toBe(true);
+  });
+
+  it('a space before the paren survives the wrap at every offset', () => {
+    for (let pad = 0; pad < 40; pad++) {
+      const line = `${'word '.repeat(pad)}foo (bar(baz)) tail`.trim();
+      expect(parses(`fix: s\n\n${wrapBody(line)}`)).toBe(true);
+    }
+  });
+});
+
+/**
+ * The check is only useful if it actually runs, and an earlier version could silently
+ * not run: it exported `wrapBody` and gated `main()` on a main-module comparison,
+ * which is false whenever the path is percent-encoded or symlink-resolved differently
+ * from `process.argv[1]`. The result was exit 0 with an empty log — a green step that
+ * checked nothing, the same silent pass the whole check exists to prevent. The guard
+ * is gone (see scripts/wrapSquashBody.mjs), and these run the real script the way CI
+ * does rather than importing it, from several cwds and path spellings.
+ */
+describe('the checker runs as a program', () => {
+  const script = fileURLToPath(new URL('../scripts/checkSquashMessage.mjs', import.meta.url));
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+  const badBody = "process.on('uncaughtException', (err) => {";
+
+  function run(args: { path: string; cwd: string; title?: string; body?: string; author?: string }): number {
+    try {
+      execFileSync(process.execPath, [args.path], {
+        cwd: args.cwd,
+        env: {
+          ...process.env,
+          PR_TITLE: args.title ?? 'fix: s',
+          PR_BODY: args.body ?? badBody,
+          PR_AUTHOR: args.author ?? 'someone',
+        },
+        stdio: 'ignore',
+      });
+      return 0;
+    } catch (err) {
+      return (err as { status?: number }).status ?? -1;
+    }
+  }
+
+  it('fails a bad message when invoked by relative path from the repo root, as CI does', () => {
+    expect(run({ path: 'scripts/checkSquashMessage.mjs', cwd: repoRoot })).toBe(1);
+  });
+
+  it('fails a bad message when invoked by absolute path from an unrelated cwd', () => {
+    expect(run({ path: script, cwd: tmpdir() })).toBe(1);
+  });
+
+  it('passes a clean message', () => {
+    expect(run({ path: script, cwd: repoRoot, body: 'An ordinary prose body.' })).toBe(0);
+  });
+
+  it('passes, without blocking, a bot-authored bad message', () => {
+    expect(run({ path: script, cwd: repoRoot, author: 'dependabot[bot]' })).toBe(0);
+  });
+
+  it('fails a non-conventional title', () => {
+    expect(run({ path: script, cwd: repoRoot, title: 'no type prefix', body: 'fine' })).toBe(1);
   });
 });
