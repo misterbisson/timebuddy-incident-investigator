@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.12.0...v0.12.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* catch squash messages release-please can't parse, before merge ([#257](https://github.com/misterbisson/timebuddy-incident-investigator/issues/257)) ([2fb65c9](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2fb65c90d683a18972a7807c602a02121113ab7c))
+* check the squash body as GitHub wraps it, and stop wedging bot PRs ([#259](https://github.com/misterbisson/timebuddy-incident-investigator/issues/259)) ([f76335a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f76335a259290b0e66cc2179dfbe56e134c24963))
+
 ## [0.12.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.11.0...v0.12.0) (2026-09-12)
 
 
