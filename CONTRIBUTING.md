@@ -92,6 +92,12 @@ in `electron/` (see [Commands](#commands)), and the engine's `dist/` must exist.
 changing engine code, rebuild (`npm run build`) and restart the MCP server so the change is
 picked up. Claude Code asks you to approve the project server the first time it appears.
 
+Note that sharing the server name is what makes this work, and it works by *replacing* the
+user-scope server rather than adding one — which is right here, and wrong for the ad-hoc-query
+setup a dashboards repo checks in. That one wants the flagged server **alongside** your normal
+one, so it gets a distinct name; see
+[Ad-hoc queries](README.md#ad-hoc-queries-off-by-default) in README.
+
 This differs from the standalone-CLI snippet above, which talks to Grafana/Graylog via
 env-var connections and never touches Electron or the encrypted store.
 

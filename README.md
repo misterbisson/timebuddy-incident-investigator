@@ -481,13 +481,34 @@ project-scoped `.mcp.json` in the repo where you author dashboards:
 ```json
 {
   "mcpServers": {
-    "timebuddy": {
-      "command": "timebuddy",
+    "timebuddy-adhoc": {
+      "command": "/Applications/Timebuddy Incident Investigator.app/Contents/MacOS/Timebuddy Incident Investigator",
       "args": ["--mcp-server", "--allow-adhoc-queries=metrics.staging.example.com:influxdb"]
     }
   }
 }
 ```
+
+**Give this entry a name of its own** — `timebuddy-adhoc` above — rather than reusing the name of
+the Timebuddy server you already have configured (registering the app with Claude adds one,
+without this flag). A shared name doesn't give you a second server; the project entry *replaces*
+the configured one inside that workspace. Sometimes replacing is the point — this repo's own dev
+setup shares the name deliberately, to run a local build instead of the installed release (see
+[CONTRIBUTING](CONTRIBUTING.md#using-the-local-build-in-claude-code)) — but for ad-hoc queries it
+means your everyday tools start coming from whatever `command` the checked-in file names, so a
+path that's stale or wrong for someone's machine takes all of them down rather than just this one.
+
+A distinct name keeps the capability additive: both servers register, their tool lists overlap
+(expected, not a misconfiguration), and `execute_adhoc_query` arrives under the project server's
+name.
+
+**`command` is the path to the installed app**, not a `timebuddy` CLI — none is published. The
+example above is the **macOS** location; the path's shape differs per platform, and the app's own
+"Register with Claude" block fills in the right one for whichever platform you're on, so copy it
+from there rather than from here. A checked-in `.mcp.json` therefore assumes every teammate
+installed the app to the same place — same OS included — and on a machine where that path doesn't
+resolve the server simply fails to start, which is the other reason the distinct name matters: the
+failure then costs only the ad-hoc tool and leaves your usual Timebuddy server working.
 
 The flag is `--allow-adhoc-queries=<host>:<datasourceType>[,<datasourceType>]`, repeatable once
 per endpoint. `<host>` is matched against each connection's URL host and its `matchHosts`
@@ -547,6 +568,29 @@ measures real scrape density instead of taking a stated interval on trust; a Met
 construct (`up default 0`) tells a VictoriaMetrics instance from a Prometheus one, which decides
 whether `increase(x[1m])` at a 60s scrape is exact or empty. Those are facts about the
 datasource, not about a service, so there is no dashboard that could have encoded them.
+
+#### If `execute_adhoc_query` doesn't appear
+
+Its absence always means the tool was never **registered** — never that a query was rejected.
+An MCP server advertises one tool list per session, so the flag is read once at startup:
+
+- **Adding or changing the flag needs a full restart of the client session.** Restarting the
+  Timebuddy app is not the same thing, and neither is resuming a session that began before you
+  wrote the file — that session's tool list is already fixed.
+- **A malformed flag registers nothing.** `--allow-adhoc-queries=metrics.staging.example.com`
+  with no `:<datasourceType>`, or a bare `--allow-adhoc-queries`, is skipped rather than fatal —
+  a typo in a checked-in file leaves the capability off (its safe state) instead of taking every
+  other tool down with it. The reason is logged as `Ignoring ad-hoc query flag: ...` on a stderr
+  your client may not show you, so check the flag's shape against the example above.
+- **A server that failed to start looks identical.** If the `command` path is wrong (an app
+  bundle that moved, or one installed somewhere else on a teammate's machine), you get no tool
+  and no flag error — just a server that isn't there.
+
+A **hostname that matches no connection is the opposite symptom**, and worth separating: the tool
+still registers, and every call refuses with "This connection is not authorized for ad-hoc
+queries." `<host>` is matched against your configured connections, so check the spelling against
+[Multiple connections](#multiple-connections) — the server also logs which hosts went unmatched,
+on that same stderr.
 
 ## Local data and disk usage
 
