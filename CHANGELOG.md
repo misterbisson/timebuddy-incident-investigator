@@ -7,6 +7,7 @@
 
 * catch squash messages release-please can't parse, before merge ([#257](https://github.com/misterbisson/timebuddy-incident-investigator/issues/257)) ([2fb65c9](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2fb65c90d683a18972a7807c602a02121113ab7c))
 * check the squash body as GitHub wraps it, and stop wedging bot PRs ([#259](https://github.com/misterbisson/timebuddy-incident-investigator/issues/259)) ([f76335a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f76335a259290b0e66cc2179dfbe56e134c24963))
+* guard stderr so an orphaned MCP server can't spin on a dead pipe ([#253](https://github.com/misterbisson/timebuddy-incident-investigator/issues/253)) ([f861e2f](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f861e2f91b93b15deac136220bc937a1024ad5a8))
 
 ## [0.12.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.11.0...v0.12.0) (2026-09-12)
 
