@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.11.0...v0.12.0) (2026-09-12)
+
+
+### Features
+
+* resolve Grafana's relative-time rounding shorthand (now/w, now/d) ([#246](https://github.com/misterbisson/timebuddy-incident-investigator/issues/246)) ([3657d45](https://github.com/misterbisson/timebuddy-incident-investigator/commit/3657d454f41faf8a815841d23477e2b1d71d1132))
+
 ## [0.11.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.10.0...v0.11.0) (2026-09-11)
 
 
