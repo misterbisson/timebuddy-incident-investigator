@@ -95,6 +95,21 @@ export interface ExploreUrlOptions {
   toMs: number;
   /** Grafana org the datasource belongs to; omitted rather than defaulted to 1 (see below). */
   orgId?: number;
+  /**
+   * Prometheus-type panes only: evaluate at a single timestamp (the range end)
+   * rather than across the range. Mirrors the executed query's `instant`/`range`
+   * pair — a range query opened as an instant one shows a single number where
+   * the tool reported a series.
+   */
+  instant?: boolean;
+  /**
+   * Prometheus-type panes only: the min step, carried as Grafana's `interval`
+   * string. Load-bearing rather than cosmetic — the step decides the answer of
+   * every range-vector function, so a link that omits it re-runs the query at
+   * whatever resolution the viewer's Explore picks and can disagree with the
+   * numbers the tool returned (see issue #200).
+   */
+  stepSeconds?: number;
 }
 
 /**
@@ -125,11 +140,12 @@ const EXPLORE_PANE_KEY = 'timebuddy';
  * - **No hardcoded `orgId=1`.** A wrong org resolves against the wrong
  *   datasource list. Omitted unless the caller actually knows it, which lets
  *   Grafana fall back to the viewer's own current org.
- * - **No builder-model query.** The pane carries `query` + `rawQuery: true`
- *   (InfluxQL's raw text form), not the measurement/select/groupBy model Grafana
- *   emits from its visual query editor. That's the shape the query was actually
- *   executed in, and reconstructing an equivalent builder model would risk the
- *   link showing something subtly different from what ran.
+ * - **No builder-model query.** The pane carries the dialect's raw text form —
+ *   `query` + `rawQuery: true` for InfluxQL, `expr` + `editorMode: 'code'` for
+ *   PromQL — not the measurement/select/groupBy model Grafana emits from its
+ *   visual query editor. That's the shape the query was actually executed in,
+ *   and reconstructing an equivalent builder model would risk the link showing
+ *   something subtly different from what ran.
  *
  * Emits the `schemaVersion=1&panes={...}` form, which is Grafana >= 10.2. On an
  * older instance the link will open Explore without the query pre-filled rather
@@ -137,17 +153,35 @@ const EXPLORE_PANE_KEY = 'timebuddy';
  * floor is documented rather than detected (see docs/TOOLS.md).
  */
 export function buildExploreUrl(baseUrl: string, opts: ExploreUrlOptions): string {
+  // Each datasource type reads its query out of a different field, so the pane
+  // is built per dialect rather than from one shape with optional extras: a
+  // Prometheus pane carrying InfluxQL's `query`/`rawQuery` opens empty, which
+  // is the failure mode this whole URL exists to avoid.
+  const paneQuery =
+    opts.datasourceType === 'prometheus'
+      ? {
+          refId: 'A',
+          datasource: { type: opts.datasourceType, uid: opts.datasourceUid },
+          expr: opts.query,
+          // Both flags, matching the executed query's own pair — Explore reads
+          // `instant`/`range` independently and shows both when both are true.
+          instant: opts.instant === true,
+          range: opts.instant !== true,
+          // Code mode, not the builder: the expression is what ran, and
+          // Explore's visual builder can't always round-trip an arbitrary one.
+          editorMode: 'code',
+          ...(opts.stepSeconds !== undefined ? { interval: `${opts.stepSeconds}s` } : {}),
+        }
+      : {
+          refId: 'A',
+          datasource: { type: opts.datasourceType, uid: opts.datasourceUid },
+          query: opts.query,
+          rawQuery: true,
+          resultFormat: 'time_series',
+        };
   const pane = {
     datasource: opts.datasourceUid,
-    queries: [
-      {
-        refId: 'A',
-        datasource: { type: opts.datasourceType, uid: opts.datasourceUid },
-        query: opts.query,
-        rawQuery: true,
-        resultFormat: 'time_series',
-      },
-    ],
+    queries: [paneQuery],
     // Strings, not numbers: Grafana's Explore state reads absolute bounds as
     // stringified epoch-ms, and a bare number is parsed inconsistently across
     // versions.

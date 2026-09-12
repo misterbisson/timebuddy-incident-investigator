@@ -29,6 +29,44 @@ Give it an alert (a link, alert JSON, or webhook payload) and it will:
 - **Report** — a verdict (`real-anomaly` / `likely-false-positive` / `inconclusive`) with
   a clickable link to every piece of evidence.
 
+## Where Timebuddy stops
+
+A real estate holds more than metrics and logs: tickets, wiki pages, chat history, inventory
+and DCIM systems, plus site-specific services whose shapes nobody could predict. Timebuddy
+neither discovers nor reaches any of them. That's a boundary, not a gap waiting to be filled.
+
+**Inside the boundary, discovery is normalized.** A Grafana connection and a Graylog connection
+pair by shared `tags`: `list_datasources` returns each connection's `connectionTags`,
+`list_log_sources` returns each log connection's `tags`, and `/timebuddy:investigate` matches
+them instead of asking which log source belongs to which Grafana. `/timebuddy:explore` flags
+mismatched tags before an incident, when there's time to fix them. That works because both
+sides are things Timebuddy connects to — see [Multiple connections](#multiple-connections).
+
+**Outside it, your own skills own your own resources, and they call these tools rather than the
+reverse.** A skill that owns your inventory can answer "what is this host, what else shares its
+rack, which services declare it" and then hand the dashboard to `find_related_dashboards` /
+`execute_query_window` for the actual timeseries. The direction is one-way by construction:
+Timebuddy has no way to reach into a ticket tracker or a CMDB, because the
+[read-only endpoint allowlists](#security) are the only network surface its tool layer has.
+
+Composition happens in the agent, not through pipes — it reads one tool's output and decides
+what to call next. So the contract that makes it work is that **every output states what it
+covers**: which connection, which window, which datasource, and `provenance: "adhoc"` when a
+query wasn't a human's. An empty result that doesn't say *why* it's empty is indistinguishable
+from a real negative, which is why these tools return structured fields rather than prose.
+
+**Why there's no generic "find the related tickets and chat messages" tool.** Linking a metric
+dip to the human discussion of it is a join, and the key has to be a string that appears
+verbatim on both sides. Free text isn't that key — ordinary ops words are also service names,
+so matching prose to services is wrong often enough to be worse than not doing it. And an
+identifier has to be judged by whether it *circulates*, not by whether it's unique: a trace id
+is perfectly unique and nobody ever pastes one into a chat message, so a search for it returns
+zero *by construction* — which reads exactly like a clean search. "I looked and found nothing"
+is worth something only if the search could have found something, so a generic version of this
+would mostly manufacture confident negatives. Timebuddy instead sticks to identifiers it
+already has in hand — host, IP, request/trace id — against log sources you configured; see
+[Searching logs](#searching-logs).
+
 ## Skills
 
 Three bundled Claude Code skills chain the [tools](#mcp-tools) in the right order, so nobody
@@ -119,6 +157,15 @@ open the app yourself, this is the path that keeps you current.
 A failed or offline check is silent and just retried later — it never interrupts an
 investigation, and a broken update check can never take the MCP server down with it.
 
+**To check right now**, open the app and use **Check for Updates…** (in the Timebuddy menu on
+macOS, under **File** on Windows and Linux), or the **Check for updates** button in the
+**About** section at the bottom of the Connections window. Either one always asks — it ignores
+the six-hourly interval that paces the background checks — and always tells you what it found,
+including "you're up to date" and why a check couldn't run. It's the same button whether you
+opened the app yourself or Claude is running it: if Claude has it open as an MCP server, a
+manual check still downloads the update but won't restart anything mid-session, so it's applied
+when that session ends, same as always.
+
 - **macOS** updates are Apple Developer ID signed and notarized, same as the build you first
   installed. Builds after 0.9.1 require **macOS 13 (Ventura) or later** — Chromium dropped
   macOS 12 (Monterey), so the Electron runtime underneath did too. On an older macOS the
@@ -130,7 +177,7 @@ investigation, and a broken update check can never take the MCP server down with
   [Known limitations](#known-limitations-mvp)).
 
 Only the packaged app auto-updates; a checkout run from source has nothing to update and skips
-the check.
+the check — a manual check there says so rather than appearing to do nothing.
 
 ## Configuring connections
 
@@ -407,9 +454,10 @@ limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LO
 - Queries normally come from a dashboard someone authored, never from the model. The one
   exception is **`execute_adhoc_query`**, which is **absent unless you explicitly turn it on
   for a specific workspace and endpoint** — see [Ad-hoc queries](#ad-hoc-queries-off-by-default)
-  below. When it is on, only single-statement `SELECT`/`SHOW` queries run, only against
-  datasource types you named, and every query (including refused ones) is recorded with a
-  Grafana Explore URL that replays it.
+  below. When it is on, it reaches only datasource types you named, in a language whose reads
+  can be told from its writes (single-statement `SELECT`/`SHOW` for InfluxQL; PromQL, which has
+  no write form at all), and every query — including refused ones — is recorded with a Grafana
+  Explore URL that replays it.
 - `security/limits.ts` caps query time-range span, max data points, and concurrent outgoing
   requests.
 - `security/redact.ts` masks secret-shaped fields and configured customer-identifier
@@ -454,15 +502,30 @@ manifest to enable it.
 
 What holds when it's on:
 
-- **Only reads.** Single-statement `SELECT`/`SHOW` only. Statement heads are allowlisted rather
-  than destructive verbs blocklisted, so `DROP`/`DELETE`/`ALTER`/`CREATE` — and anything
-  InfluxDB adds later — are refused by not being on the list. `SELECT … INTO` is refused
-  separately, since it writes despite starting with `SELECT`. Anything unclassifiable is
-  refused.
-- **Only datasource types with a guard.** InfluxQL today. A type you authorize but that has no
-  read-only guard yet (raw SQL, for instance) is still refused — being willing isn't the same
-  as being verifiable.
+- **Only reads.** For InfluxQL: single-statement `SELECT`/`SHOW` only. Statement heads are
+  allowlisted rather than destructive verbs blocklisted, so `DROP`/`DELETE`/`ALTER`/`CREATE` —
+  and anything InfluxDB adds later — are refused by not being on the list. `SELECT … INTO` is
+  refused separately, since it writes despite starting with `SELECT`. Anything unclassifiable is
+  refused. For PromQL there is no statement to classify: the language has no write, delete, or
+  DDL form, and Grafana's Prometheus backend only ever reaches its query endpoints. What the
+  PromQL guard does enforce is one expression per call (so the audit record, the `provenance`
+  marking, and the Explore URL each describe exactly what ran) and refusal of anything it can't
+  read as one — an unterminated string, an unbalanced bracket, a stray `;`.
+- **Only datasource types with a guard.** InfluxQL against `influxdb`, PromQL/MetricsQL against
+  `prometheus` (which is how most VictoriaMetrics instances are configured). A type you
+  authorize but that has no read-only guard yet (raw SQL, for instance) is still refused —
+  being willing isn't the same as being verifiable.
+- **A step you chose, and a step you can check.** A PromQL range query requires an explicit
+  `stepSeconds`; it is never inferred, because the step decides the answer of every
+  range-vector function (`rate`, `increase`, `delta`, `*_over_time`). The result then reports
+  what the returned timestamps say about the step the datasource actually used, and says it
+  carefully: a mismatch is reported only when the numbers *prove* one, because a sparse metric
+  returns widely spaced points at a perfectly honoured step and calling that a mismatch would
+  make a correct measurement look wrong. See
+  [PromQL step reporting](docs/TOOLS.md#promql-step-reporting).
 - **The same caps as everything else.** `MAX_LOOKBACK_HOURS`, `MAX_DATA_POINTS`, concurrency.
+  The step is bounded by the same `MAX_DATA_POINTS`: a step that would ask for more evaluation
+  points than that is refused, naming the finest one the window can carry.
 - **A replayable audit trail.** Every call records a Grafana Explore URL that re-runs exactly
   that query over exactly that window (absolute timestamps, never `now-1h`), in `audit.jsonl`
   and in the app's Activity window. Refused and failed queries are recorded too — those are the
@@ -477,6 +540,13 @@ right and be subtly wrong, and the analysis here will compute a confident z-scor
 Prefer `find_related_dashboards` → `resolve_panel_queries` → `execute_query_window`, and reach
 for this when that path comes up empty or when you're iterating on a query you intend to put on
 a dashboard.
+
+The one class of question where this tool is the *right* first move rather than a fallback:
+questions about the shape of the data itself, which no panel answers. `count_over_time(metric[1m])`
+measures real scrape density instead of taking a stated interval on trust; a MetricsQL-only
+construct (`up default 0`) tells a VictoriaMetrics instance from a Prometheus one, which decides
+whether `increase(x[1m])` at a 60s scrape is exact or empty. Those are facts about the
+datasource, not about a service, so there is no dashboard that could have encoded them.
 
 ## Local data and disk usage
 

@@ -117,3 +117,43 @@ describe('buildExploreUrl', () => {
     expect(Object.values(panes(url))[0]!.queries[0].query).toBe(query);
   });
 });
+
+describe('buildExploreUrl for Prometheus panes', () => {
+  const promPane = (opts: { instant?: boolean; stepSeconds?: number } = {}) =>
+    Object.values(
+      panes(
+        buildExploreUrl('https://grafana.example.com', {
+          datasourceUid: 'prom1',
+          datasourceType: 'prometheus',
+          query: 'sum(rate(http_requests_total[5m]))',
+          fromMs: FROM,
+          toMs: TO,
+          ...opts,
+        }),
+      ),
+    )[0]!;
+
+  it('carries the expression in expr, in code mode', () => {
+    // Explore reads a Prometheus query out of `expr`; an InfluxQL-shaped pane
+    // (query + rawQuery) opens the pane empty, silently losing the audit trail.
+    const pane = promPane({ stepSeconds: 60 });
+    expect(pane.queries[0].expr).toBe('sum(rate(http_requests_total[5m]))');
+    expect(pane.queries[0].editorMode).toBe('code');
+    expect(pane.queries[0].query).toBeUndefined();
+    expect(pane.queries[0].rawQuery).toBeUndefined();
+  });
+
+  it('carries the step, so the link cannot disagree with the numbers that were returned', () => {
+    expect(promPane({ stepSeconds: 60 }).queries[0].interval).toBe('60s');
+    expect(promPane().queries[0].interval).toBeUndefined();
+  });
+
+  it('mirrors the executed range/instant pair', () => {
+    expect(promPane({ stepSeconds: 60 }).queries[0]).toMatchObject({ range: true, instant: false });
+    expect(promPane({ instant: true }).queries[0]).toMatchObject({ range: false, instant: true });
+  });
+
+  it('still emits an absolute window', () => {
+    expect(promPane({ stepSeconds: 60 }).range).toEqual({ from: String(FROM), to: String(TO) });
+  });
+});

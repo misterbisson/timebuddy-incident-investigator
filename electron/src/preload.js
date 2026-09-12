@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('connectionManager', {
   delete: (id) => ipcRenderer.invoke('connections:delete', id),
   test: (draft) => ipcRenderer.invoke('connections:test', draft),
   registrationInfo: () => ipcRenderer.invoke('connections:registrationInfo'),
+  updateStatus: () => ipcRenderer.invoke('updates:status'),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
 });

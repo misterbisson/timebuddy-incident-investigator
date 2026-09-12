@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.10.0...v0.11.0) (2026-09-11)
+
+
+### Features
+
+* add a manual "Check for Updates" control to the app ([#254](https://github.com/misterbisson/timebuddy-incident-investigator/issues/254)) ([41b3d6d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/41b3d6dcefafef60d2650930c90e7c8b1cd17a93))
+
+## [0.10.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.3...v0.10.0) (2026-09-09)
+
+
+### Features
+
+* accept PromQL in execute_adhoc_query, with a caller-chosen step ([#243](https://github.com/misterbisson/timebuddy-incident-investigator/issues/243)) ([c3006f0](https://github.com/misterbisson/timebuddy-incident-investigator/commit/c3006f08f6fa194f297badffc51f38519e91dce1))
+
 ## [0.9.3](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.9.2...v0.9.3) (2026-09-09)
 
 

@@ -47,7 +47,7 @@ was not found") from an unrecognized URL shape. None of them accept a folder lin
 | `execute_query_window` | Replay a panel's queries for the incident window, a pre-window buffer, and baseline control windows. Optional `threshold`/`thresholdDirection` returns each series' precise dip/spike run(s) — start, end, duration, min/max — instead of leaving that to be eyeballed. Optional `tagBreakout` re-runs the panel broken out by a tag: `{ key }` adds a `GROUP BY`/`by (...)` for that key (one series per value — surfaces which host is hot when a cross-host aggregate hides it), `{ key, value }` filters to that one value (to isolate a host before feeding it into `search_logs`). Supports builder-mode InfluxQL and PromQL targets (raw-query InfluxQL and Loki/LogQL still hard-error rather than silently returning the un-broken-out query — see [`src/dashboards/tagBreakout.ts`](../src/dashboards/tagBreakout.ts)/[`promqlBreakout.ts`](../src/dashboards/promqlBreakout.ts)); pair with `discover_influxdb_schema`/`discover_label_values` to get the real tag/label keys and values. `includePoints: false` drops raw points (stats/runs still returned) for a wide window that would otherwise overflow. |
 | `render_dashboard` | One-shot "what does this dashboard show right now": executes every queryable panel on a dashboard/panel/alert-rule URL (or `dashboardUid`) for a single window — no pre-window buffer, no baseline controls — instead of chaining `fetch_dashboard` → `resolve_panel_queries` → `execute_query_window` per panel. `includePoints: false` gives a compact, stats-only survey. A panel mirroring another via Grafana's "-- Dashboard --" datasource (see [`BEHAVIOR.md`](BEHAVIOR.md)) is reported with `mirrorsPanelIds`, never executed or errored. |
 | `validate_baseline` | Z-score classification of the incident window vs. prior-hour/day/week baselines, flagging recurring patterns. |
-| `execute_adhoc_query` | *Only registered when authorized — see [Ad-hoc queries](../README.md#ad-hoc-queries-off-by-default).* Run query text **you** wrote against a datasource over an explicit window, rather than replaying a query from a dashboard. Returns series plus `provenance: "adhoc"` plus a Grafana Explore URL that re-runs exactly that query (absolute window, so it stays truthful when opened later; recorded in `audit.jsonl` even when the query is refused or fails). Read-only by construction: single-statement `SELECT`/`SHOW` only, statement heads allowlisted rather than destructive verbs blocklisted, `SELECT … INTO` refused separately, anything unclassifiable refused — and only against datasource types both authorized *and* guardable (InfluxQL today; raw SQL refused regardless). Subject to the same `MAX_LOOKBACK_HOURS`/`MAX_DATA_POINTS` caps as every other query. Prefer the dashboard path (`find_related_dashboards` → `resolve_panel_queries` → `execute_query_window`) first: a dashboard query encodes aggregation and retention choices a service owner validated, and a hand-written one can look right while being subtly wrong. |
+| `execute_adhoc_query` | *Only registered when authorized — see [Ad-hoc queries](../README.md#ad-hoc-queries-off-by-default).* Run query text **you** wrote against a datasource over an explicit window, rather than replaying a query from a dashboard. Dispatches on datasource type: InfluxQL against `influxdb`, PromQL/MetricsQL against `prometheus`. Returns series plus `provenance: "adhoc"` plus a Grafana Explore URL that re-runs exactly that query (absolute window, so it stays truthful when opened later; recorded in `audit.jsonl` even when the query is refused or fails). Read-only by construction, by a different route per language: InfluxQL is restricted to single-statement `SELECT`/`SHOW` with statement heads allowlisted rather than destructive verbs blocklisted (`SELECT … INTO` refused separately, anything unclassifiable refused), while PromQL has no write form at all and Grafana only reaches its query endpoints — so its guard enforces one expression per call instead. Only datasource types both authorized *and* guardable are reachable; raw SQL is refused regardless. PromQL range queries require an explicit `stepSeconds` and report the step the datasource actually used — see [PromQL step reporting](#promql-step-reporting) below. Subject to the same `MAX_LOOKBACK_HOURS`/`MAX_DATA_POINTS` caps as every other query. Prefer the dashboard path (`find_related_dashboards` → `resolve_panel_queries` → `execute_query_window`) first: a dashboard query encodes aggregation and retention choices a service owner validated, and a hand-written one can look right while being subtly wrong — with one exception, questions about the data's own shape (`count_over_time(metric[1m])` for real scrape density, a MetricsQL-only construct to tell VictoriaMetrics from Prometheus), which no dashboard could have encoded. |
 | `summarize_findings` | Deterministic verdict assembly (`real-anomaly` / `likely-false-positive` / `inconclusive`) plus an evidence bundle. It does **not** generate prose — the calling agent writes the human-readable note from this bundle, which is why it returns `reasons`/`evidence` arrays rather than a paragraph. |
 
 ## Correlate & discover
@@ -110,6 +110,63 @@ normalized to CRLF, a leading BOM preserved — reported as `formulaNeutralized:
 The Grafana-side transformation capture depends on the exact visible text/DOM of Grafana's
 Inspect drawer rather than a published API, so it's more version-sensitive than the rest of
 this project's Grafana integration.
+
+## PromQL step reporting
+
+`execute_adhoc_query` requires `stepSeconds` on a PromQL range query and refuses to infer one.
+The step is not a display preference: every range-vector function (`rate`, `increase`, `delta`,
+`*_over_time`) is *defined* in terms of it, so a step chosen for you decides the answer. [Issue
+#200](https://github.com/misterbisson/timebuddy-incident-investigator/issues/200) is the full
+account of what that costs — a replay at an unrequested 15s step reported ~0.75 errors/minute
+from a counter that had been flat for eight days, and several layers of analysis were built on
+that number before the step was suspected.
+
+Because a requested step is still only a request — Grafana's Prometheus backend can enlarge one
+(its own safe-resolution limit), and an older instance may read a field this client didn't
+send — the result reports what the returned timestamps say about it:
+
+```json
+"step": { "requestedMs": 60000, "observedGapGcdMs": 15000, "observedMinGapMs": 15000,
+          "seriesMeasured": 1, "consistentWithRequested": false,
+          "note": "Gaps between returned points share a divisor of 15000ms, which is not a
+                   multiple of the requested 60000ms — so the datasource did not evaluate at
+                   the requested step. ..." }
+```
+
+Note what is *not* reported: an "effective step". The obvious version of this field — the median
+gap between timestamps — is confidently wrong on sparse data, in the direction that matters.
+Prometheus evaluates a range query on a fixed grid but returns a point only where the range
+vector had samples, so a metric emitting a few events an hour comes back as isolated points 15
+minutes apart *even when the step was honoured exactly*. A median-gap report would call that a
+900000ms step and flag a mismatch, and since [`skills/investigate/SKILL.md`](../skills/investigate/SKILL.md)
+tells the agent to reread every number against the reported step, a correct scrape-density
+measurement would be read as a 15x error — on the very query this tool is the right first move
+for.
+
+What the timestamps license is one inference, in one direction: every gap is an integer multiple
+of the step that produced it, so **the step divides the GCD of the gaps**.
+
+- `consistentWithRequested: false` is *proof* of an override — the requested step does not divide
+  `observedGapGcdMs`, so the datasource cannot have used it (the #200 case: 15000ms gaps against
+  a requested 60000ms).
+- `consistentWithRequested: true` is weaker on purpose: the data is consistent with the request,
+  and wider spacing is sparsity. A datasource that coarsened 60000ms to 120000ms is
+  indistinguishable from a metric that is simply sparse at 60000ms, so the field is named for the
+  consistency it can establish rather than a match it can't. When no gap is as tight as the step,
+  the `note` says so explicitly — "not evidence of a different step, so read the numbers as they
+  are" — because silence there reads like a mismatch.
+
+Both figures are measured across **every** returned series, not the first one with two points (a
+response's first series can be a single-point outlier while the rest are dense), and measured
+before the response-shaping clamp (`clampSeriesPoints`) strides the emitted points, so they
+describe the datasource rather than the clamp. When no series has two distinct timestamps, `step`
+says that plainly instead of omitting the field.
+
+`queryType: "instant"` has no step at all: Prometheus evaluates an instant query at a single
+timestamp, so the result carries `evaluatedAtMs` (the window end) instead, and passing
+`stepSeconds` alongside it is refused rather than ignored. `stepSeconds`/`queryType` against an
+InfluxDB datasource are likewise refused — InfluxQL takes its resolution from the query's own
+`GROUP BY time(...)`, and accepting a parameter that does nothing is the same trap one level up.
 
 ## Redaction exceptions
 
