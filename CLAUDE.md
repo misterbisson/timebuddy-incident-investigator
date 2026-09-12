@@ -50,7 +50,24 @@ sit on `main` in the meantime.
 
 A PR merged with a non-conventional title (e.g. a bare description with no type prefix) is
 real, shipped code that this pipeline can't see: no version bump, no changelog entry, even
-though `main` moved. See `electron/CONTRIBUTING.md`'s "Building, signing, and releasing"
+though `main` moved.
+
+**The PR *description* is part of that message, and can break it the same way.** The repo
+squash-merges with `PR_TITLE` as the subject and `PR_BODY` as the body, and release-please
+parses the whole thing — so an unparseable *body* discards the commit exactly as an
+unparseable title does. The trap is narrow and easy to hit: a body line beginning in
+**column 1** with a bare word immediately followed by `(` is read as a header's
+`type(scope)`, so that paren must close on the same line with nothing nested inside it.
+`process.on('uncaughtException', (err) => {` — the first line of a JS fence — fails;
+indenting it one space, or putting a space before the `(`, passes. Backticks are not a
+shelter. This is what happened to #253: the fix shipped to `main` and no release PR ever
+opened, with `version` still reporting success.
+
+`.github/workflows/pr-message.yml` now runs `scripts/checkSquashMessage.mjs` on every PR
+(and on every title/body edit) to catch both cases before merge, using the same parser
+release-please pins. `test/squashMessage.test.ts` pins the grammar quirks the check's advice
+depends on, so a parser bump that changes them fails the suite rather than the next
+release. See `electron/CONTRIBUTING.md`'s "Building, signing, and releasing"
 section for the full release flow.
 
 ## Architecture
