@@ -18,15 +18,37 @@
  * idle-shutdown path (idleShutdown.ts) that exists to clean these up, so it
  * sits on screen until somebody clicks OK.
  *
- * So this module does two things, and the split matters:
+ * The same fault has a second, worse half, and it is worse precisely because
+ * the handler above is the thing that closes it. **stderr is a pipe to the same
+ * departed parent**, so it dies at the same instant stdout does — and an
+ * unhandled `'error'` on `process.stderr` is an uncaught exception exactly like
+ * one on stdout. The Electron host's `uncaughtException` handler
+ * (electron/src/main.js) responds to that by formatting `err.stack` and writing
+ * it *to stderr*, which fails the same way, which re-enters the handler: an
+ * unbounded loop that pegs a core. It was found in the wild running 14h45m at
+ * ~97% of one CPU, spinning too hard for the idle watchdog below to ever reap
+ * it — a process that is spinning is not idle. See #252.
+ *
+ * That is why this guard covers stderr too, and why `log()` goes quiet once the
+ * client is known gone. Announcing "the client is gone" down the pipe that just
+ * proved it is both futile and, in that host, the ignition source: this
+ * module's own report was the first write to fail.
+ *
+ * So this module does three things, and the split matters:
  *
  *   1. **Never crash on a dead pipe.** A failed write to a client that no
  *      longer exists is expected operation, not an error condition — there is
  *      nobody left to report it to, which is precisely why it must not be
  *      raised as an exception. Swallowed unconditionally.
- *   2. **Treat a dead pipe as the session being over.** stdin closing or a
- *      write failing both mean no further JSON-RPC can ever be exchanged on
- *      this transport, so the process has nothing left to serve. That's the
+ *   2. **Stop logging to a pipe that is gone.** Every diagnostic this process
+ *      writes goes to stderr because stdout is the JSON-RPC channel — but once
+ *      the client has departed, stderr has no reader either. Further writes
+ *      cannot inform anyone and can only fail, so `log()` becomes a no-op the
+ *      moment the client is known gone.
+ *   3. **Treat a dead pipe as the session being over.** stdin closing or a
+ *      write failing on either stream all mean no further JSON-RPC can ever be
+ *      exchanged on this transport, so the process has nothing left to serve.
+ *      That's the
  *      same conclusion the idle watchdog reaches after `idleShutdownMinutes`
  *      of silence, just reached immediately and with certainty rather than by
  *      timeout — which is why this reports it *to* that watchdog
@@ -35,7 +57,7 @@
  *      mid-download, an open Activity/Connections window — see
  *      electron/src/main.js's idleShutdownGuard).
  *
- * Point 2 is deliberately subordinate to the host's configuration: with the
+ * Point 3 is deliberately subordinate to the host's configuration: with the
  * watchdog disabled (`idleShutdownMinutes` <= 0, i.e. "never auto-quit"),
  * `clientGone()` is a no-op and this process lingers exactly as asked. Point 1
  * still applies — "don't auto-quit" is not a request to crash instead.
@@ -100,9 +122,19 @@ export interface StdioPipeGuardOptions {
   onClientGone?: (ctx: { reason: ClientGoneReason; error?: unknown }) => void;
   /** Defaults to `process.stdout` — the JSON-RPC channel whose writes can fail. */
   stdout?: ErrorEventSource;
+  /**
+   * Defaults to `process.stderr` — the log channel, which dies with the client
+   * just as stdout does. Guarded for the same reason and reported as the same
+   * signal: a failed write here is equally proof the client is gone.
+   */
+  stderr?: ErrorEventSource;
   /** Defaults to `process.stdin` — EOF here is the cleanest "client exited" signal there is. */
   stdin?: EndEventSource;
-  /** Where to report. Defaults to console.error: stdout is the JSON-RPC channel, never a log. */
+  /**
+   * Where to report. Defaults to console.error: stdout is the JSON-RPC channel,
+   * never a log. Called only while the client is still believed present — see
+   * point 2 in this module's header.
+   */
   log?: (message: string) => void;
 }
 
@@ -122,19 +154,43 @@ export function guardStdioPipe(
   {
     onClientGone,
     stdout = process.stdout,
+    stderr = process.stderr,
     stdin = process.stdin,
     log = (message: string) => console.error(message),
   }: StdioPipeGuardOptions = {},
 ): { stop: () => void } {
   let reported = false;
+
+  /**
+   * Every diagnostic in this module goes through here rather than calling `log`
+   * directly, so that the "client is gone" latch silences all of them at once.
+   * Writing to stderr after the client has departed cannot reach anyone, and in
+   * the Electron host it re-enters that process's uncaughtException handler —
+   * the loop described in this module's header. Silence is the only correct
+   * output once there is no reader.
+   */
+  const logWhileConnected = (message: string) => {
+    if (reported) return;
+    log(message);
+  };
+
   const reportClientGone = (reason: ClientGoneReason, error?: unknown) => {
     if (reported) return;
-    reported = true;
+    // Deliberately logged *before* the latch is set: this one line is the last
+    // thing worth saying on this pipe, and it is still worth attempting because
+    // stdin-closed (the common case) leaves stderr perfectly writable. Anything
+    // after it is not.
     log(`[stdio] MCP client is gone (${reason}); no further requests can arrive on this transport`);
+    reported = true;
     onClientGone?.({ reason, error });
   };
 
-  const onStdoutError = (err: unknown) => {
+  /**
+   * Shared by stdout and stderr because the fault and the response are
+   * identical on both: a disconnect code on either stream is proof the client
+   * is gone, and anything else must merely not go unhandled.
+   */
+  const makeStreamErrorHandler = (streamName: 'stdout' | 'stderr') => (err: unknown) => {
     if (isDisconnectError(err)) {
       reportClientGone('write-failed', err);
       return;
@@ -142,9 +198,21 @@ export function guardStdioPipe(
     // Not a disconnect: still must not go unhandled (that's the crash this
     // module exists to prevent), but it isn't evidence the client left, so it
     // gets reported without triggering shutdown.
-    log(`[stdio] error writing to stdout: ${err instanceof Error ? err.message : String(err)}`);
+    logWhileConnected(
+      `[stdio] error writing to ${streamName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   };
+
+  const onStdoutError = makeStreamErrorHandler('stdout');
   stdout.on('error', onStdoutError);
+
+  // The half that #252 was missing. stderr is a pipe to the same parent as
+  // stdout, so it dies at the same moment — and because it is where every
+  // diagnostic in this process goes, it is the stream most likely to be written
+  // to *after* the client leaves. Unguarded, that write is an uncaught
+  // exception whose handler writes to stderr again.
+  const onStderrError = makeStreamErrorHandler('stderr');
+  stderr.on('error', onStderrError);
 
   // stdin reaching EOF means the parent closed its end: no further JSON-RPC
   // request can ever arrive, whatever else is still running here. The SDK's
@@ -180,6 +248,7 @@ export function guardStdioPipe(
   return {
     stop: () => {
       stdout.off?.('error', onStdoutError);
+      stderr.off?.('error', onStderrError);
       stdin.off?.('end', onStdinEnd);
       if (transport.send === guardedSend) transport.send = originalSend;
     },
