@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@electron/notarize": "^3.1.1",
-    "electron": "44.2.0",
+    "electron": "44.3.0",
     "electron-builder": "^26.16.1"
   },
   "dependencies": {
@@ -29,7 +29,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "electron-updater": "^6.6.2",
     "undici": "^8.10.2",
-    "zod": "^4.5.4"
+    "zod": "^4.6.2"
   },
   "build": {
     "appId": "com.timebuddy-incident-investigator.connection-manager",
