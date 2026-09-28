@@ -110,9 +110,54 @@ describe('discover_label_values tool', () => {
     const result = (await call('discover_label_values', { connection: 'test', metric: '{job="app"}', label: 'pod' })) as { content: Array<{ text: string }> };
     const parsed = JSON.parse(result.content[0]!.text);
 
-    expect(getLokiLabelValues).toHaveBeenCalledWith('loki1', 'pod', '{job="app"}');
+    const [uid, label, window, selector] = getLokiLabelValues.mock.calls[0]!;
+    expect([uid, label, selector]).toEqual(['loki1', 'pod', '{job="app"}']);
+    expect(window.toMs - window.fromMs).toBe(24 * 3_600_000);
     expect(parsed.datasourceType).toBe('loki');
     expect(parsed.values).toEqual(['api', 'worker']);
+    expect(parsed.window.defaulted).toBe(true);
+  });
+
+  // #277: Loki only returns values seen in a time range (6 hours by default,
+  // on Loki's side), so the incident window has to reach it.
+  it('passes the given window to Loki and reports it', async () => {
+    const { client, getLokiLabelValues } = fakeClient({
+      datasources: [{ uid: 'loki1', id: 1, name: 'Loki', type: 'loki' }],
+      lokiValues: ['api'],
+    });
+    const { server, call } = fakeServer();
+    registerDiscoverLabelValues(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('discover_label_values', {
+      connection: 'test',
+      metric: '{job="app"}',
+      label: 'pod',
+      startsAtMs: Date.parse('2026-03-01T10:00:00Z'),
+      endsAtMs: Date.parse('2026-03-01T11:00:00Z'),
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]!.text);
+
+    const from = Date.parse('2026-03-01T10:00:00Z');
+    expect(getLokiLabelValues).toHaveBeenCalledWith('loki1', 'pod', { fromMs: from, toMs: from + 3_600_000 }, '{job="app"}');
+    expect(parsed.window).toEqual({ from: '2026-03-01T10:00:00.000Z', to: '2026-03-01T11:00:00.000Z', defaulted: false });
+  });
+
+  it('refuses a window on a datasource whose values it would not scope', async () => {
+    const { client, getPrometheusLabelValues } = fakeClient({
+      datasources: [{ uid: 'prom1', id: 1, name: 'Prometheus', type: 'prometheus' }],
+      promValues: ['a'],
+    });
+    const { server, call } = fakeServer();
+    registerDiscoverLabelValues(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('discover_label_values', { connection: 'test', metric: 'up', label: 'instance', startsAtMs: 0 })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/only apply to a Loki datasource/);
+    expect(getPrometheusLabelValues).not.toHaveBeenCalled();
   });
 
   it('dedupes and truncates to limit while reporting the full count in valuesTotal', async () => {
