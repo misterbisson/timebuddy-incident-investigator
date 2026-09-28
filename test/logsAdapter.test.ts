@@ -18,6 +18,12 @@ describe('toLabels', () => {
     const labels = toLabels({ message: 'hi', timestamp: 't', missing: null, alsoMissing: undefined, present: 'x' });
     expect(labels).toEqual({ present: 'x' });
   });
+
+  it('keeps a field named "__proto__" as an ordinary label', () => {
+    // JSON.parse, which is how Graylog's response arrives, makes it an own property.
+    const labels = toLabels(JSON.parse('{"message":"hi","timestamp":"t","__proto__":"p"}'));
+    expect(Object.getOwnPropertyDescriptor(labels, '__proto__')?.value).toBe('p');
+  });
 });
 
 describe('toLogEvent', () => {

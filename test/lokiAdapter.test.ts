@@ -37,9 +37,95 @@ describe('lokiEventLabels — the fields | json would extract', () => {
     expect(lokiEventLabels(line('{"tags":["a","b"],"user":null,"k":"v"}'))).toEqual({ app: 'checkout', k: 'v' });
   });
 
-  it('leaves a non-JSON line with its stream labels only', () => {
-    expect(lokiEventLabels(line('GET /cart 500 request_id=r1'))).toEqual({ app: 'checkout' });
-    expect(lokiEventLabels(line('["not","an","object"]'))).toEqual({ app: 'checkout' });
+  it('marks a non-JSON line with __error__, as | json does, and extracts nothing from it', () => {
+    const failed = { app: 'checkout', __error__: 'JSONParserErr' };
+    expect(lokiEventLabels(line('GET /cart 500 request_id=r1'))).toEqual(failed);
+    expect(lokiEventLabels(line('["not","an","object"]'))).toEqual(failed);
+    expect(lokiEventLabels(line(''))).toEqual(failed);
+  });
+
+  // #278: String(JSON.parse(...)) rounds a large integer to a double, so two
+  // distinct ids became one join value. Loki keeps the number's source text.
+  it('keeps a number\'s source text rather than its parsed value', () => {
+    expect(lokiEventLabels(line('{"a":12345678901234567891,"b":12345678901234567890}'))).toMatchObject({
+      a: '12345678901234567891',
+      b: '12345678901234567890',
+    });
+    expect(lokiEventLabels(line('{"x":1.0,"y":1e21,"z":-0}'))).toMatchObject({ x: '1.0', y: '1e21', z: '-0' });
+  });
+
+  // #278's table, each row checked against Loki's sanitizeLabelKey /
+  // appendSanitized (pkg/logql/log/util.go) and its parser tests.
+  it.each([
+    ['only the first segment of a nested key gets the leading-digit prefix', '{"a":{"1b":"x"}}', { a_1b: 'x' }],
+    ['keys are trimmed of whitespace', '{" request_id ":"r1"}', { request_id: 'r1' }],
+    ['a non-ASCII character becomes one "_" per code point', '{"a\u{1F600}b":1}', { a_b: '1' }],
+    ['an all-whitespace parent key adds no prefix', '{" ": {"foo":"bar"}}', { foo: 'bar' }],
+    ['an empty key names no label', '{"":"x","k":"v"}', { k: 'v' }],
+  ])('%s', (_name, json, want) => {
+    expect(lokiEventLabels(line(json, {}))).toEqual(want);
+  });
+
+  // Ported from Loki's own TestJSONParser (pkg/logql/log/parser_test.go, v3.4.0).
+  it.each([
+    [
+      'multi depth',
+      '{"app":"foo","namespace":"prod","pod":{"uuid":"foo","deployment":{"ref":"foobar"}}}',
+      {},
+      { app: 'foo', namespace: 'prod', pod_uuid: 'foo', pod_deployment_ref: 'foobar' },
+    ],
+    ['numeric', '{"counter":1, "price": {"_net_":5.56909}}', {}, { counter: '1', price__net_: '5.56909' }],
+    ['escaped', '{"counter":1,"foo":"foo\\\\\\"bar", "price": {"_net_":5.56909}}', {}, { counter: '1', foo: 'foo\\"bar', price__net_: '5.56909' }],
+    ['skip arrays', '{"counter":1, "price": {"net_":["10","20"]}}', {}, { counter: '1' }],
+    ['bad key replaced', '{"cou-nter":1}', {}, { cou_nter: '1' }],
+    ['errors', '{n}', {}, { __error__: 'JSONParserErr' }],
+    [
+      'duplicate extraction',
+      '{"app":"foo","namespace":"prod","pod":{"uuid":"foo","deployment":{"ref":"foobar"}},"next":{"err":false}}',
+      { app: 'bar' },
+      { app: 'bar', app_extracted: 'foo', namespace: 'prod', pod_uuid: 'foo', pod_deployment_ref: 'foobar', next_err: 'false' },
+    ],
+  ])('matches Loki\'s "%s" case', (_name, json, stream, want) => {
+    expect(lokiEventLabels(line(json, stream))).toEqual(want);
+  });
+
+  it('skips brackets and braces inside strings when finding where an array or object ends', () => {
+    expect(lokiEventLabels(line('{"a":["]","{"],"b":{"c":"}"},"d":"e"}', {}))).toEqual({ b_c: '}', d: 'e' });
+  });
+
+  it('suffixes a nested name that collides with a stream label too', () => {
+    expect(lokiEventLabels(line('{"pod":{"uuid":"x"}}', { pod_uuid: 'y' }))).toEqual({ pod_uuid: 'y', pod_uuid_extracted: 'x' });
+  });
+
+  it('replaces U+FFFD in a value with a space, as Loki does', () => {
+    expect(lokiEventLabels(line('{"foo":"a\\uFFFDb"}', {}))).toEqual({ foo: 'a b' });
+  });
+
+  // #278: `key in labels` walked the prototype chain, and assigning
+  // "__proto__" set the prototype instead of a label.
+  it('treats constructor, toString, and __proto__ as ordinary keys', () => {
+    const labels = lokiEventLabels(line('{"constructor":"c","toString":"t","__proto__":"p"}', {}));
+    expect(Object.keys(labels).sort()).toEqual(['__proto__', 'constructor', 'toString']);
+    expect(Object.getOwnPropertyDescriptor(labels, '__proto__')?.value).toBe('p');
+    expect(labels.constructor).toBe('c');
+  });
+
+  it('does not suffix a key whose name only exists on Object.prototype', () => {
+    expect(lokiEventLabels(line('{"constructor":"c"}'))).toEqual({ app: 'checkout', constructor: 'c' });
+  });
+
+  // #278: Loki's ObjectEach extracts a clipped line's leading fields before it
+  // fails, so a line cut off after its request id still joins in Loki's view.
+  it('extracts the leading fields of a truncated line and marks it with __error__', () => {
+    expect(lokiEventLabels(line('{"request_id":"r1","msg":"cut of'))).toEqual({
+      app: 'checkout',
+      request_id: 'r1',
+      __error__: 'JSONParserErr',
+    });
+  });
+
+  it('extracts nothing from an unterminated nested object, since Loki finds its end before reading it', () => {
+    expect(lokiEventLabels(line('{"a":"1","b":{"c":"2"', {}))).toEqual({ a: '1', __error__: 'JSONParserErr' });
   });
 
   it('does not reach into a JSON payload double-encoded inside a string field', () => {
@@ -50,6 +136,25 @@ describe('lokiEventLabels — the fields | json would extract', () => {
 });
 
 describe('correlateLogs against a Loki source', () => {
+  // #278: both ids rounded to 12345678901234567000, so the anti-join found a
+  // backend line for a request that never reached the backend.
+  it('keeps large numeric ids distinct through an unless join', async () => {
+    const front = [
+      { t: T0, line: '{"request_id":12345678901234567891}', labels: { app: 'frontend' } },
+      { t: T0 + 1000, line: '{"request_id":12345678901234567890}', labels: { app: 'frontend' } },
+    ];
+    const back = [{ t: T0 + 500, line: '{"request_id":12345678901234567890}', labels: { app: 'backend' } }];
+    const { client } = fakeLokiClient({ linesByExpr: { '{app="frontend"}': front, '{app="backend"}': back } });
+    const { events } = await correlateLogs({
+      target: { sourceType: 'loki', client, datasourceUid: 'logs1' },
+      query: 'loki({app="frontend"})[5m] unless on(request_id) loki({app="backend"})[5m]',
+      fromMs: T0,
+      toMs: T0 + 60_000,
+      limit: 100,
+    });
+    expect(events.map((e) => e.joinValue)).toEqual(['12345678901234567891']);
+  });
+
   const front = [
     { t: T0, line: '{"request_id":"r1","path":"/cart"}', labels: { app: 'frontend' } },
     { t: T0 + 1000, line: '{"request_id":"r2","path":"/pay"}', labels: { app: 'frontend' } },

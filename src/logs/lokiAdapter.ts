@@ -2,33 +2,13 @@ import type { DataSourceAdapter, LogEvent, StreamOptions } from '@liquescent/log
 import type { GrafanaClient } from '../grafana/client.js';
 import type { StreamFetchStat } from './adapter.js';
 import { searchLoki, type LokiLine } from './loki.js';
-
-/**
- * Loki's rule for a label name: `[a-zA-Z_][a-zA-Z0-9_]*`. Every other
- * character becomes `_`, and a leading digit gets a `_` prefix — the same
- * sanitizing Loki's `| json` stage applies to the keys it extracts.
- */
-function sanitizeLabelName(key: string): string {
-  const cleaned = key.replace(/[^a-zA-Z0-9_]/g, '_');
-  return /^[0-9]/.test(cleaned) ? `_${cleaned}` : cleaned;
-}
-
-function flatten(obj: Record<string, unknown>, prefix: string, out: Record<string, string>): void {
-  for (const [key, value] of Object.entries(obj)) {
-    const name = prefix ? `${prefix}_${sanitizeLabelName(key)}` : sanitizeLabelName(key);
-    if (value === null || value === undefined) continue;
-    if (Array.isArray(value)) continue; // Loki's json stage skips arrays too.
-    if (typeof value === 'object') {
-      flatten(value as Record<string, unknown>, name, out);
-      continue;
-    }
-    out[name] = typeof value === 'string' ? value : String(value);
-  }
-}
+import { lokiJsonLabels } from './lokiJson.js';
 
 /**
  * The labels a correlated event is joinable on: the line's stream labels, plus
- * the fields Loki's own `| json` stage would extract from a JSON line.
+ * the fields Loki's own `| json` stage would extract from a JSON line, under
+ * the same names (see lokiJson.ts for the rules and the one deliberate
+ * difference).
  *
  * Why the adapter does this at all: log-correlator's join grammar accepts only
  * a bare stream selector inside `loki(...)` — no pipeline stages — so a query
@@ -41,32 +21,16 @@ function flatten(obj: Record<string, unknown>, prefix: string, out: Record<strin
  *
  * It mirrors `| json` rather than inventing a naming scheme, so a field is
  * named the same thing here as in a search_logs query the agent writes against
- * the same source: nested keys joined with `_`, characters not valid in a label
- * name replaced with `_`, arrays skipped, and `_extracted` appended when a key
- * collides with a stream label. One deliberate difference: a null value is
- * skipped rather than kept as an empty string, matching the Graylog adapter's
- * toLabels, since there's nothing to join on.
+ * the same source, and has the same value: a number keeps its source text, so
+ * two large integer ids never collapse into one join value.
  *
- * A line that isn't a JSON object contributes nothing, and neither does a JSON
- * payload nested inside a string field (double-encoded JSON) — in Loki that
- * takes `line_format` and a second `| json`, which the join grammar can't
- * express. search_logs, which takes full LogQL, is the tool for that shape.
+ * A JSON payload nested inside a string field (double-encoded JSON) stays a
+ * string — in Loki that takes `line_format` and a second `| json`, which the
+ * join grammar can't express. search_logs, which takes full LogQL, is the tool
+ * for that shape.
  */
 export function lokiEventLabels(line: LokiLine): Record<string, string> {
-  const labels: Record<string, string> = { ...line.labels };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line.message);
-  } catch {
-    return labels;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return labels;
-  const extracted: Record<string, string> = {};
-  flatten(parsed as Record<string, unknown>, '', extracted);
-  for (const [key, value] of Object.entries(extracted)) {
-    labels[key in line.labels ? `${key}_extracted` : key] = value;
-  }
-  return labels;
+  return lokiJsonLabels(line.message, line.labels);
 }
 
 export function toLokiLogEvent(line: LokiLine): LogEvent {

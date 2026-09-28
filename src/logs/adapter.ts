@@ -14,13 +14,13 @@ const FIXED_FIELDS = new Set(['_id', 'message', 'timestamp', 'source']);
  * strings.
  */
 export function toLabels(message: GraylogMessageWrapper['message']): Record<string, string> {
-  const labels: Record<string, string> = {};
-  for (const [key, value] of Object.entries(message)) {
-    if (FIXED_FIELDS.has(key)) continue;
-    if (value === null || value === undefined) continue;
-    labels[key] = typeof value === 'string' ? value : JSON.stringify(value);
-  }
-  return labels;
+  // Object.fromEntries rather than `labels[key] = ...`, which drops a field
+  // named "__proto__" into the prototype setter.
+  return Object.fromEntries(
+    Object.entries(message)
+      .filter(([key, value]) => !FIXED_FIELDS.has(key) && value !== null && value !== undefined)
+      .map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]),
+  );
 }
 
 /**

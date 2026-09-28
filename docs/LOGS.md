@@ -151,9 +151,20 @@ against the resolved source before running, so a `graylog(...)` query against a 
 fails with a message saying so. log-correlator's grammar takes only a **bare stream selector**
 inside `loki(...)` — no pipeline — so a query can't ask Loki for `| json`. The adapter
 therefore builds each event's labels itself: stream labels plus the fields `| json` would
-extract, under the same names (nested keys joined with `_`, invalid characters to `_`, arrays
-skipped, `_extracted` on a collision). Without that, events would be joinable only on stream
-labels, and join keys like request ids are almost never stream labels. A JSON payload
+extract, under the same names and with the same values. Without that, events would be
+joinable only on stream labels, and join keys like request ids are almost never stream labels.
+
+The extraction is [`lokiJson.ts`](../src/logs/lokiJson.ts), a scanner that follows Loki's
+`JSONParser` walk rather than calling `JSON.parse`, which differs from Loki in ways that change
+what a join matches. `JSON.parse` rounds a large integer to a double, so two distinct 20-digit
+request ids became one join value and an `unless` reported a request as having reached the
+backend when it never had. Loki keeps a number's source text. `JSON.parse` is also
+all-or-nothing, where Loki extracts a clipped line's leading fields and then sets
+`__error__=JSONParserErr`, so a line cut off after its request id still joins. The key rules
+(trimmed, one `_` per code point outside `[a-zA-Z0-9_]`, a leading-digit `_` on the first
+segment only) come from Loki's `sanitizeLabelKey`/`appendSanitized`, and the tests port Loki's
+own `TestJSONParser` cases. The one deliberate difference is that a name that sanitizes to the
+empty string is dropped, since no `on()` clause can name it. A JSON payload
 double-encoded inside a string field isn't reached; that takes `line_format`, which only
 `search_logs` can express.
 

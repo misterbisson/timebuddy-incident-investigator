@@ -80,4 +80,13 @@ describe('redact', () => {
       expect((redact(input, patterns) as typeof input).exploreUrl).toBe('[REDACTED]');
     });
   });
+  // #278: `out[key] = ...` with key "__proto__" hit the prototype setter, so a
+  // log field or label of that name vanished from every tool's output.
+  it('keeps a "__proto__" key as an ordinary property', () => {
+    const input = Object.fromEntries([['__proto__', 'p'], ['k', 'v']]);
+    const out = redact({ labels: input }, []) as { labels: Record<string, unknown> };
+    expect(Object.getOwnPropertyDescriptor(out.labels, '__proto__')?.value).toBe('p');
+    expect(Object.getPrototypeOf(out.labels)).toBe(Object.prototype);
+    expect(JSON.parse(JSON.stringify(out)).labels).toEqual(JSON.parse('{"__proto__":"p","k":"v"}'));
+  });
 });
