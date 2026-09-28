@@ -48,6 +48,9 @@ export class GrafanaApiError extends Error {
   }
 }
 
+/** How long listDatasources() reuses one answer — see its doc comment. */
+export const DATASOURCES_TTL_MS = 30_000;
+
 /**
  * Read-only Grafana HTTP client. This is a deliberate allowlist: it exposes
  * exactly the endpoints this server needs and nothing else. There is no
@@ -57,6 +60,7 @@ export class GrafanaApiError extends Error {
 export class GrafanaClient {
   private readonly semaphore: Semaphore;
   private dispatcherPromise?: Promise<unknown>;
+  private datasourcesCache?: { expiresAt: number; promise: Promise<DatasourceInfo[]> };
 
   constructor(
     private readonly connection: GrafanaConnection,
@@ -195,8 +199,27 @@ export class GrafanaClient {
     return this.request<ShortUrlInfo>('GET', `/api/short-urls/${encodeURIComponent(uid)}`);
   }
 
+  /**
+   * Memoized for DATASOURCES_TTL_MS. tools/shared.ts's resolveTargetDatasource
+   * checks every panel target's ref against this list (#262), so without the
+   * memo a render_dashboard over a large board would issue one request per
+   * target for an answer that doesn't change between them. Short enough that a
+   * datasource added in Grafana shows up within the same investigation. Shares
+   * the in-flight promise so concurrent callers make one request, and drops a
+   * rejected one so a transient failure isn't cached.
+   */
   async listDatasources(): Promise<DatasourceInfo[]> {
-    return this.request<DatasourceInfo[]>('GET', '/api/datasources');
+    const now = Date.now();
+    if (this.datasourcesCache && this.datasourcesCache.expiresAt > now) {
+      return this.datasourcesCache.promise;
+    }
+    const promise = this.request<DatasourceInfo[]>('GET', '/api/datasources');
+    const entry = { expiresAt: now + DATASOURCES_TTL_MS, promise };
+    this.datasourcesCache = entry;
+    promise.catch(() => {
+      if (this.datasourcesCache === entry) this.datasourcesCache = undefined;
+    });
+    return promise;
   }
 
   async getDatasource(uid: string): Promise<DatasourceInfo> {

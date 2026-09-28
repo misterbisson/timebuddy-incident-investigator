@@ -46,6 +46,24 @@ export interface ResolvedPanel {
 const DASHBOARD_MIRROR_REF = '-- Dashboard --';
 
 /**
+ * Datasource refs that name one of Grafana's built-in pseudo-datasources
+ * rather than a configured datasource: __expr__ (server-side expressions, for
+ * panels that do math on other queries rather than querying anything),
+ * -- Dashboard -- (see DASHBOARD_MIRROR_REF), -- Grafana -- (built-in test
+ * data / this dashboard's own annotations), and -- Mixed -- (each target
+ * carries its own). None of them is in /api/datasources, so neither the
+ * metric index's "broken datasource" check nor tools/shared.ts's
+ * resolveTargetDatasource name lookup should treat one as a reference to
+ * resolve.
+ */
+export const GRAFANA_PSEUDO_DATASOURCE_REFS: ReadonlySet<string> = new Set([
+  '__expr__',
+  DASHBOARD_MIRROR_REF,
+  '-- Grafana --',
+  '-- Mixed --',
+]);
+
+/**
  * Extracts a panel's configured drill-down links (Grafana calls these "data
  * links") — e.g. a table column's "click to see this account's dashboard"
  * link. These are URL *templates*: Grafana substitutes macros like
@@ -123,9 +141,9 @@ export function stripInactiveQueryFields(target: PanelTarget): PanelTarget {
 function datasourceRefToUid(ref: DatasourceRef | string | null | undefined): string | undefined {
   if (!ref) return undefined;
   if (typeof ref === 'string') {
-    // "-- Mixed --" means each target carries its own datasource; a legacy
-    // name-based string ref can't be resolved to a uid without a name->uid
-    // lookup, which callers can do via GrafanaClient.listDatasources().
+    // "-- Mixed --" means each target carries its own datasource. A legacy
+    // name-based string ref is passed through as-is; tools/shared.ts's
+    // resolveTargetDatasource maps it to a uid via listDatasources().
     if (ref === '-- Mixed --') return undefined;
     return ref;
   }
