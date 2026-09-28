@@ -377,7 +377,10 @@ search.
        - **Prometheus or Loki (or InfluxDB too):** call `discover_label_values` with the `metric`
          (the Prometheus metric name / series selector, Loki stream selector, or InfluxDB
          measurement) and the `label` key (e.g. `instance`/`pod`/`host`). Its `values` is the
-         actual identifier list — the `label_values(metric, label)` equivalent.
+         actual identifier list — the `label_values(metric, label)` equivalent. For Loki, also
+         pass the incident window as `startsAtMs`/`endsAtMs`: Loki only returns values seen in a
+         time range, and without one it covers the last 24 hours, which misses a host that
+         stopped logging before then.
        Either way it's a real, data-derived set you can legitimately scope a log search to (it just
        doesn't by itself say *which* host was hot). Same last-resort framing as step 4: only when
        you'd otherwise have no identifier. If either call returns an *empty* list, don't read that
@@ -401,8 +404,12 @@ search.
      - **Loki:** a LogQL *log* query — a stream selector plus any pipeline, e.g.
        `{app="checkout", namespace="prod"} |= "web-03"`. The selector needs real stream label
        names: `list_log_sources` with `connection: <the Loki source id>` returns them as `labels`,
-       and `discover_label_values` (with that source's `datasourceUid`, the selector as `metric`,
-       and a label name) returns a label's actual values — don't guess at `app` vs `service`.
+       and `discover_label_values` returns a label's actual values — don't guess at `app` vs
+       `service`. For `discover_label_values`, pass `connection: <the source's grafanaConnection>`
+       and `datasourceUid: <its datasourceUid>` (it resolves a *Grafana* connection, not a log
+       source id), a selector as `metric` (`{app=~".+"}` matches every stream with an `app` label),
+       and a label name. Pass the incident window as `startsAtMs`/`endsAtMs` to both calls: Loki
+       only lists labels seen in a time range, and the default is the last 24 hours.
        Filter by identifier with a line filter (`|= "web-03"`, `|~ "timeout|refused"`), or parse
        and filter on fields (`| json | status >= 500`). If the line is JSON with the real payload
        inside a string field, re-parse it: `| json | line_format "{{.payload}}" | json`. A Loki result

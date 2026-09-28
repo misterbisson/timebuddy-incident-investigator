@@ -53,7 +53,7 @@ function setup(opts: { linesByExpr?: Record<string, FixtureLine[] | Error>; labe
     const r = (await call(name, args)) as { content: Array<{ text: string }>; isError?: boolean };
     return { isError: r.isError, text: r.content[0]!.text, body: r.isError ? undefined : JSON.parse(r.content[0]!.text) };
   };
-  return { run, activityLog, queryDs: loki.queryDs };
+  return { run, activityLog, queryDs: loki.queryDs, getLokiLabelNames: loki.getLokiLabelNames };
 }
 
 const lines: FixtureLine[] = [
@@ -76,6 +76,35 @@ describe('list_log_sources with Loki', () => {
     const { body } = await run('list_log_sources', { connection: SOURCE });
     expect(body.labels).toEqual(['app', 'env', 'level']);
     expect(body.streams).toBeUndefined();
+  });
+
+  // #277: Loki only lists labels seen in a time range, so the window is
+  // always sent and always reported.
+  it('lists label names over the window it was given, and reports it', async () => {
+    const { run, getLokiLabelNames } = setup({ labelNames: ['app'] });
+    const { body } = await run('list_log_sources', { connection: SOURCE, startsAtMs: T0, endsAtMs: T0 + 2 * 3_600_000 });
+    expect(getLokiLabelNames).toHaveBeenCalledWith('logs1', { fromMs: T0, toMs: T0 + 2 * 3_600_000 });
+    expect(body.labelWindow).toEqual({ from: '2026-03-01T10:00:00.000Z', to: '2026-03-01T12:00:00.000Z', defaulted: false });
+  });
+
+  it('defaults the label window to the 24 hours before now, and says so', async () => {
+    const { run, getLokiLabelNames } = setup({ labelNames: ['app'] });
+    const before = Date.now();
+    const { body } = await run('list_log_sources', { connection: SOURCE });
+    const [, window] = getLokiLabelNames.mock.calls[0]!;
+    expect(window.toMs).toBeGreaterThanOrEqual(before);
+    expect(window.toMs - window.fromMs).toBe(24 * 3_600_000);
+    expect(body.labelWindow.defaulted).toBe(true);
+  });
+
+  it('refuses a window when there are no Loki label names for it to scope', async () => {
+    const { run } = setup({ withGraylog: true });
+    const noConnection = await run('list_log_sources', { startsAtMs: T0 });
+    expect(noConnection.isError).toBe(true);
+    expect(noConnection.text).toMatch(/only scope a Loki source/);
+    const graylogConnection = await run('list_log_sources', { connection: 'gl', startsAtMs: T0 });
+    expect(graylogConnection.isError).toBe(true);
+    expect(graylogConnection.text).toMatch(/only scope a Loki source/);
   });
 });
 
