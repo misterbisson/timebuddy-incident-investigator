@@ -224,7 +224,7 @@ contains tokens or passwords, so it's safe to keep in a shared repo. See
     { "kind": "grafana", "name": "prod-us-east-1", "url": "https://metrics.us-east-1.example.com",
       "authType": "basic", "tags": ["prd", "us-east-1"] },
     { "kind": "graylog", "name": "prod-us-logs", "url": "https://logs.us-east-1.example.com",
-      "authType": "basic", "tags": ["prd", "us-east-1"], "streamName": "spc-elb" }
+      "authType": "basic", "tags": ["prd", "us-east-1"], "streamName": "checkout-errors" }
   ]
 }
 ```
