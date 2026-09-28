@@ -39,9 +39,22 @@ describe('resolveTargetDatasource', () => {
 
   it('passes Grafana pseudo-datasource refs through without touching the client', async () => {
     const { client, listDatasources } = fakeClient([]);
-    for (const ref of ['-- Dashboard --', '-- Grafana --', '__expr__', '-- Mixed --']) {
+    for (const ref of ['-- Dashboard --', '-- Grafana --', '__expr__', '-- Mixed --', 'grafana', '-100']) {
       expect(await resolveTargetDatasource(client, ref, [], {})).toBe(ref);
     }
+    expect(listDatasources).not.toHaveBeenCalled();
+  });
+
+  // #271: a built-in's uid must never be captured by a real datasource that
+  // happens to share it as a *name*.
+  it('never maps a built-in uid onto a user datasource named the same', async () => {
+    const { client } = fakeClient([{ uid: 'abc123', name: 'grafana' }]);
+    expect(await resolveTargetDatasource(client, 'grafana', [], {})).toBe('grafana');
+  });
+
+  it('skips the lookup for any ref whose type marks it as a built-in', async () => {
+    const { client, listDatasources } = fakeClient([{ uid: 'abc123', name: '-- Something New --' }]);
+    expect(await resolveTargetDatasource(client, '-- Something New --', [], {}, 'datasource')).toBe('-- Something New --');
     expect(listDatasources).not.toHaveBeenCalled();
   });
 

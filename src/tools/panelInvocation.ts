@@ -483,7 +483,7 @@ export async function generatePanelCsv(
     const targets: ResolvedTarget[] = await Promise.all(
       inv.panel.targets.map(async (t) => ({
         ...t,
-        datasourceUid: await resolveTargetDatasource(inv.client, t.datasourceUid, variables, resolvedOverrides),
+        datasourceUid: await resolveTargetDatasource(inv.client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
         raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints),
       })),
     );

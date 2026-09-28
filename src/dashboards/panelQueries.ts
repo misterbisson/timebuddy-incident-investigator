@@ -3,6 +3,12 @@ import type { DashboardJson, DatasourceRef, Panel, PanelTarget } from '../grafan
 export interface ResolvedTarget {
   refId: string;
   datasourceUid?: string;
+  /**
+   * The `type` of the same ref datasourceUid came from, when the ref was an
+   * object that carried one. Kept because it's how Grafana marks a built-in
+   * (see GRAFANA_PSEUDO_DATASOURCE_TYPES), which the uid alone doesn't say.
+   */
+  datasourceType?: string;
   raw: PanelTarget;
 }
 
@@ -55,13 +61,34 @@ const DASHBOARD_MIRROR_REF = '-- Dashboard --';
  * metric index's "broken datasource" check nor tools/shared.ts's
  * resolveTargetDatasource name lookup should treat one as a reference to
  * resolve.
+ *
+ * Both spellings are listed, because a dashboard carries whichever the Grafana
+ * that last saved it used (#271): older ones store the display name, current
+ * ones store `grafana` for -- Grafana -- and, for the legacy expression form,
+ * `-100`. A uid list can only ever know the built-ins it was written for, so
+ * isGrafanaBuiltinDatasource also checks the ref's type — which is how Grafana
+ * itself marks them.
  */
 export const GRAFANA_PSEUDO_DATASOURCE_REFS: ReadonlySet<string> = new Set([
   '__expr__',
+  '-100',
   DASHBOARD_MIRROR_REF,
   '-- Grafana --',
+  'grafana',
   '-- Mixed --',
 ]);
+
+/**
+ * Ref types Grafana gives its built-ins: `datasource` for -- Grafana --,
+ * -- Dashboard -- and -- Mixed --, and `__expr__` for expressions. No
+ * configured datasource plugin has either type.
+ */
+export const GRAFANA_PSEUDO_DATASOURCE_TYPES: ReadonlySet<string> = new Set(['datasource', '__expr__']);
+
+/** Whether a ref names a Grafana built-in rather than a configured datasource — by uid, or by type when it has one. */
+export function isGrafanaBuiltinDatasource(uid: string | undefined, type?: string): boolean {
+  return (uid !== undefined && GRAFANA_PSEUDO_DATASOURCE_REFS.has(uid)) || (type !== undefined && GRAFANA_PSEUDO_DATASOURCE_TYPES.has(type));
+}
 
 /**
  * Extracts a panel's configured drill-down links (Grafana calls these "data
@@ -150,17 +177,28 @@ function datasourceRefToUid(ref: DatasourceRef | string | null | undefined): str
   return ref.uid;
 }
 
+function datasourceRefType(ref: DatasourceRef | string | null | undefined): string | undefined {
+  return ref && typeof ref === 'object' ? ref.type : undefined;
+}
+
 /** Extracts every queryable panel (has targets) with its datasource resolved per-target. */
 export function resolvePanelQueries(dashboard: DashboardJson): ResolvedPanel[] {
   return flattenPanels(dashboard.panels ?? [])
     .filter((p): p is Panel & { targets: PanelTarget[] } => Boolean(p.targets?.length))
     .map((p) => {
       const panelDsUid = datasourceRefToUid(p.datasource);
-      const targets = p.targets.map((t) => ({
-        refId: t.refId,
-        datasourceUid: datasourceRefToUid(t.datasource) ?? panelDsUid,
-        raw: t,
-      }));
+      const targets = p.targets.map((t) => {
+        // The type travels with whichever ref supplied the uid, so a target
+        // falling back to the panel's datasource also takes the panel's type.
+        const targetDsUid = datasourceRefToUid(t.datasource);
+        const datasourceType = targetDsUid !== undefined ? datasourceRefType(t.datasource) : datasourceRefType(p.datasource);
+        return {
+          refId: t.refId,
+          datasourceUid: targetDsUid ?? panelDsUid,
+          ...(datasourceType !== undefined ? { datasourceType } : {}),
+          raw: t,
+        };
+      });
       const mirrorTargets = targets.filter((t) => t.datasourceUid === DASHBOARD_MIRROR_REF);
       const mirrorsPanelIds =
         mirrorTargets.length > 0 && mirrorTargets.length === targets.length

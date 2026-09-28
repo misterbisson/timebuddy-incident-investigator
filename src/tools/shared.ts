@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { GrafanaApiError, type GrafanaClient } from '../grafana/client.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import type { DashboardJson, DatasourceInfo, TemplateVariable } from '../grafana/types.js';
-import { GRAFANA_PSEUDO_DATASOURCE_REFS, findPanel, type ResolvedPanel, type ResolvedTarget } from '../dashboards/panelQueries.js';
+import { findPanel, isGrafanaBuiltinDatasource, type ResolvedPanel, type ResolvedTarget } from '../dashboards/panelQueries.js';
 import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards/variables.js';
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
@@ -293,8 +293,11 @@ export interface ResolvedPanelForWindow {
  * UID match wins, then an exact name match, else the value is returned as-is
  * and the query reports its own 404. That costs a listDatasources() call per
  * target, which GrafanaClient memoizes briefly so a render_dashboard over many
- * panels doesn't turn into one request each. Grafana's pseudo-datasources are
- * never in that list and skip the lookup entirely.
+ * panels doesn't turn into one request each. Grafana's built-ins are never in
+ * that list and skip the lookup entirely — recognized by uid or, when the ref
+ * carried one, by `datasourceType` (#271). Skipping matters for more than the
+ * request: a configured datasource that happened to be *named* `grafana` would
+ * otherwise capture the built-in's ref by the name fallback.
  *
  * A failed lookup (e.g. a token without datasources:read) passes the value
  * through rather than failing the call: a real-UID panel replayed fine for such
@@ -306,10 +309,11 @@ export async function resolveTargetDatasource(
   ref: string | undefined,
   variables: TemplateVariable[],
   overrides: Record<string, string[]>,
+  datasourceType?: string,
 ): Promise<string | undefined> {
   if (!ref) return ref;
   const value = ref.startsWith('$') ? resolveDatasourceVariable(ref, variables, overrides) : ref;
-  if (!value || GRAFANA_PSEUDO_DATASOURCE_REFS.has(value)) return value;
+  if (!value || isGrafanaBuiltinDatasource(value, datasourceType)) return value;
   let datasources: DatasourceInfo[];
   try {
     datasources = await client.listDatasources();
@@ -350,7 +354,7 @@ export async function resolvePanelForWindow(
   const targets: ResolvedTarget[] = await Promise.all(
     panel.targets.map(async (t) => ({
       ...t,
-      datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides),
+      datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides, t.datasourceType),
       raw: substituteTargetFields(t.raw, variables, overrides, window, maxDataPoints),
     })),
   );

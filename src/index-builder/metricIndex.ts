@@ -1,7 +1,7 @@
 import type { Config } from '../config.js';
 import type { GrafanaClient } from '../grafana/client.js';
 import type { DashboardGetResponse, RulerRuleGroup, SearchResultItem } from '../grafana/types.js';
-import { GRAFANA_PSEUDO_DATASOURCE_REFS, resolvePanelQueries } from '../dashboards/panelQueries.js';
+import { isGrafanaBuiltinDatasource, resolvePanelQueries } from '../dashboards/panelQueries.js';
 import { extractQueryInfo } from './extract.js';
 import { CURRENT_SCHEMA_VERSION, isStale, loadIndex, saveIndex, type AlertRuleRef, type MetricIndex } from './store.js';
 
@@ -28,8 +28,8 @@ const DEFAULT_CRAWL_CONCURRENCY = 4;
  * GRAFANA_PSEUDO_DATASOURCE_REFS — were the overwhelming majority of a
  * many-thousands-per-connection brokenDatasources count).
  */
-function isNonQueryableDatasourceRef(ref: string): boolean {
-  return ref.startsWith('$') || GRAFANA_PSEUDO_DATASOURCE_REFS.has(ref);
+function isNonQueryableDatasourceRef(ref: string, type?: string): boolean {
+  return ref.startsWith('$') || isGrafanaBuiltinDatasource(ref, type);
 }
 
 /**
@@ -204,7 +204,7 @@ export async function buildMetricIndex(client: GrafanaClient, config?: Config): 
           target.datasourceUid &&
           !knownDsUids.has(target.datasourceUid) &&
           !knownDsNames.has(target.datasourceUid) &&
-          !isNonQueryableDatasourceRef(target.datasourceUid)
+          !isNonQueryableDatasourceRef(target.datasourceUid, target.datasourceType)
         ) {
           index.brokenDatasources.push({
             dashboardUid: dashboard.uid,

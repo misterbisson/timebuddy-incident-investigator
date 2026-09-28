@@ -123,6 +123,35 @@ describe('buildMetricIndex', () => {
     ]);
   });
 
+  // #271: current Grafana saves its built-ins by uid, not display name —
+  // `grafana` for -- Grafana --, `-100` for the legacy expression form — and
+  // marks every built-in by its ref *type* (`datasource`, `__expr__`).
+  it('does not flag Grafana built-ins saved in their current object form', async () => {
+    const dashboards: DashboardGetResponse[] = [
+      {
+        dashboard: {
+          uid: 'd1',
+          title: 'Built-ins',
+          panels: [
+            { id: 1, title: 'Annotations', targets: [{ refId: 'A', datasource: { type: 'datasource', uid: 'grafana' } }] },
+            { id: 2, title: 'Legacy expression', targets: [{ refId: 'B', datasource: { type: '__expr__', uid: '-100' } }] },
+            { id: 3, title: 'Expression', targets: [{ refId: 'C', datasource: { type: '__expr__', uid: '__expr__' } }] },
+            // A built-in this set doesn't know by uid yet is still recognized by its type.
+            { id: 4, title: 'Future built-in', targets: [{ refId: 'D', datasource: { type: 'datasource', uid: '-- Something New --' } }] },
+            { id: 5, title: 'Panel-level built-in', datasource: { type: 'datasource', uid: 'grafana' }, targets: [{ refId: 'E' }] },
+            // Still flagged: a real type whose uid matches nothing.
+            { id: 6, title: 'Stale', targets: [{ refId: 'F', datasource: { type: 'prometheus', uid: 'gone' }, expr: 'up' }] },
+          ],
+        },
+        meta: {},
+      },
+    ];
+    const index = await buildMetricIndex(fakeClient(dashboards));
+    expect(index.brokenDatasources).toEqual([
+      { dashboardUid: 'd1', dashboardTitle: 'Built-ins', panelId: 6, datasourceUid: 'gone' },
+    ]);
+  });
+
   it('does not flag a ref that holds an existing datasource\'s name rather than its uid (#262)', async () => {
     const dashboards: DashboardGetResponse[] = [
       {
