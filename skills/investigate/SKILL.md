@@ -138,7 +138,9 @@ search.
      traffic at all" or "what's the min/max here" instead of writing jq/python over a saved
      tool-output file to compute the same thing yourself, even for a substitute panel you fall back
      to (e.g. because the primary panel errors or times out) — this isn't just for the one panel the
-     alert points at. If you know or can guess a meaningful threshold for the metric (e.g. an
+     alert points at. A window whose `errors` says the query returned *rows of text* is a logs panel
+     (or one selecting only string fields), not a quiet one: there's no series to read, so count its lines with a metric query instead (see
+     the message) rather than reporting "no data". If you know or can guess a meaningful threshold for the metric (e.g. an
      uptime-style series where 1.0 = fully healthy, a known SLO threshold, or 0 for "any activity at
      all" on a volume/count metric), pass `threshold`/`thresholdDirection` in the *same* call — it
      returns each series' precise dip/spike windows (start, end, duration, min/max) directly,
