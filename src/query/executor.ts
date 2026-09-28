@@ -38,6 +38,23 @@ export function buildDsQueryTarget(target: ResolvedTarget, maxDataPoints: number
   };
 }
 
+/**
+ * The message for a frame that came back as text rows (#263): a time field,
+ * at least one string field, and no numeric field — a log query's result, or
+ * a query selecting a string-valued field. Nothing downstream here can analyze
+ * that, and dropping it silently made "this query returned log lines" read as
+ * "this panel had no data in the window", which is the worse of the two
+ * failures. Reported even at zero rows: an empty log result is still a log
+ * query, and saying "no data" would still be the wrong answer to it.
+ */
+function textRowsMessage(rows: number): string {
+  return (
+    `Query returned ${rows} row(s) of text (log lines, or a string-valued field) rather than numeric series, so ` +
+    'there is nothing here to compute stats or baselines over. For a log query, count lines instead by wrapping ' +
+    'it in a metric query — e.g. sum(count_over_time(<query> [1m])) — and replay that.'
+  );
+}
+
 function parseFrames(response: DsQueryResponse): { series: QuerySeries[]; errors: Record<string, string> } {
   const series: QuerySeries[] = [];
   const errors: Record<string, string> = {};
@@ -51,6 +68,12 @@ function parseFrames(response: DsQueryResponse): { series: QuerySeries[]; errors
       const timeFieldIdx = frame.schema.fields.findIndex((f) => f.type === 'time');
       if (timeFieldIdx === -1) continue;
       const timeValues = frame.data.values[timeFieldIdx] ?? [];
+      const fieldTypes = frame.schema.fields.map((f) => f.type);
+      if (!fieldTypes.includes('number') && fieldTypes.includes('string')) {
+        const frameRefId = frame.schema.refId ?? refId;
+        errors[frameRefId] ??= textRowsMessage(timeValues.length);
+        continue;
+      }
 
       frame.schema.fields.forEach((field, idx) => {
         if (idx === timeFieldIdx || field.type !== 'number') return;
