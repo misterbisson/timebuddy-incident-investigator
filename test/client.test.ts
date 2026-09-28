@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildAuthHeader, GrafanaApiError, GrafanaClient } from '../src/grafana/client.js';
+import { buildAuthHeader, DATASOURCES_TTL_MS, GrafanaApiError, GrafanaClient } from '../src/grafana/client.js';
 import type { Config, GrafanaConnection } from '../src/config.js';
 
 function connection(overrides: Partial<GrafanaConnection>): GrafanaConnection {
@@ -199,5 +199,53 @@ describe('GrafanaClient.searchFolders', () => {
     expect(url.pathname).toBe('/api/search');
     expect(url.searchParams.get('type')).toBe('dash-folder');
     expect(url.searchParams.get('folderUIDs')).toBe('infra-status');
+  });
+});
+
+describe('GrafanaClient.listDatasources memo (#262)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function stubFetch(responses: Array<{ body: unknown; status?: number }>): { calls: () => number } {
+    let n = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const r = responses[Math.min(n, responses.length - 1)]!;
+        n += 1;
+        return new Response(JSON.stringify(r.body), { status: r.status ?? 200 });
+      }),
+    );
+    return { calls: () => n };
+  }
+
+  const ds = [{ uid: 'a', id: 1, name: 'A', type: 'prometheus' }];
+
+  it('answers concurrent and repeat calls within the TTL from one request', async () => {
+    const { calls } = stubFetch([{ body: ds }]);
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+    await Promise.all([client.listDatasources(), client.listDatasources()]);
+    await client.listDatasources();
+    expect(calls()).toBe(1);
+  });
+
+  it('re-fetches once the TTL has passed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { calls } = stubFetch([{ body: ds }]);
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+    await client.listDatasources();
+    vi.setSystemTime(Date.now() + DATASOURCES_TTL_MS + 1);
+    await client.listDatasources();
+    expect(calls()).toBe(2);
+  });
+
+  it('does not cache a failed request', async () => {
+    const { calls } = stubFetch([{ body: { message: 'boom' }, status: 500 }, { body: ds }]);
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+    await expect(client.listDatasources()).rejects.toBeInstanceOf(GrafanaApiError);
+    await expect(client.listDatasources()).resolves.toEqual(ds);
+    expect(calls()).toBe(2);
   });
 });

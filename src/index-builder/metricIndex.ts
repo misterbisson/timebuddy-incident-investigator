@@ -1,7 +1,7 @@
 import type { Config } from '../config.js';
 import type { GrafanaClient } from '../grafana/client.js';
 import type { DashboardGetResponse, RulerRuleGroup, SearchResultItem } from '../grafana/types.js';
-import { resolvePanelQueries } from '../dashboards/panelQueries.js';
+import { GRAFANA_PSEUDO_DATASOURCE_REFS, resolvePanelQueries } from '../dashboards/panelQueries.js';
 import { extractQueryInfo } from './extract.js';
 import { CURRENT_SCHEMA_VERSION, isStale, loadIndex, saveIndex, type AlertRuleRef, type MetricIndex } from './store.js';
 
@@ -20,26 +20,13 @@ export const SEARCH_PAGE_SIZE = 5000;
 const DEFAULT_CRAWL_CONCURRENCY = 4;
 
 /**
- * Grafana's own special pseudo-datasource references — never real
- * datasources, so never "broken": __expr__ (the Expression pseudo-datasource,
- * for panels that do math on other queries rather than querying anything)
- * and -- Dashboard --/-- Grafana -- (reuse this dashboard's own annotations /
- * built-in test data, respectively). -- Mixed -- is handled separately in
- * panelQueries.ts (resolves to undefined there, never reaches this check).
- */
-const GRAFANA_PSEUDO_DATASOURCE_REFS = new Set(['__expr__', '-- Dashboard --', '-- Grafana --']);
-
-/**
  * A legacy string datasource ref can be a Grafana template variable
- * ($datasource, ${datasource}, $sysops_griffin_datasource, ...) rather than a
- * literal datasource name — panelQueries.ts passes these through unresolved,
- * and they'll never match a real UID, so treating them as "broken" is a
- * false positive (confirmed against real data: this and the pseudo-datasource
- * refs above were the overwhelming majority of a many-thousands-per-connection
- * brokenDatasources count). A plain literal name (e.g. "Griffin-ELB") is left
- * flagged — that one could genuinely be a renamed/deleted datasource, which
- * we can't tell apart from a template variable without also doing a
- * name->uid lookup.
+ * ($datasource, ${datasource}, ...) rather than a literal datasource name —
+ * panelQueries.ts passes these through unresolved, and they'll never match a
+ * real UID, so treating them as "broken" is a false positive (confirmed
+ * against real data: this and Grafana's pseudo-datasource refs — see
+ * GRAFANA_PSEUDO_DATASOURCE_REFS — were the overwhelming majority of a
+ * many-thousands-per-connection brokenDatasources count).
  */
 function isNonQueryableDatasourceRef(ref: string): boolean {
   return ref.startsWith('$') || GRAFANA_PSEUDO_DATASOURCE_REFS.has(ref);
@@ -155,6 +142,12 @@ export async function buildMetricIndex(client: GrafanaClient, config?: Config): 
     client.listDatasources(),
   ]);
   const knownDsUids = new Set(datasources.map((d) => d.uid));
+  // A ref holding a datasource's *name* in its uid field is not broken:
+  // Grafana's frontend falls back to a name match, and so does
+  // tools/shared.ts's resolveTargetDatasource when a panel is replayed (#262).
+  // Only a ref that matches neither is left flagged — that one really is a
+  // renamed or deleted datasource.
+  const knownDsNames = new Set(datasources.map((d) => d.name));
 
   // Alert-rule access is an enhancement (surfacing which panels are actually
   // relied on), not a requirement — some tokens/older Grafana versions won't
@@ -210,6 +203,7 @@ export async function buildMetricIndex(client: GrafanaClient, config?: Config): 
         if (
           target.datasourceUid &&
           !knownDsUids.has(target.datasourceUid) &&
+          !knownDsNames.has(target.datasourceUid) &&
           !isNonQueryableDatasourceRef(target.datasourceUid)
         ) {
           index.brokenDatasources.push({
