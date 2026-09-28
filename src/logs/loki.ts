@@ -50,23 +50,36 @@ export interface LokiSearchParams {
    * surfaces as a query error, never as a silently shorter answer.
    */
   limit: number;
+  /** Which tool the query came from, for the guard's refusal wording. Defaults to search_logs. */
+  caller?: LokiLogCaller;
 }
+
+/** The tools a Loki log query can arrive from, so a refusal can say what fits there. */
+export type LokiLogCaller = 'search_logs' | 'correlate_logs';
 
 /**
  * Refuses a query search_logs can't answer, with the reason. Exported so the
- * correlate_logs adapter refuses the same things for the same reasons.
+ * correlate_logs adapter refuses the same things for the same reasons; the
+ * wording follows `caller`, since the fix differs (execute_adhoc_query can run
+ * a metric query on its own, but not inside a join).
  */
-export function guardLokiLogQuery(query: string): string {
+export function guardLokiLogQuery(query: string, caller: LokiLogCaller = 'search_logs'): string {
   const verdict = classifyLogQL(query);
   if (!verdict.allowed) {
     throw new Error(`LogQL query refused: ${verdict.reason}`);
   }
   if (verdict.kind === 'metric') {
+    // A metric query is anything that doesn't open with a stream selector, so
+    // this is also where another source's syntax lands.
     throw new Error(
-      'LogQL query refused: this is a metric query (it computes series, e.g. count_over_time or rate), but ' +
-        'search_logs returns log lines. Pass the log query itself — a stream selector plus any pipeline, e.g. ' +
-        '{app="checkout"} |= "error" — or run the metric query with execute_adhoc_query where a workspace has ' +
-        'authorized it.',
+      caller === 'correlate_logs'
+        ? `LogQL query refused: a loki(...) stream in correlate_logs takes a stream selector, e.g. ` +
+            `loki({app="checkout"}), and "${verdict.statement}" isn't one. It reads as a metric query or another ` +
+            'source\'s syntax; a graylog(...) stream needs a Graylog source.'
+        : 'LogQL query refused: search_logs takes a log query, and this one doesn\'t start with a stream selector ' +
+            '— e.g. {app="checkout"} |= "error". If it\'s a metric query (count_over_time, rate, ...), run it with ' +
+            'execute_adhoc_query where a workspace has authorized it. If it\'s Graylog syntax, this source is Loki: ' +
+            'put the scope in a selector and match text with a line filter such as |= "error".',
     );
   }
   return verdict.statement;
@@ -154,7 +167,7 @@ export function parseLokiLogFrames(frames: GrafanaFrame[]): LokiLine[] {
  * the end of the window — the same end an incident is usually being read from.
  */
 export async function searchLoki(client: GrafanaClient, params: LokiSearchParams): Promise<LokiSearchResult> {
-  const statement = guardLokiLogQuery(params.query);
+  const statement = guardLokiLogQuery(params.query, params.caller);
   const response: DsQueryResponse = await client.queryDs({
     from: String(params.fromMs),
     to: String(params.toMs),
