@@ -8,6 +8,12 @@ export interface JoinShape {
    * when a match exists just past the fetch cap.
    */
   rightSelectors: string[];
+  /**
+   * The source name each stream is written with (`graylog`, `loki`, ...), so
+   * correlate_logs can tell a query written for the wrong kind of log source
+   * before the engine fails on it with a less useful message.
+   */
+  sources: string[];
 }
 
 type QueryParserModule = typeof import('@liquescent/log-correlator-query-parser');
@@ -44,8 +50,11 @@ export async function joinShape(query: string): Promise<JoinShape> {
     ]
       .filter((s): s is string => typeof s === 'string')
       .map((s) => s.trim());
-    return { joinType: parsed.joinType, rightSelectors };
+    const sources = [parsed.leftStream, parsed.rightStream, ...(parsed.additionalStreams ?? [])]
+      .map((s) => s?.source)
+      .filter((s): s is string => typeof s === 'string');
+    return { joinType: parsed.joinType, rightSelectors, sources };
   } catch {
-    return { joinType: undefined, rightSelectors: [] };
+    return { joinType: undefined, rightSelectors: [], sources: [] };
   }
 }

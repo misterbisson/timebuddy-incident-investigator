@@ -78,7 +78,12 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
     expect(new URL(urls[0]!).search).toBe('');
   });
 
-  it('getLokiLabelValues hits the loki label-values resource path and scopes with query', async () => {
+  // Grafana's Loki backend prefixes every resource path with /loki/api/v1/
+  // itself (unchanged from 9.5 through 12.x), so the resource path is the part
+  // *after* that prefix. The previous path repeated it and reached
+  // /loki/api/v1/loki/api/v1/label/..., which Loki 404s — while this test
+  // asserted the doubled path and passed.
+  it('getLokiLabelValues hits the label-values resource path (no repeated /loki/api/v1) and scopes with query', async () => {
     const { urls } = stubFetch({ status: 'success', data: ['api', 'worker'] });
     const client = new GrafanaClient(connection({ token: 't' }), config());
 
@@ -86,8 +91,18 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
 
     expect(values).toEqual(['api', 'worker']);
     const url = new URL(urls[0]!);
-    expect(url.pathname).toBe('/api/datasources/uid/loki1/resources/loki/api/v1/label/pod/values');
+    expect(url.pathname).toBe('/api/datasources/uid/loki1/resources/label/pod/values');
     expect(url.searchParams.get('query')).toBe('{job="app"}');
+  });
+
+  it('getLokiLabelNames hits the label-names resource path', async () => {
+    const { urls } = stubFetch({ status: 'success', data: ['app', 'env', 'level'] });
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    await expect(client.getLokiLabelNames('loki1')).resolves.toEqual(['app', 'env', 'level']);
+    const url = new URL(urls[0]!);
+    expect(url.pathname).toBe('/api/datasources/uid/loki1/resources/labels');
+    expect(url.search).toBe('');
   });
 
   it('throws on a datasource-level non-success status even though the proxy returns HTTP 200', async () => {

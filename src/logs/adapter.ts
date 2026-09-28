@@ -34,7 +34,11 @@ export function toLabels(message: GraylogMessageWrapper['message']): Record<stri
 export interface StreamFetchStat {
   selector: string;
   fetched: number;
-  total: number;
+  /**
+   * How many lines matched in total. Graylog reports it; Loki doesn't, so a
+   * Loki stream leaves this unset and derives `truncated` from hitting the cap.
+   */
+  total?: number;
   truncated: boolean;
 }
 

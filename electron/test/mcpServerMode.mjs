@@ -215,9 +215,41 @@ try {
   }
   console.log(`OK: fetch_dashboard got past connection resolution to a real network attempt: ${text}`);
 
-  const logResult = await client.callTool({
+  // Log sources are the seeded Graylog connection plus any Loki datasource
+  // on a Grafana connection (#265). grafana.example.com can't be reached, so
+  // its datasource list can't be read: that must surface as a discovery
+  // problem, not fail the listing.
+  const sourcesResult = await client.callTool({ name: 'list_log_sources', arguments: {} });
+  const sourcesText = sourcesResult.content?.[0]?.text ?? '';
+  let listed;
+  try {
+    listed = JSON.parse(sourcesText);
+  } catch {
+    fail(`list_log_sources did not return JSON: ${sourcesText}`);
+  }
+  const graylogSource = (listed.sources ?? []).find((s) => s.sourceType === 'graylog');
+  if (!graylogSource) fail(`list_log_sources did not list the seeded Graylog connection: ${sourcesText}`);
+  if (!(listed.lokiDiscoveryProblems ?? []).length) {
+    fail(`list_log_sources should report the unreachable Grafana connection as a Loki discovery problem: ${sourcesText}`);
+  }
+  console.log('OK: list_log_sources listed the Graylog connection and reported the unreadable Grafana connection');
+
+  // With that Grafana connection unchecked, a Loki source there can't be
+  // ruled out, so search_logs must refuse to default to the lone Graylog
+  // connection rather than guess (see src/logs/sources.ts).
+  const defaulted = await client.callTool({
     name: 'search_logs',
     arguments: { query: '*', startsAtMs: Date.now() - 60_000, endsAtMs: Date.now() },
+  });
+  const defaultedText = defaulted.content?.[0]?.text ?? '';
+  if (!/could not be read on Grafana connection/i.test(defaultedText)) {
+    fail(`search_logs with no connection should refuse while a Grafana connection is unchecked: ${defaultedText}`);
+  }
+  console.log('OK: search_logs refused to default to Graylog while a Grafana connection could not be checked for Loki');
+
+  const logResult = await client.callTool({
+    name: 'search_logs',
+    arguments: { query: '*', startsAtMs: Date.now() - 60_000, endsAtMs: Date.now(), connection: graylogSource.id },
   });
   const logText = logResult.content?.[0]?.text ?? '';
   // Same proof-of-wiring as fetch_dashboard above: graylog.example.com isn't
@@ -225,7 +257,7 @@ try {
   // decrypted the seeded Graylog token, GraylogClient actually attempted the
   // HTTP call), not a "no log connections configured"/"could not determine
   // which" resolution error.
-  if (/no graylog connections configured/i.test(logText) || /could not determine which/i.test(logText)) {
+  if (/no log sources available/i.test(logText) || /could not determine which/i.test(logText) || /unknown log source/i.test(logText)) {
     fail(`search_logs failed at connection resolution, not at the network call: ${logText}`);
   }
   console.log(`OK: search_logs got past connection resolution to a real network attempt: ${logText}`);

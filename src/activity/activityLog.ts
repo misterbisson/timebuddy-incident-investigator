@@ -33,10 +33,16 @@ export interface PanelActivityEntry extends ActivityEntryCommon {
   screenshotPath?: string;
 }
 
-/** A Graylog search/correlation that was run (search_logs / correlate_logs). */
+/** A log search/correlation that was run (search_logs / correlate_logs), against Graylog or Loki. */
 export interface LogActivityEntry extends ActivityEntryCommon {
   kind: 'log';
-  /** The Graylog/Lucene query (search_logs) or join query (correlate_logs) that was run. */
+  /**
+   * Which kind of log source ran it. Optional so entries recorded before Loki
+   * sources existed still read as Graylog, which is what they were; the
+   * Activity window labels its "open" button and stream row from this.
+   */
+  sourceType?: 'graylog' | 'loki';
+  /** The Graylog/Lucene or LogQL query (search_logs), or the join query (correlate_logs), that was run. */
   query: string;
   streamId?: string;
   streamName?: string;

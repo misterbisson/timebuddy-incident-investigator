@@ -11,7 +11,8 @@ Drive the tools below yourself; don't just describe what could be done. The pers
 generally won't know the tool names or the right order to call them in — that's exactly what this
 skill exists to handle for them.
 
-**Scope.** These tools reach the Grafana and Graylog connections configured in this app, and
+**Scope.** These tools reach the Grafana and Graylog connections configured in this app (and the
+Loki datasources behind those Grafana connections), and
 nothing else. If the investigation wants a ticket, a chat thread, an inventory record, or any
 other system, that belongs to another skill or to the person you're helping — don't improvise a
 `curl` at it. Join only on identifiers you actually hold (host, IP, request/trace id), never on
@@ -331,24 +332,36 @@ search.
 6. **Pull corroborating log evidence**, once you have a primary panel and/or some identifiers.
    **This step is not optional and is not conditional on how the metrics looked.** Always run it —
    calling `list_log_sources` is a required part of every investigation, and the *only* clean way to
-   skip the rest of the step is an empty `sources` (no Graylog configured). A confident,
+   skip the rest of the step is an empty `sources` (no Graylog connection and no Loki datasource on
+   any Grafana connection). A confident,
    clean-looking metrics verdict is **not** a reason to skip logs — it is exactly when logs pay off
    most. Metrics tell you *that* a signal moved and *where* (which host/orchestrator/cell); logs
    routinely tell you *why*, turning "chronic CM errors on `a2`" into "one specific certificate stuck
    in a non-exportable state." Don't jump from step 5 to step 7 because the numbers already tell a
    tidy story; pull the logs and let them sharpen (or contradict) it first.
-   - Call `list_log_sources` with no arguments. If `sources` is empty, no Graylog connections are
-     configured — skip the rest of this step silently; that's a normal, common state, not
-     something to flag as missing unless asked. Any other outcome means you keep going.
-   - **Pick which log connection to use.** If `sources` has exactly one entry, use its `id` as
-     `connection` on the calls below — no further resolution needed. If there's more than one,
-     pair by tags instead of asking outright: call `list_datasources` with
-     `connection: <resolvedConnectionId>` (the Grafana connection from step 2) to get
-     `connectionTags[<resolvedConnectionId>]`, then find the log source(s) in `sources` whose own
-     `tags` array shares at least one value with it. Exactly one match: use it. Zero or more than
-     one match (or no `resolvedConnectionId` to pair from): ask the person which log connection
-     covers this environment, listing the candidate names — same "ambiguous is a hard stop, don't
-     guess" approach every connection resolution in this server already follows.
+   - Call `list_log_sources` with no arguments. If `sources` is empty, there is no log source —
+     skip the rest of this step silently; that's a normal, common state, not something to flag as
+     missing unless asked. Any other outcome means you keep going. Each source has a `sourceType`:
+     `graylog` (a configured Graylog connection) or `loki` (a Loki datasource on one of the Grafana
+     connections, id `<grafanaConnection>/<datasourceUid>`). If `lokiDiscoveryProblems` is present,
+     some Grafana connection's datasources couldn't be read, so a Loki source there may be missing
+     from the list — say so if the logs come back empty.
+   - **Pick which log source to use.** If `sources` has exactly one entry, use its `id` as
+     `connection` on the calls below — no further resolution needed. If there's more than one:
+     - A `loki` source whose `grafanaConnection` is `resolvedConnectionId` (the Grafana connection
+       from step 2) covers this environment by construction — it lives on the same Grafana.
+     - Otherwise pair by tags instead of asking outright: call `list_datasources` with
+       `connection: <resolvedConnectionId>` to get `connectionTags[<resolvedConnectionId>]`, then
+       find the source(s) in `sources` whose own `tags` array shares at least one value with it.
+       (A `loki` source's tags are its Grafana connection's.)
+     - Exactly one covering source: use it. **A Graylog and a Loki source that both cover the
+       environment are not ambiguous** — they're different backends, and a service may log to
+       either (some teams run their own Loki instead of shipping to Graylog). Search each, and
+       report which one had the service's logs; an empty result from one says nothing about the
+       other. Zero covering sources, or more than one of the *same* kind (or no
+       `resolvedConnectionId` to pair from): ask the person which log source covers this
+       environment, listing the candidate names — same "ambiguous is a hard stop, don't guess"
+       approach every connection resolution in this server already follows.
    - **Gather identifiers to search on** from what you already have: `alertContext.labels`, the
      `labels` field on any series you pulled in step 3 (`execute_query_window`/`render_dashboard`/
      `detect_correlated_anomalies` all return per-series `labels` — hostnames, instance ids,
@@ -381,13 +394,24 @@ search.
        builder-mode InfluxQL and PromQL panels; a raw-query InfluxQL or Loki/LogQL panel hard-errors
        (it won't silently return the un-broken-out aggregate), so fall back to the candidate-set
        search above in that case.
-   - Call `search_logs` with those identifiers built into Graylog query syntax (e.g.
-     `host:web-03 AND level:ERROR`), the same `startsAtMs`/`endsAtMs` as the incident window, and
-     the resolved log `connection`. Graylog's own field names for a given identifier aren't
-     knowable in advance from this side — if a specific query comes back empty, try a broader one
-     (fewer fields, or a bare `*` scoped to the time window) before concluding there's nothing
-     there, and say so plainly if it's still empty rather than treating silence as a finding.
-   - If that call (or `correlate_logs`, below) fails with a permission error mentioning "no stream
+   - Call `search_logs` with those identifiers built into the source's own query language, the
+     same `startsAtMs`/`endsAtMs` as the incident window, and the resolved log `connection`:
+     - **Graylog:** Graylog query syntax, e.g. `host:web-03 AND level:ERROR`. Graylog's own field
+       names for a given identifier aren't knowable in advance from this side.
+     - **Loki:** a LogQL *log* query — a stream selector plus any pipeline, e.g.
+       `{app="checkout", namespace="prod"} |= "web-03"`. The selector needs real stream label
+       names: `list_log_sources` with `connection: <the Loki source id>` returns them as `labels`,
+       and `discover_label_values` (with that source's `datasourceUid`, the selector as `metric`,
+       and a label name) returns a label's actual values — don't guess at `app` vs `service`.
+       Filter by identifier with a line filter (`|= "web-03"`, `|~ "timeout|refused"`), or parse
+       and filter on fields (`| json | status >= 500`). If the line is JSON with the real payload
+       inside a string field, re-parse it: `| json | line_format "{{.payload}}" | json`. A Loki result
+       has no total count: `truncated: true` means the line cap was reached, newest lines first, so
+       more matched than you're seeing.
+     If a specific query comes back empty, try a broader one (fewer fields/filters, or a bare `*` /
+     bare selector over the time window) before concluding there's nothing there, and say so
+     plainly if it's still empty rather than treating silence as a finding.
+   - (Graylog only.) If that call (or `correlate_logs`, below) fails with a permission error mentioning "no stream
      filter applied" or similar, the connection's Graylog role can search within a stream but not
      across all of them unscoped, and it has no default stream configured — this is a real, common
      lockdown, not a broken connection. Call `list_log_sources` again with
@@ -400,6 +424,12 @@ search.
      separate `search_logs` calls — one query, one already-joined result set. Its `and`/`or`/
      `unless` operators are documented in the tool description; `unless` is the one worth
      remembering for "which requests on one side never showed up on the other."
+     - Write every stream with the source's kind: `graylog(service:frontend)` for Graylog,
+       `loki({app="frontend"})` for Loki. A `loki(...)` stream takes a **bare stream selector
+       only** — no `|=`/`| json` pipeline — and each event is joinable on its stream labels plus
+       the fields a JSON line carries, named the way LogQL's `| json` names them (nested keys
+       joined with `_`: `{"error":{"code":…}}` becomes `error_code`). A payload double-encoded inside a string field
+       isn't reachable that way; use `search_logs` with `line_format` for that shape instead.
      - A `truncated: true` in the result (or any `streams[]` entry with `truncated: true`) means a
        stream hit the per-stream line cap, so the join ran on a partial view — treat the result as
        a floor, not a complete count, and narrow the window/query if the count matters. A truncated

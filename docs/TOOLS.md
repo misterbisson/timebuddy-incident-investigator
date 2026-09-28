@@ -71,9 +71,9 @@ was not found") from an unrecognized URL shape. None of them accept a folder lin
 
 | Tool | What it does |
 | --- | --- |
-| `search_logs` | Search a Graylog connection for log messages in a fixed time window, using Graylog's own query syntax. Use identifiers pulled from a metric investigation (hostname, IP, product string, request/trace id) to narrow the search. |
-| `list_log_sources` | List configured Graylog connections (id/name/tags/default stream) — the log-side counterpart to `list_datasources`. Pass `connection` to also list that connection's available streams. |
-| `correlate_logs` | Join two or more Graylog searches on a shared field (e.g. a request id) using a PromQL-inspired join query — `and` (inner), `or` (union), `unless` (anti-join). Every stream runs against the same fixed historical window, not a live tail. |
+| `search_logs` | Search one log source for log messages in a fixed time window, in that source's language: Graylog query syntax for a Graylog connection, or a LogQL log query (any pipeline) for a Loki datasource reached through a Grafana connection. Use identifiers pulled from a metric investigation (hostname, IP, product string, request/trace id) to narrow the search. A Loki result has no total count, so `truncated` means the line cap was reached (newest lines first); its `url` is a Grafana Explore link. |
+| `list_log_sources` | List every log source — Graylog connections (id/name/tags/default stream) and every Loki datasource on every Grafana connection (`sourceType: "loki"`, id `<grafanaConnection>/<datasourceUid>`, the Grafana connection's tags) — the log-side counterpart to `list_datasources`. Pass `connection` to also list a Graylog connection's streams or a Loki source's stream label names. `lokiDiscoveryProblems` names Grafana connections whose datasources couldn't be read. |
+| `correlate_logs` | Join two or more log searches on a shared field (e.g. a request id) using a PromQL-inspired join query — `and` (inner), `or` (union), `unless` (anti-join) — written as `graylog(...)` streams for a Graylog source or `loki({...})` streams (bare selectors) for a Loki one, where events are joinable on stream labels plus the fields `\| json` would extract. Every stream runs against the same fixed historical window, not a live tail. |
 
 See [Searching logs during an investigation](../README.md#searching-logs) for usage
 examples, and [`LOGS.md`](LOGS.md) for the subsystem's design.
