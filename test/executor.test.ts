@@ -179,6 +179,53 @@ describe('executeQueryWindow', () => {
       expect(result.errors).toEqual({});
     });
 
+    // Review of #267: the check ran per frame but errors are keyed per refId,
+    // so a refId returning a numeric frame *and* a text frame — InfluxQL's
+    // SELECT mean("value"), last("state") comes back as one frame per column —
+    // got a valid series plus an error saying there was nothing to compute.
+    it('does not report a refId that also returned numeric series, and keeps its series', async () => {
+      const response: DsQueryResponse = {
+        results: {
+          A: {
+            frames: [
+              {
+                schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'value', type: 'number' }] },
+                data: { values: [[1_700_000_000_000, 1_700_000_060_000], [1, 2]] },
+              },
+              {
+                schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'state', type: 'string' }] },
+                data: { values: [[1_700_000_000_000, 1_700_000_060_000], ['ok', 'degraded']] },
+              },
+            ],
+          },
+        },
+      };
+      const result = await executeQueryWindow(fakeClient(response), [target], window, config);
+      expect(result.series).toHaveLength(1);
+      expect(result.series[0]!.points.map((p) => p.v)).toEqual([1, 2]);
+      expect(result.errors).toEqual({});
+    });
+
+    it('reports the text-only refId when another refId in the same request is numeric', async () => {
+      const response: DsQueryResponse = {
+        results: {
+          A: {
+            frames: [
+              {
+                schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'value', type: 'number' }] },
+                data: { values: [[1_700_000_000_000], [1]] },
+              },
+            ],
+          },
+          B: { frames: [{ ...logFrame(2), schema: { ...logFrame(2).schema, refId: 'B' } }] },
+        },
+      };
+      const result = await executeQueryWindow(fakeClient(response), [target, { ...target, refId: 'B' }], window, config);
+      expect(result.series.map((s) => s.refId)).toEqual(['A']);
+      expect(Object.keys(result.errors)).toEqual(['B']);
+      expect(result.errors.B).toMatch(/2 row\(s\) of text/);
+    });
+
     it('does not overwrite a datasource error already reported for the same refId', async () => {
       const client = fakeClient({ results: { A: { error: 'parse error at line 1', frames: [logFrame(1)] } } } as DsQueryResponse);
       const result = await executeQueryWindow(client, [target], window, config);
