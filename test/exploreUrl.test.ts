@@ -157,3 +157,37 @@ describe('buildExploreUrl for Prometheus panes', () => {
     expect(promPane({ stepSeconds: 60 }).range).toEqual({ from: String(FROM), to: String(TO) });
   });
 });
+
+describe('buildExploreUrl for Loki', () => {
+  const pane = (opts: { instant?: boolean; stepSeconds?: number }) =>
+    Object.values(
+      panes(
+        buildExploreUrl('https://grafana.example.com', {
+          datasourceUid: 'logs1',
+          datasourceType: 'loki',
+          query: 'sum(count_over_time({app="checkout"} |= "error" [1m]))',
+          fromMs: FROM,
+          toMs: TO,
+          ...opts,
+        }),
+      ),
+    )[0]!;
+
+  it('carries the expression in a Loki-shaped query with the step', () => {
+    const q = pane({ stepSeconds: 60 }).queries[0];
+    expect(q).toEqual({
+      refId: 'A',
+      datasource: { type: 'loki', uid: 'logs1' },
+      expr: 'sum(count_over_time({app="checkout"} |= "error" [1m]))',
+      queryType: 'range',
+      editorMode: 'code',
+      step: '60s',
+    });
+  });
+
+  it('marks an instant query and carries no step', () => {
+    const q = pane({ instant: true }).queries[0];
+    expect(q.queryType).toBe('instant');
+    expect(q.step).toBeUndefined();
+  });
+});

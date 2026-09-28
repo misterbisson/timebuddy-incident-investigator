@@ -155,6 +155,16 @@ Three things shape almost every module here and are easy to miss from a partial 
    points — and names the field `consistentWithRequested`, false being proof of an override and
    true being consistency rather than a match. Keep that asymmetry if you touch it.
 
+   The third dialect, `query/logqlGuard.ts` (LogQL against `loki`, issue #264), takes PromQL's
+   lighter touch because the same fact holds for LogQL — no write form, and Grafana's Loki
+   backend only reaches Loki's query endpoints with the expression as a parameter — and its
+   header argues that from LogQL's side rather than inheriting it. It reuses `scanPromQL`, since
+   LogQL's lexer is PromQL's plus pipeline stages (and has no single-quoted string, which only
+   makes the shared scan stricter). The one thing it adds is `kind`: a log query always begins
+   with a stream selector and a metric query never does, a grammar fact rather than a heuristic.
+   `execute_adhoc_query` accepts metric queries only, through the same `prepareStepped` range/
+   instant/step handling as PromQL, so the no-inferred-step rule is one implementation, not two.
+
    Two invariants in there that a partial read will miss, both load-bearing. **The tool
    executes `verdict.statement`, the text the guard scanned — never the caller's raw input.**
    Every claim the guard makes is about the string it inspected, so running the raw input

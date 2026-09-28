@@ -142,7 +142,7 @@ const EXPLORE_PANE_KEY = 'timebuddy';
  *   Grafana fall back to the viewer's own current org.
  * - **No builder-model query.** The pane carries the dialect's raw text form —
  *   `query` + `rawQuery: true` for InfluxQL, `expr` + `editorMode: 'code'` for
- *   PromQL — not the measurement/select/groupBy model Grafana emits from its
+ *   PromQL and LogQL — not the measurement/select/groupBy model Grafana emits from its
  *   visual query editor. That's the shape the query was actually executed in,
  *   and reconstructing an equivalent builder model would risk the link showing
  *   something subtly different from what ran.
@@ -158,7 +158,18 @@ export function buildExploreUrl(baseUrl: string, opts: ExploreUrlOptions): strin
   // Prometheus pane carrying InfluxQL's `query`/`rawQuery` opens empty, which
   // is the failure mode this whole URL exists to avoid.
   const paneQuery =
-    opts.datasourceType === 'prometheus'
+    opts.datasourceType === 'loki'
+      ? {
+          refId: 'A',
+          datasource: { type: opts.datasourceType, uid: opts.datasourceUid },
+          expr: opts.query,
+          // Loki's query model carries the mode as one `queryType` rather than
+          // Prometheus's instant/range pair, and the step as `step`.
+          queryType: opts.instant === true ? 'instant' : 'range',
+          editorMode: 'code',
+          ...(opts.stepSeconds !== undefined ? { step: `${opts.stepSeconds}s` } : {}),
+        }
+      : opts.datasourceType === 'prometheus'
       ? {
           refId: 'A',
           datasource: { type: opts.datasourceType, uid: opts.datasourceUid },
