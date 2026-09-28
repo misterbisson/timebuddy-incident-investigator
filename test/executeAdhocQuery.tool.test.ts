@@ -664,6 +664,80 @@ describe('execute_adhoc_query PromQL', () => {
   });
 });
 
+describe('execute_adhoc_query LogQL (#264)', () => {
+  const LOKI: DatasourceInfo[] = [{ uid: 'logs1', id: 4, name: 'Loki', type: 'loki' }];
+  const authorized = () => config([{ host: 'metrics.staging.example.com', datasourceTypes: ['loki'] }]);
+  const base = { datasourceUid: 'logs1', fromMs: FROM, toMs: TO, connection: 'staging', includePoints: true };
+  const metric = 'sum by (level) (count_over_time({app="checkout"} | json [1m]))';
+
+  it('runs a metric query at the requested step and sends it as a Loki target', async () => {
+    const { client, queryDs } = fakeClient(LOKI, promResponse(60_000, 61));
+    const body = payload(await callTool(authorized(), client, { ...base, query: metric, stepSeconds: 60 }));
+    expect(body.provenance).toBe('adhoc');
+    expect(body.datasource).toEqual({ uid: 'logs1', type: 'loki' });
+    expect(body.queryType).toBe('range');
+    expect(body.step.consistentWithRequested).toBe(true);
+    expect(queryDs.mock.calls[0]![0].queries[0]).toMatchObject({
+      expr: metric,
+      queryType: 'range',
+      step: '60s',
+      intervalMs: 60_000,
+    });
+    // Neither the Prometheus nor the InfluxQL shape.
+    expect(queryDs.mock.calls[0]![0].queries[0]!.range).toBeUndefined();
+    expect(queryDs.mock.calls[0]![0].queries[0]!.rawQuery).toBeUndefined();
+  });
+
+  it('flags a step override the same way PromQL does', async () => {
+    const { client } = fakeClient(LOKI, promResponse(15_000, 241));
+    const body = payload(await callTool(authorized(), client, { ...base, query: metric, stepSeconds: 60 }));
+    expect(body.step.consistentWithRequested).toBe(false);
+  });
+
+  it('refuses a range query with no stepSeconds, naming LogQL', async () => {
+    const { client, queryDs } = fakeClient(LOKI);
+    const result = await callTool(authorized(), client, { ...base, query: metric });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('LogQL range queries require an explicit "stepSeconds"');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
+  it('runs an instant query at the window end', async () => {
+    const { client, queryDs } = fakeClient(LOKI, promResponse(0, 1));
+    const body = payload(
+      await callTool(authorized(), client, { ...base, query: 'sum(count_over_time({app="checkout"}[1h]))', queryType: 'instant' }),
+    );
+    expect(body.queryType).toBe('instant');
+    expect(body.evaluatedAtMs).toBe(TO);
+    expect(queryDs.mock.calls[0]![0].queries[0]).toMatchObject({ queryType: 'instant' });
+    expect(queryDs.mock.calls[0]![0].queries[0]!.step).toBeUndefined();
+  });
+
+  it('refuses a log query before reaching the datasource, and says how to count it', async () => {
+    const { client, queryDs } = fakeClient(LOKI);
+    const result = await callTool(authorized(), client, { ...base, query: '{app="checkout"} |= "error"', stepSeconds: 60 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('LogQL query refused');
+    expect(result.content[0]!.text).toContain('count_over_time');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
+  it('builds a Loki-shaped Explore pane carrying the expression and the step', async () => {
+    const { client } = fakeClient(LOKI, promResponse(60_000, 61));
+    const body = payload(await callTool(authorized(), client, { ...base, query: metric, stepSeconds: 60 }));
+    const pane = JSON.parse(new URL(body.exploreUrl).searchParams.get('panes')!).timebuddy;
+    expect(pane.queries[0]).toMatchObject({ expr: metric, queryType: 'range', step: '60s' });
+  });
+
+  it('is still refused for a workspace that authorized only other types', async () => {
+    const cfg = config([{ host: 'metrics.staging.example.com', datasourceTypes: ['prometheus'] }]);
+    const { client, queryDs } = fakeClient(LOKI);
+    const result = await callTool(cfg, client, { ...base, query: metric, stepSeconds: 60 });
+    expect(result.content[0]!.text).toContain('not authorized to query ad-hoc');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+});
+
 describe('execute_adhoc_query dialect parameters', () => {
   const influxAuthorized = () => config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
 

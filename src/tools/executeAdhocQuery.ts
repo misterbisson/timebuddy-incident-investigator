@@ -7,6 +7,7 @@ import type { ResolvedTarget } from '../dashboards/panelQueries.js';
 import { executeQueryWindow, type QuerySeries } from '../query/executor.js';
 import { classifyInfluxQL, type AdhocVerdict } from '../query/adhocGuard.js';
 import { MAX_STEP_SECONDS, classifyPromQL, resolvePromqlStep } from '../query/promqlGuard.js';
+import { classifyLogQLMetric } from '../query/logqlGuard.js';
 import { computeStats } from '../analysis/baseline.js';
 import { clampSeriesPoints } from '../security/limits.js';
 import { buildExploreUrl } from '../grafana/urlBuilder.js';
@@ -83,81 +84,139 @@ const INFLUXQL: AdhocDialect = {
   },
 };
 
+/** How a stepped dialect (PromQL, LogQL metric queries) shapes each of its two query modes. */
+interface SteppedBodies {
+  instant: (statement: string) => Record<string, unknown>;
+  range: (statement: string, step: { seconds: number; ms: number }) => Record<string, unknown>;
+}
+
+/**
+ * The range/instant handling shared by every dialect whose range queries
+ * evaluate on a step: PromQL, and LogQL's metric queries, which have the same
+ * range-vector functions (`rate`, `count_over_time`, ...) and so the same
+ * reason never to infer a step. Only the request body differs per dialect.
+ */
+function prepareStepped(
+  language: string,
+  bodies: SteppedBodies,
+  statement: string,
+  req: AdhocRequest,
+  config: Config,
+): PreparedQuery {
+  const queryType: PromQueryType = req.queryType ?? 'range';
+  if (queryType === 'instant') {
+    if (req.stepSeconds !== undefined) {
+      refuseUnusedParam(
+        'stepSeconds',
+        `instant ${language}`,
+        'an instant query evaluates at a single timestamp (the window end), so there is no step. ' +
+          'Drop it, or use queryType:"range" to get a series.',
+      );
+    }
+    return {
+      raw: bodies.instant(statement),
+      explore: { instant: true },
+      // Named rather than left implicit: "instant at toMs" is a different
+      // question from "the series over [fromMs, toMs]", and a caller reading
+      // a one-point result needs to know which one it answered.
+      resultFields: { queryType, evaluatedAtMs: req.toMs },
+    };
+  }
+
+  if (req.stepSeconds === undefined) {
+    // A hard error, not a default. See resolvePromqlStep's doc comment (and
+    // issue #200) for what an inferred step costs on a range-vector query.
+    const suggestion = Math.max(15, Math.ceil((req.toMs - req.fromMs) / 1000 / 200));
+    throw new Error(
+      `${language} range queries require an explicit "stepSeconds" — it is never inferred. The step decides the ` +
+        'answer for every range-vector function (rate/increase/delta/*_over_time), so choosing it for you is ' +
+        `how a replay reports a signal that does not exist at the resolution you meant (issue #200). Pass the ` +
+        `resolution you mean to measure at (e.g. stepSeconds: 15 or 60), or ` +
+        `stepSeconds: ${suggestion} for a ~200-point overview of this window. Use queryType:"instant" for a ` +
+        'single value at the window end instead.',
+    );
+  }
+  const plan = resolvePromqlStep({
+    fromMs: req.fromMs,
+    toMs: req.toMs,
+    stepSeconds: req.stepSeconds,
+    maxDataPoints: config.maxDataPoints,
+  });
+  return {
+    raw: bodies.range(statement, { seconds: req.stepSeconds, ms: plan.stepMs }),
+    explore: { stepSeconds: req.stepSeconds },
+    resultFields: { queryType },
+    requestedStepMs: plan.stepMs,
+  };
+}
+
 const PROMQL: AdhocDialect = {
   language: 'PromQL',
   classify: classifyPromQL,
-  prepare: (statement, req, config) => {
-    const queryType: PromQueryType = req.queryType ?? 'range';
-    if (queryType === 'instant') {
-      if (req.stepSeconds !== undefined) {
-        refuseUnusedParam(
-          'stepSeconds',
-          'instant PromQL',
-          'an instant query evaluates at a single timestamp (the window end), so there is no step. ' +
-            'Drop it, or use queryType:"range" to get a series.',
-        );
-      }
-      return {
+  prepare: (statement, req, config) =>
+    prepareStepped(
+      'PromQL',
+      {
         // No `interval` on an instant query: Grafana's Prometheus backend
         // evaluates it at the range end and ignores any step, so sending one
         // would be a field the result can't be checked against.
-        raw: {
-          expr: statement,
+        instant: (expr) => ({
+          expr,
           instant: true,
           range: false,
           exemplar: false,
           editorMode: 'code',
           format: 'time_series',
-        },
-        explore: { instant: true },
-        // Named rather than left implicit: "instant at toMs" is a different
-        // question from "the series over [fromMs, toMs]", and a caller reading
-        // a one-point result needs to know which one it answered.
-        resultFields: { queryType, evaluatedAtMs: req.toMs },
-      };
-    }
-
-    if (req.stepSeconds === undefined) {
-      // A hard error, not a default. See resolvePromqlStep's doc comment (and
-      // issue #200) for what an inferred step costs on a range-vector query.
-      const suggestion = Math.max(15, Math.ceil((req.toMs - req.fromMs) / 1000 / 200));
-      throw new Error(
-        'PromQL range queries require an explicit "stepSeconds" — it is never inferred. The step decides the ' +
-          'answer for every range-vector function (rate/increase/delta/*_over_time), so choosing it for you is ' +
-          `how a replay reports a signal that does not exist at the resolution you meant (issue #200). Pass the ` +
-          `datasource's scrape interval to measure real samples (e.g. stepSeconds: 15 or 60), or ` +
-          `stepSeconds: ${suggestion} for a ~200-point overview of this window. Use queryType:"instant" for a ` +
-          'single value at the window end instead.',
-      );
-    }
-    const plan = resolvePromqlStep({
-      fromMs: req.fromMs,
-      toMs: req.toMs,
-      stepSeconds: req.stepSeconds,
-      maxDataPoints: config.maxDataPoints,
-    });
-    return {
-      // Both `interval` and `intervalMs`: Grafana's Prometheus query model
-      // carries the string form (what a panel stores as its min step) and the
-      // backend reads the numeric one. Sending both means the step survives
-      // whichever field the instance's version reads, instead of falling back
-      // to the datasource's scrape-interval setting — which is what made
-      // execute_query_window run at 15s against a panel pinning 1m (#200).
-      raw: {
-        expr: statement,
-        instant: false,
-        range: true,
-        interval: `${req.stepSeconds}s`,
-        intervalMs: plan.stepMs,
-        exemplar: false,
-        editorMode: 'code',
-        format: 'time_series',
+        }),
+        // Both `interval` and `intervalMs`: Grafana's Prometheus query model
+        // carries the string form (what a panel stores as its min step) and the
+        // backend reads the numeric one. Sending both means the step survives
+        // whichever field the instance's version reads, instead of falling back
+        // to the datasource's scrape-interval setting — which is what made
+        // execute_query_window run at 15s against a panel pinning 1m (#200).
+        range: (expr, step) => ({
+          expr,
+          instant: false,
+          range: true,
+          interval: `${step.seconds}s`,
+          intervalMs: step.ms,
+          exemplar: false,
+          editorMode: 'code',
+          format: 'time_series',
+        }),
       },
-      explore: { stepSeconds: req.stepSeconds },
-      resultFields: { queryType },
-      requestedStepMs: plan.stepMs,
-    };
-  },
+      statement,
+      req,
+      config,
+    ),
+};
+
+const LOGQL: AdhocDialect = {
+  language: 'LogQL',
+  // Metric queries only: a log query returns lines, which belong to a log
+  // search rather than this tool's series-shaped result. See logqlGuard.ts.
+  classify: classifyLogQLMetric,
+  prepare: (statement, req, config) =>
+    prepareStepped(
+      'LogQL',
+      {
+        instant: (expr) => ({ expr, queryType: 'instant', editorMode: 'code' }),
+        // `step` is the field Grafana's Loki backend takes the step from — a
+        // set `step` wins over its own interval-derived default, which is the
+        // inference this tool exists not to make. `intervalMs` rides along so
+        // $__interval inside the expression means the same step.
+        range: (expr, step) => ({
+          expr,
+          queryType: 'range',
+          step: `${step.seconds}s`,
+          intervalMs: step.ms,
+          editorMode: 'code',
+        }),
+      },
+      statement,
+      req,
+      config,
+    ),
 };
 
 /**
@@ -177,13 +236,16 @@ const PROMQL: AdhocDialect = {
  * query model isn't exercised anywhere in this repo, and guessing at a query
  * body is how a tool sends something other than what it reported sending.
  *
- * `loki` is absent for a different reason: LogQL also has no write form, but a
- * log query's results are lines rather than series, and `search_logs` /
- * `correlate_logs` already own that path.
+ * `loki` takes LogQL **metric** queries only (count_over_time, rate, sum by,
+ * quantile_over_time, ...): LogQL has no write form either — see
+ * query/logqlGuard.ts for why that holds, checked rather than assumed — but a
+ * *log* query returns lines rather than series, which this tool's result shape
+ * can't carry, so the guard refuses those and says how to count them instead.
  */
 const GUARDABLE_TYPES: Record<string, AdhocDialect> = {
   influxdb: INFLUXQL,
   prometheus: PROMQL,
+  loki: LOGQL,
 };
 
 /**
@@ -332,7 +394,7 @@ function reportedStep(series: QuerySeries[], requestedStepMs: number): Record<st
               note:
                 `Points came back no closer than ${minGapMs}ms apart, but every gap is a multiple of the ` +
                 `requested ${requestedStepMs}ms step — which is what a sparse metric looks like at that step, ` +
-                'since Prometheus returns a point only where the range vector had samples. Consistent with the ' +
+                'since the datasource returns a point only where the range vector had samples. Consistent with the ' +
                 'datasource honouring the request; not evidence of a different step, so read the numbers as they ' +
                 'are.',
             }
@@ -355,8 +417,9 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
       description:
         'Runs a query you write yourself against a datasource, over an explicit time window, and returns the ' +
         'resulting series plus a Grafana Explore URL that re-runs exactly that query. Accepts InfluxQL against an ' +
-        'InfluxDB datasource and PromQL/MetricsQL against a Prometheus-type one, dispatching on the datasource\'s ' +
-        'type. Unlike every other query tool here, the query text comes from you rather than from a dashboard a ' +
+        'InfluxDB datasource, PromQL/MetricsQL against a Prometheus-type one, and LogQL metric queries ' +
+        '(count_over_time, rate, sum by ...) against a Loki one, dispatching on the datasource\'s type — a LogQL ' +
+        'log query (one returning lines) is refused, since this tool returns series. Unlike every other query tool here, the query text comes from you rather than from a dashboard a ' +
         'human authored and validated — so results carry provenance:"adhoc", and a verdict resting on them must ' +
         'say so. Prefer the dashboard-derived path first: find_related_dashboards / resolve_panel_queries / ' +
         'execute_query_window reproduce what the service owners actually chose to measure, including aggregation ' +
@@ -364,11 +427,11 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
         'path came up empty, or when iterating on a query you intend to put on a dashboard — including questions ' +
         'about the data\'s own shape that no panel answers, e.g. count_over_time(metric[1m]) to measure real ' +
         'scrape density, or a MetricsQL-only construct to tell a VictoriaMetrics instance from a Prometheus one. ' +
-        'PromQL range queries require an explicit stepSeconds: the step decides the answer for every ' +
+        'PromQL and LogQL range queries require an explicit stepSeconds: the step decides the answer for every ' +
         'range-vector function, so it is never inferred, and the result reports what the returned timestamps say ' +
         'about the step the datasource actually used (step.consistentWithRequested: false is proof it used a ' +
         'different one, so reread the numbers against that; true means widely spaced points are sparsity, not a ' +
-        'mismatch). Read-only: PromQL has no write form and Grafana only reaches its ' +
+        'mismatch). Read-only: PromQL and LogQL have no write form and Grafana only reaches their ' +
         'query endpoints, while InfluxQL is restricted to single-statement SELECT/SHOW — and only datasource ' +
         'types this workspace explicitly authorized are reachable at all. Goes through the same connection ' +
         'resolution, limits, redaction, and audit logging as every other tool.',
@@ -380,7 +443,8 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
           .max(8000)
           .describe(
             'The query text, in the datasource\'s own language: InfluxQL (a single SELECT or SHOW statement) for ' +
-              'an InfluxDB datasource, or a single PromQL/MetricsQL expression for a Prometheus-type one',
+              'an InfluxDB datasource, a single PromQL/MetricsQL expression for a Prometheus-type one, or a single ' +
+              'LogQL metric expression for a Loki one',
           ),
         datasourceUid: z.string().describe('Which datasource to query — from list_datasources'),
         fromMs: epochMsSchema.describe('Window start (epoch ms or ISO 8601)'),
@@ -389,8 +453,8 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
           .enum(['range', 'instant'])
           .optional()
           .describe(
-            'Prometheus only: "range" (default) evaluates across the window at stepSeconds; "instant" returns one ' +
-              'value per series at the window end. Not accepted for InfluxQL',
+            'PromQL/LogQL only: "range" (default) evaluates across the window at stepSeconds; "instant" returns ' +
+              'one value per series at the window end. Not accepted for InfluxQL',
           ),
         stepSeconds: z
           .number()
@@ -399,7 +463,7 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
           .max(MAX_STEP_SECONDS)
           .optional()
           .describe(
-            'Prometheus range queries: the evaluation step, in seconds. Required — deliberately never inferred, ' +
+            'PromQL/LogQL range queries: the evaluation step, in seconds. Required — deliberately never inferred, ' +
               'since it changes the answer of every range-vector function. Match the scrape interval (e.g. 15 or ' +
               '60) to measure real samples. Not accepted for InfluxQL or instant queries',
           ),
