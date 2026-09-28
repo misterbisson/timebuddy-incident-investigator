@@ -413,7 +413,8 @@ Logs come from two kinds of source:
 - **Graylog** — add a Graylog connection (see [Configuring connections](#configuring-connections)).
 - **Loki** — nothing to add. Loki has no UI of its own; people reach it through Grafana, and so
   does Timebuddy: every `loki` datasource on a Grafana connection you've already added is a log
-  source, found fresh on each call, using that connection's credentials. Its id is
+  source, found on each call (from a datasource list reused for up to 30 seconds), using that
+  connection's credentials. Its id is
   `<grafana connection>/<datasource uid>`, and it inherits that connection's `tags`.
 
 `/timebuddy:investigate` pulls corroborating log evidence automatically — it pairs the right
