@@ -54,7 +54,7 @@ function setup(opts: { linesByExpr?: Record<string, FixtureLine[] | Error>; labe
     const r = (await call(name, args)) as { content: Array<{ text: string }>; isError?: boolean };
     return { isError: r.isError, text: r.content[0]!.text, body: r.isError ? undefined : JSON.parse(r.content[0]!.text) };
   };
-  return { run, activityLog, queryDs: loki.queryDs, inputSchema };
+  return { run, activityLog, queryDs: loki.queryDs, getLokiLabelNames: loki.getLokiLabelNames, inputSchema };
 }
 
 const lines: FixtureLine[] = [
@@ -77,6 +77,35 @@ describe('list_log_sources with Loki', () => {
     const { body } = await run('list_log_sources', { connection: SOURCE });
     expect(body.labels).toEqual(['app', 'env', 'level']);
     expect(body.streams).toBeUndefined();
+  });
+
+  // #277: Loki only lists labels seen in a time range, so the window is
+  // always sent and always reported.
+  it('lists label names over the window it was given, and reports it', async () => {
+    const { run, getLokiLabelNames } = setup({ labelNames: ['app'] });
+    const { body } = await run('list_log_sources', { connection: SOURCE, startsAtMs: T0, endsAtMs: T0 + 2 * 3_600_000 });
+    expect(getLokiLabelNames).toHaveBeenCalledWith('logs1', { fromMs: T0, toMs: T0 + 2 * 3_600_000 });
+    expect(body.labelWindow).toEqual({ from: '2026-03-01T10:00:00.000Z', to: '2026-03-01T12:00:00.000Z', defaulted: false });
+  });
+
+  it('defaults the label window to the 24 hours before now, and says so', async () => {
+    const { run, getLokiLabelNames } = setup({ labelNames: ['app'] });
+    const before = Date.now();
+    const { body } = await run('list_log_sources', { connection: SOURCE });
+    const [, window] = getLokiLabelNames.mock.calls[0]!;
+    expect(window.toMs).toBeGreaterThanOrEqual(before);
+    expect(window.toMs - window.fromMs).toBe(24 * 3_600_000);
+    expect(body.labelWindow.defaulted).toBe(true);
+  });
+
+  it('refuses a window when there are no Loki label names for it to scope', async () => {
+    const { run } = setup({ withGraylog: true });
+    const noConnection = await run('list_log_sources', { startsAtMs: T0 });
+    expect(noConnection.isError).toBe(true);
+    expect(noConnection.text).toMatch(/only scope a Loki source/);
+    const graylogConnection = await run('list_log_sources', { connection: 'gl', startsAtMs: T0 });
+    expect(graylogConnection.isError).toBe(true);
+    expect(graylogConnection.text).toMatch(/only scope a Loki source/);
   });
 });
 
@@ -202,6 +231,41 @@ describe('correlate_logs with Loki', () => {
     });
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/returned the full 2-line cap \(Loki reports no total\)/);
+    // #281: the cap named is the one this call ran with, not MAX_LOG_LINES,
+    // and the advice is to raise it: a smaller limit only truncates more.
+    expect(r.text).toMatch(/truncated at the 2-line cap/);
+    expect(r.text).not.toMatch(/500-line cap|smaller/);
+    expect(r.text).toMatch(/raise "limit" \(up to MAX_LOG_LINES=500\)/);
+  });
+
+  it('advises raising MAX_LOG_LINES, not limit, when the call already ran at that cap', async () => {
+    const many = Array.from({ length: 500 }, (_, i) => ({ t: T0 + i, line: `{"request_id":"b${i}"}`, labels: { app: 'backend' } }));
+    const { run } = setup({ linesByExpr: { '{app="frontend"}': front, '{app="backend"}': many } });
+    const r = await run('correlate_logs', {
+      query: 'loki({app="frontend"})[5m] unless on(request_id) loki({app="backend"})[5m]',
+      startsAtMs: T0,
+      endsAtMs: T0 + 60_000,
+      connection: SOURCE,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/truncated at the 500-line cap/);
+    expect(r.text).toMatch(/raise MAX_LOG_LINES/);
+    expect(r.text).not.toMatch(/raise "limit"/);
+  });
+
+  // #281: the metric-query refusal told correlate_logs callers to use
+  // execute_adhoc_query, which can't be put inside a join.
+  it('refuses a non-selector inside loki(...) in terms of the join, not search_logs', async () => {
+    const { run } = setup({});
+    const r = await run('correlate_logs', {
+      query: 'loki(service:frontend)[5m] and on(request_id) loki({app="backend"})[5m]',
+      startsAtMs: T0,
+      endsAtMs: T0 + 60_000,
+      connection: SOURCE,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/loki\(\.\.\.\) stream in correlate_logs takes a stream selector/);
+    expect(r.text).not.toMatch(/search_logs returns|execute_adhoc_query/);
   });
 });
 

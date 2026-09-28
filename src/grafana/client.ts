@@ -51,6 +51,18 @@ export class GrafanaApiError extends Error {
 /** How long listDatasources() reuses one answer — see its doc comment. */
 export const DATASOURCES_TTL_MS = 30_000;
 
+/** The time range a Loki label listing covers, epoch ms. */
+export interface LokiLabelWindow {
+  fromMs: number;
+  toMs: number;
+}
+
+/** Loki's label endpoints take `start`/`end` as Unix nanoseconds. */
+function lokiWindowParams(window: LokiLabelWindow): URLSearchParams {
+  const ns = (ms: number) => (BigInt(Math.trunc(ms)) * 1_000_000n).toString();
+  return new URLSearchParams({ start: ns(window.fromMs), end: ns(window.toMs) });
+}
+
 /**
  * Read-only Grafana HTTP client. This is a deliberate allowlist: it exposes
  * exactly the endpoints this server needs and nothing else. There is no
@@ -254,12 +266,16 @@ export class GrafanaClient {
    * Unlike Prometheus's, Grafana's Loki backend prefixes every resource path
    * with `/loki/api/v1/` itself, so the path here is only what follows it —
    * spelling the prefix out reached `/loki/api/v1/loki/api/v1/...` and 404ed.
+   *
+   * The window is required, not defaulted here: Loki's own default for both
+   * label endpoints is the last 6 hours, so a service that stopped logging
+   * before that (it crashed, or was renamed) silently drops out of an
+   * investigation of anything older.
    */
-  async getLokiLabelValues(uid: string, label: string, selector?: string): Promise<string[]> {
-    const qs = new URLSearchParams();
+  async getLokiLabelValues(uid: string, label: string, window: LokiLabelWindow, selector?: string): Promise<string[]> {
+    const qs = lokiWindowParams(window);
     if (selector) qs.set('query', selector);
-    const query = qs.toString();
-    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/label/${encodeURIComponent(label)}/values${query ? `?${query}` : ''}`;
+    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/label/${encodeURIComponent(label)}/values?${qs}`;
     return this.parseLabelValues(await this.request<LabelValuesResponse>('GET', path), path);
   }
 
@@ -267,10 +283,15 @@ export class GrafanaClient {
    * A Loki datasource's stream label *names* (the keys a selector can match
    * on) — the Loki side of what list_log_sources shows as a Graylog
    * connection's streams. Fixed path to exactly the label-names resource,
-   * same rationale as getLokiLabelValues.
+   * same rationale (and same required window) as getLokiLabelValues.
+   *
+   * The query string is also what makes this reachable on Grafana 9.5 through
+   * 10.4: their Loki backend only forwards a resource URL that starts with
+   * `labels?`, so a bare `labels` is refused before it reaches Loki. v11
+   * dropped that check.
    */
-  async getLokiLabelNames(uid: string): Promise<string[]> {
-    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/labels`;
+  async getLokiLabelNames(uid: string, window: LokiLabelWindow): Promise<string[]> {
+    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/labels?${lokiWindowParams(window)}`;
     return this.parseLabelValues(await this.request<LabelValuesResponse>('GET', path), path);
   }
 

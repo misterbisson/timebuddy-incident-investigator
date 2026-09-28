@@ -117,6 +117,7 @@ export class HistoricalLokiAdapter implements DataSourceAdapter {
       fromMs: this.window.fromMs,
       toMs: this.window.toMs,
       limit: this.limit,
+      caller: 'correlate_logs',
     });
     this.fetchStats.push({ selector: trimmed, fetched: searched.lines.length, truncated: searched.truncated });
     for (const line of searched.lines) {

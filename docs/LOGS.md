@@ -108,8 +108,7 @@ Loki has no web UI and, in practice, no credential of its own that users hold: p
 it through Grafana, whose datasource config keeps Loki's URL and secret server-side. So a
 Loki source is **not a new kind of `LogConnection`**. [`src/logs/sources.ts`](../src/logs/sources.ts)
 derives one from every `loki` datasource on every Grafana connection, on every call, with
-id `<grafanaConnectionId>/<datasourceUid>` (split on the *last* `/`, since a datasource uid
-can't contain one) and its Grafana connection's `tags`. Nothing to configure, no second
+id `<grafanaConnectionId>/<datasourceUid>` and its Grafana connection's `tags`. Nothing to configure, no second
 secret, and a datasource added in Grafana is searchable on the next call. A direct-to-Loki
 connection kind is deliberately not built: it would need a gateway URL, a token, and a
 tenant id that nobody outside the owning team usually has. Revisit that only if the Grafana
@@ -120,9 +119,18 @@ hard error listing ids — with one rule added because sources are now *discover
 Grafana connection whose datasource list can't be read blocks the sole-source default. It
 might hold a Loki datasource, so "only one source" can't be established, and falling back
 to the lone Graylog connection anyway is the exact failure this exists to stop (a Loki-only
-service searched in Graylog, empty, read as "no errors"). An explicit id never needs the
-listing. `list_log_sources` reports the same failures as `lokiDiscoveryProblems` rather than
-failing.
+service searched in Graylog, empty, read as "no errors"). `list_log_sources` reports the same
+failures as `lokiDiscoveryProblems` rather than failing.
+
+An explicit Loki id is never split on a `/`. Grafana only enforces a `/`-free datasource uid
+from v12 (11.1 warns, 11.2 adds an opt-in check), and a uid created earlier survives the
+upgrade, so `team/logs` is a real uid, and splitting on the last `/` listed a source that
+could then never be resolved. The resolver matches the id against the known Grafana
+connection ids instead, since those are the half this server controls, and takes the rest as
+the uid. An id that means two things is refused, naming both, rather than resolved to either:
+two connection ids that both prefix it, or a Graylog connection id that is also a Loki
+source's id (the Graylog one used to win silently). So an explicit Graylog id reads a Grafana
+connection's datasource list only when it begins with that connection's id and a `/`.
 
 **The query path** ([`src/logs/loki.ts`](../src/logs/loki.ts)) is the already-allowlisted
 `POST /api/ds/query` — no new endpoint. The query is model-authored, exactly as a Graylog
@@ -174,6 +182,17 @@ Graylog connection's streams. Grafana's Loki backend prefixes every resource pat
 `/loki/api/v1/` itself (unchanged 9.5 through 12.x), so resource paths here are only what
 follows it. `getLokiLabelValues` used to repeat the prefix and 404, and its test asserted the
 doubled path.
+
+Both label calls always send a `start`/`end` window, for two reasons. Loki defaults both
+endpoints to the last 6 hours, so without one a service that stopped logging before that (it
+crashed, or was renamed) disappears from an investigation of anything older. And Grafana 9.5
+through 10.4 only forward a Loki resource URL beginning `labels?`, so a bare `labels` is refused
+before it reaches Loki; v11 dropped that check. The window is required on the client methods
+rather than defaulted there. `list_log_sources` and `discover_label_values` take an optional
+`startsAtMs`/`endsAtMs`, default to the 24 hours before now (or `MAX_LOOKBACK_HOURS` if
+shorter), and report the range used, since which labels exist depends on it. Passing a window
+where it would scope nothing (no Loki source, or a non-Loki datasource) is refused rather than
+ignored.
 
 ## Truncation: surfaced for joins, refused for anti-joins
 

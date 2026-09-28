@@ -75,7 +75,12 @@ export function fakeLokiClient(opts: {
   datasources?: DatasourceInfo[];
   labelNames?: string[];
   frame?: (lines: FixtureLine[]) => GrafanaFrame;
-}): { client: GrafanaClient; queryDs: ReturnType<typeof vi.fn>; listDatasources: ReturnType<typeof vi.fn> } {
+}): {
+  client: GrafanaClient;
+  queryDs: ReturnType<typeof vi.fn>;
+  listDatasources: ReturnType<typeof vi.fn>;
+  getLokiLabelNames: ReturnType<typeof vi.fn>;
+} {
   const queryDs = vi.fn(async (req: DsQueryRequest): Promise<DsQueryResponse> => {
     const q = req.queries[0]!;
     const found = opts.linesByExpr?.[String(q.expr)] ?? [];
@@ -88,10 +93,7 @@ export function fakeLokiClient(opts: {
     return { results: { A: { frames: [(opts.frame ?? legacyLogFrame)(byStream)] } } };
   });
   const listDatasources = vi.fn(async () => opts.datasources ?? [LOKI_DS]);
-  const client = {
-    queryDs,
-    listDatasources,
-    getLokiLabelNames: vi.fn(async () => opts.labelNames ?? []),
-  } as unknown as GrafanaClient;
-  return { client, queryDs, listDatasources };
+  const getLokiLabelNames = vi.fn(async () => opts.labelNames ?? []);
+  const client = { queryDs, listDatasources, getLokiLabelNames } as unknown as GrafanaClient;
+  return { client, queryDs, listDatasources, getLokiLabelNames };
 }
