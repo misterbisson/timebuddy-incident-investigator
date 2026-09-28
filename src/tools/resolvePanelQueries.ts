@@ -87,7 +87,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
               targets: await Promise.all(
                 panel.targets.map(async (t) => ({
                   refId: t.refId,
-                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
+                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
                   resolvedQuery: stripInactiveQueryFields(substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints)),
                 })),
               ),

@@ -369,7 +369,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
               const targets = await Promise.all(
                 panel.targets.map(async (t) => ({
                   refId: t.refId,
-                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides),
+                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
                   raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints),
                 })),
               );
