@@ -222,8 +222,12 @@ search.
        (`up default 0`) tells a VictoriaMetrics instance from a Prometheus one, which decides
        whether `increase(x[1m])` at a 60s scrape is exact or empty. Ask the datasource instead
        of asking a person, when the fact is about the datasource.
-     - It takes InfluxQL against an InfluxDB datasource and PromQL/MetricsQL against a
-       Prometheus-type one. A **PromQL range query requires `stepSeconds`** — it is never
+     - It takes InfluxQL against an InfluxDB datasource, PromQL/MetricsQL against a
+       Prometheus-type one, and LogQL **metric** queries against a Loki one — e.g.
+       `sum by (level) (count_over_time({app="x"} |= "error" [1m]))` to see when errors in a
+       service's logs started, at a resolution you chose. A LogQL *log* query (one that starts
+       with `{...}` and returns lines) is refused here; wrap it in `count_over_time` to count it.
+       A **PromQL or LogQL range query requires `stepSeconds`** — it is never
        inferred, because the step decides the answer of every range-vector function
        (`rate`/`increase`/`delta`/`*_over_time`). Pass the scrape interval (e.g. 15 or 60) when
        you want real samples. Then read the result's `step.consistentWithRequested`: `false`

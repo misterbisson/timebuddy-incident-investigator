@@ -455,8 +455,8 @@ limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LO
   exception is **`execute_adhoc_query`**, which is **absent unless you explicitly turn it on
   for a specific workspace and endpoint** — see [Ad-hoc queries](#ad-hoc-queries-off-by-default)
   below. When it is on, it reaches only datasource types you named, in a language whose reads
-  can be told from its writes (single-statement `SELECT`/`SHOW` for InfluxQL; PromQL, which has
-  no write form at all), and every query — including refused ones — is recorded with a Grafana
+  can be told from its writes (single-statement `SELECT`/`SHOW` for InfluxQL; PromQL and LogQL
+  metric queries, which have no write form at all), and every query — including refused ones — is recorded with a Grafana
   Explore URL that replays it.
 - `security/limits.ts` caps query time-range span, max data points, and concurrent outgoing
   requests.
@@ -531,13 +531,17 @@ What holds when it's on:
   DDL form, and Grafana's Prometheus backend only ever reaches its query endpoints. What the
   PromQL guard does enforce is one expression per call (so the audit record, the `provenance`
   marking, and the Explore URL each describe exactly what ran) and refusal of anything it can't
-  read as one — an unterminated string, an unbalanced bracket, a stray `;`.
+  read as one — an unterminated string, an unbalanced bracket, a stray `;`. LogQL is the same
+  case for the same reason (no write form; Grafana's Loki backend only reaches Loki's query
+  endpoints), and gets the same guard plus one rule: only *metric* queries (`count_over_time`,
+  `rate`, `sum by`, …) run here, since a log query returns lines rather than series.
 - **Only datasource types with a guard.** InfluxQL against `influxdb`, PromQL/MetricsQL against
-  `prometheus` (which is how most VictoriaMetrics instances are configured). A type you
+  `prometheus` (which is how most VictoriaMetrics instances are configured), LogQL metric
+  queries against `loki` (authorize it as `<host>:loki`). A type you
   authorize but that has no read-only guard yet (raw SQL, for instance) is still refused —
   being willing isn't the same as being verifiable.
-- **A step you chose, and a step you can check.** A PromQL range query requires an explicit
-  `stepSeconds`; it is never inferred, because the step decides the answer of every
+- **A step you chose, and a step you can check.** A PromQL or LogQL range query requires an
+  explicit `stepSeconds`; it is never inferred, because the step decides the answer of every
   range-vector function (`rate`, `increase`, `delta`, `*_over_time`). The result then reports
   what the returned timestamps say about the step the datasource actually used, and says it
   carefully: a mismatch is reported only when the numbers *prove* one, because a sparse metric
