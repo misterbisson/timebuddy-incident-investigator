@@ -316,12 +316,13 @@ search.
    designed.
 
    If a panel's queries fail with something like "404 Data source not found" for any *other*
-   reason, check whether its datasource reference is a literal name rather than a UID (not a
-   `$variable` — those are already handled). `list_datasources` tells you whether a datasource
-   matching that name still exists under a different UID — if it does, that's a real, reportable
-   finding ("this dashboard's datasource reference is stale, here's the correct UID"), not a dead
-   end. If nothing close shows up, say so plainly rather than retrying — that dashboard needs a
-   Grafana-side fix, not something any tool call here can resolve.
+   reason, its datasource reference matches no datasource by UID *or* by exact name — both
+   `$variable` references and references that store a datasource's name in the UID field are
+   already resolved for you. Check `list_datasources` for a near-miss name (a rename, a changed
+   prefix): if one exists, that's a real, reportable finding ("this dashboard's datasource
+   reference is stale; this is probably the datasource it meant"), not a dead end. If nothing close
+   shows up, say so plainly rather than retrying — that dashboard needs a Grafana-side fix, not
+   something any tool call here can resolve.
 
 6. **Pull corroborating log evidence**, once you have a primary panel and/or some identifiers.
    **This step is not optional and is not conditional on how the metrics looked.** Always run it —

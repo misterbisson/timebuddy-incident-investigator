@@ -252,9 +252,9 @@ function templateVariableName(ref: string): string | undefined {
  * guess.
  *
  * The resolved value may itself be a UID (modern Grafana) or a datasource
- * name (older Grafana) rather than a UID — callers with access to a
- * GrafanaClient should fall back to a name lookup via listDatasources() if
- * it doesn't match a known UID; see tools/shared.ts's resolveTargetDatasource.
+ * name (older Grafana) rather than a UID — tools/shared.ts's
+ * resolveTargetDatasource does the name lookup, for this value and for a
+ * literal ref alike.
  */
 export function resolveDatasourceVariable(
   ref: string,

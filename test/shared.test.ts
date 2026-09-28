@@ -16,11 +16,43 @@ function fakeRegistry(connections: GrafanaConnection[]): ConnectionRegistry {
 }
 
 describe('resolveTargetDatasource', () => {
-  it('passes through a ref that is not a variable reference without touching the client', async () => {
+  it('keeps a literal ref that is already a real UID', async () => {
+    const { client } = fakeClient([{ uid: 'prom1', name: 'Prometheus' }]);
+    expect(await resolveTargetDatasource(client, 'prom1', [], {})).toBe('prom1');
+  });
+
+  // #262: Grafana's frontend resolves a datasource ref by uid and then by name,
+  // so a panel whose `uid` field holds the datasource's *name* renders fine —
+  // but /api/ds/query resolves strictly by uid and 404s on it.
+  it('resolves a literal ref holding a datasource name (not a variable) to that datasource\'s UID', async () => {
+    const { client } = fakeClient([{ uid: 'abc123', name: 'Example-Metrics' }]);
+    expect(await resolveTargetDatasource(client, 'Example-Metrics', [], {})).toBe('abc123');
+  });
+
+  it('prefers a UID match over a name match when a ref is both', async () => {
+    const { client } = fakeClient([
+      { uid: 'shared', name: 'Other' },
+      { uid: 'xyz', name: 'shared' },
+    ]);
+    expect(await resolveTargetDatasource(client, 'shared', [], {})).toBe('shared');
+  });
+
+  it('passes Grafana pseudo-datasource refs through without touching the client', async () => {
     const { client, listDatasources } = fakeClient([]);
-    const result = await resolveTargetDatasource(client, 'prom1', [], {});
-    expect(result).toBe('prom1');
+    for (const ref of ['-- Dashboard --', '-- Grafana --', '__expr__', '-- Mixed --']) {
+      expect(await resolveTargetDatasource(client, ref, [], {})).toBe(ref);
+    }
     expect(listDatasources).not.toHaveBeenCalled();
+  });
+
+  it('passes the ref through unchanged when the datasource list cannot be read', async () => {
+    // A token without datasources:read could replay a real-UID panel before
+    // this lookup existed, so a failed lookup must not take that away.
+    const listDatasources = vi.fn(async () => {
+      throw new GrafanaApiError('forbidden', 403, '/api/datasources');
+    });
+    const client = { listDatasources } as unknown as GrafanaClient;
+    expect(await resolveTargetDatasource(client, 'prom1', [], {})).toBe('prom1');
   });
 
   it('passes through undefined without touching the client', async () => {
