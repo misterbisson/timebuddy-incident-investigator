@@ -30,6 +30,9 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
         'rather than zero — judge it on "incidentStats" magnitude and ' +
         'corroboration, and don\'t describe it as statistically unusual. It also flags when a ' +
         'similar-magnitude window recurs daily/weekly so recurring patterns aren\'t mistaken for a fresh anomaly. ' +
+        '"errors" (incident window, by refId) and "controlErrors" (by control label) appear when a query was ' +
+        'rejected or returned text rows (log lines) instead of numbers — an empty "series" with "errors" set is a ' +
+        'failed comparison, not a quiet panel. ' +
         'Always check each series\' "briefExcursions" too, even when classification says common — that ' +
         'classification is based on the whole window\'s *mean*, which can dilute a real, sharp, short-lived event ' +
         '(e.g. a health signal that was fully down for a few minutes inside a much longer analysis window) into ' +
@@ -159,11 +162,23 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
             panelTitle: incidentExec!.panel.title,
             url,
           });
+          // Surfaced rather than dropped (#263): series only lists what came
+          // back, so a refId the datasource rejected — or one that returned
+          // text rows rather than numbers — would otherwise vanish from the
+          // result and read as a panel with nothing to compare.
+          const incidentErrors = incidentExec!.result.errors;
+          const controlErrors = Object.fromEntries(
+            controlExecs
+              .filter((c) => Object.keys(c.result.errors).length > 0)
+              .map((c) => [c.window.label, c.result.errors]),
+          );
           const result = {
             url,
             window: windowSet.incident,
             controls: windowSet.controls,
             series: seriesResults,
+            ...(Object.keys(incidentErrors).length > 0 ? { errors: incidentErrors } : {}),
+            ...(Object.keys(controlErrors).length > 0 ? { controlErrors } : {}),
             warnings,
             ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
           };

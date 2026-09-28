@@ -111,4 +111,125 @@ describe('executeQueryWindow', () => {
       ),
     ).rejects.toThrow(LimitExceededError);
   });
+
+  // #263: a log query's frame is a time field plus string fields and no number
+  // field. Dropping it silently made "this query returned log lines" read as
+  // "this panel had no data in the window".
+  describe('log-lines frames', () => {
+    const logFrame = (rows: number) => ({
+      schema: {
+        refId: 'A',
+        meta: { type: 'log-lines' },
+        fields: [
+          { name: 'labels', type: 'other' },
+          { name: 'Time', type: 'time' },
+          { name: 'Line', type: 'string' },
+          { name: 'tsNs', type: 'string' },
+          { name: 'id', type: 'string' },
+        ],
+      },
+      data: {
+        values: [
+          Array.from({ length: rows }, () => ({ app: 'checkout' })),
+          Array.from({ length: rows }, (_, i) => 1_700_000_000_000 + i),
+          Array.from({ length: rows }, () => 'GET /cart 500'),
+          Array.from({ length: rows }, (_, i) => String((1_700_000_000_000 + i) * 1e6)),
+          Array.from({ length: rows }, (_, i) => String(i)),
+        ],
+      },
+    });
+    const target = { refId: 'A', datasourceUid: 'logs1', raw: { refId: 'A', expr: '{app="checkout"}' } };
+
+    it('reports a log-lines frame as an error for its refId instead of returning nothing', async () => {
+      const client = fakeClient({ results: { A: { frames: [logFrame(3)] } } } as DsQueryResponse);
+      const result = await executeQueryWindow(client, [target], window, config);
+      expect(result.series).toEqual([]);
+      expect(result.errors.A).toMatch(/3 row\(s\) of text/);
+      expect(result.errors.A).toMatch(/count_over_time/);
+    });
+
+    it('still reports it when the log query matched nothing', async () => {
+      const client = fakeClient({ results: { A: { frames: [logFrame(0)] } } } as DsQueryResponse);
+      const result = await executeQueryWindow(client, [target], window, config);
+      expect(result.errors.A).toMatch(/0 row\(s\) of text/);
+    });
+
+    it('leaves a frame with a string label column and a numeric value alone', async () => {
+      const response: DsQueryResponse = {
+        results: {
+          A: {
+            frames: [
+              {
+                schema: {
+                  refId: 'A',
+                  fields: [
+                    { name: 'Time', type: 'time' },
+                    { name: 'host', type: 'string' },
+                    { name: 'Value', type: 'number' },
+                  ],
+                },
+                data: { values: [[1_700_000_000_000], ['h1'], [4]] },
+              },
+            ],
+          },
+        },
+      };
+      const result = await executeQueryWindow(fakeClient(response), [target], window, config);
+      expect(result.series).toHaveLength(1);
+      expect(result.errors).toEqual({});
+    });
+
+    // Review of #267: the check ran per frame but errors are keyed per refId,
+    // so a refId returning a numeric frame *and* a text frame — InfluxQL's
+    // SELECT mean("value"), last("state") comes back as one frame per column —
+    // got a valid series plus an error saying there was nothing to compute.
+    it('does not report a refId that also returned numeric series, and keeps its series', async () => {
+      const response: DsQueryResponse = {
+        results: {
+          A: {
+            frames: [
+              {
+                schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'value', type: 'number' }] },
+                data: { values: [[1_700_000_000_000, 1_700_000_060_000], [1, 2]] },
+              },
+              {
+                schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'state', type: 'string' }] },
+                data: { values: [[1_700_000_000_000, 1_700_000_060_000], ['ok', 'degraded']] },
+              },
+            ],
+          },
+        },
+      };
+      const result = await executeQueryWindow(fakeClient(response), [target], window, config);
+      expect(result.series).toHaveLength(1);
+      expect(result.series[0]!.points.map((p) => p.v)).toEqual([1, 2]);
+      expect(result.errors).toEqual({});
+    });
+
+    it('reports the text-only refId when another refId in the same request is numeric', async () => {
+      const response: DsQueryResponse = {
+        results: {
+          A: {
+            frames: [
+              {
+                schema: { refId: 'A', fields: [{ name: 'Time', type: 'time' }, { name: 'value', type: 'number' }] },
+                data: { values: [[1_700_000_000_000], [1]] },
+              },
+            ],
+          },
+          B: { frames: [{ ...logFrame(2), schema: { ...logFrame(2).schema, refId: 'B' } }] },
+        },
+      };
+      const result = await executeQueryWindow(fakeClient(response), [target, { ...target, refId: 'B' }], window, config);
+      expect(result.series.map((s) => s.refId)).toEqual(['A']);
+      expect(Object.keys(result.errors)).toEqual(['B']);
+      expect(result.errors.B).toMatch(/2 row\(s\) of text/);
+    });
+
+    it('does not overwrite a datasource error already reported for the same refId', async () => {
+      const client = fakeClient({ results: { A: { error: 'parse error at line 1', frames: [logFrame(1)] } } } as DsQueryResponse);
+      const result = await executeQueryWindow(client, [target], window, config);
+      expect(result.errors.A).toBe('parse error at line 1');
+    });
+  });
 });
