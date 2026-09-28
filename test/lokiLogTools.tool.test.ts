@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { registerSearchLogs } from '../src/tools/searchLogs.js';
 import { registerListLogSources } from '../src/tools/listLogSources.js';
 import { registerCorrelateLogs } from '../src/tools/correlateLogs.js';
@@ -39,7 +40,7 @@ function config(redactionPatterns: RegExp[] = []): Config {
 function setup(opts: { linesByExpr?: Record<string, FixtureLine[] | Error>; labelNames?: string[]; withGraylog?: boolean; redact?: RegExp[] } = {}) {
   const loki = fakeLokiClient({ linesByExpr: opts.linesByExpr, labelNames: opts.labelNames });
   const activityLog = createActivityLog();
-  const { server, call } = fakeServer();
+  const { server, call, inputSchema } = fakeServer();
   const ctx = {
     registry: fakeRegistry(grafana, loki.client),
     logRegistry: fakeLogRegistry(opts.withGraylog ? graylog : [], fakeGraylogClient({ messages: [] }).client),
@@ -53,7 +54,7 @@ function setup(opts: { linesByExpr?: Record<string, FixtureLine[] | Error>; labe
     const r = (await call(name, args)) as { content: Array<{ text: string }>; isError?: boolean };
     return { isError: r.isError, text: r.content[0]!.text, body: r.isError ? undefined : JSON.parse(r.content[0]!.text) };
   };
-  return { run, activityLog, queryDs: loki.queryDs };
+  return { run, activityLog, queryDs: loki.queryDs, inputSchema };
 }
 
 const lines: FixtureLine[] = [
@@ -201,5 +202,15 @@ describe('correlate_logs with Loki', () => {
     });
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/returned the full 2-line cap \(Loki reports no total\)/);
+  });
+});
+
+// #280: `limit` was z.number(), so -5 and 2.5 reached the log source.
+describe('the log tools\' limit schema', () => {
+  it.each(['search_logs', 'correlate_logs'])('%s accepts only a positive whole number', (tool) => {
+    const limit = z.object(setup().inputSchema(tool)).shape.limit;
+    expect(limit.safeParse(50).success).toBe(true);
+    expect(limit.safeParse(undefined).success).toBe(true);
+    for (const bad of [-5, 0, 2.5]) expect(limit.safeParse(bad).success).toBe(false);
   });
 });

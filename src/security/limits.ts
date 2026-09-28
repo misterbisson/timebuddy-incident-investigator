@@ -23,9 +23,18 @@ export function clampMaxDataPoints(requested: number | undefined, config: Config
   return Math.min(requested, config.maxDataPoints);
 }
 
-/** Caps search_logs/correlate_logs' `limit` so a single call can't request an unbounded number of log lines. */
+/**
+ * Caps search_logs/correlate_logs' `limit` so a single call can't request an
+ * unbounded number of log lines. Both tools' schemas already require a
+ * positive integer; this refuses anything else too, rather than sending it on
+ * (a negative limit reached Loki as `maxLines: -5` and read back as a
+ * truncated empty result).
+ */
 export function clampLogLimit(requested: number | undefined, config: Config): number {
-  if (!requested) return config.maxLogLines;
+  if (requested === undefined) return config.maxLogLines;
+  if (!Number.isInteger(requested) || requested < 1) {
+    throw new LimitExceededError(`limit must be a positive whole number of log lines, got ${requested}`);
+  }
   return Math.min(requested, config.maxLogLines);
 }
 

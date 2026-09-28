@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clampLogLimit,
   clampScreenshotArea,
   clampScreenshotDimension,
   clampSeriesPoints,
@@ -150,5 +151,21 @@ describe('clampScreenshotDimension fallback vs clamp', () => {
   // range, so this only arises if a caller passes a bad fallback.
   it('bounds an out-of-range fallback without calling it a clamp', () => {
     expect(clampScreenshotDimension(Number.NaN, 999_999)).toEqual({ value: MAX_SCREENSHOT_PX, clamped: false });
+  });
+});
+
+// #280: a negative limit reached Loki as maxLines: -5 and read back as a
+// truncated empty result; a fractional one would be refused by Grafana's int64.
+describe('clampLogLimit', () => {
+  const logConfig = { ...config, maxLogLines: 500 };
+
+  it('defaults to the cap and caps what it is given', () => {
+    expect(clampLogLimit(undefined, logConfig)).toBe(500);
+    expect(clampLogLimit(50, logConfig)).toBe(50);
+    expect(clampLogLimit(5000, logConfig)).toBe(500);
+  });
+
+  it.each([-5, 0, 2.5, Number.NaN])('refuses %s rather than sending it on', (limit) => {
+    expect(() => clampLogLimit(limit, logConfig)).toThrow(/positive whole number/);
   });
 });

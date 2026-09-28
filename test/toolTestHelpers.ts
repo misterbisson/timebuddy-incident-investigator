@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import type { ZodRawShape } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { GrafanaClient } from '../src/grafana/client.js';
 import type { ConnectionRegistry } from '../src/grafana/registry.js';
@@ -9,15 +10,27 @@ import type { DashboardGetResponse, DsQueryRequest, DsQueryResponse } from '../s
 import type { GraylogMessageWrapper, GraylogStream } from '../src/graylog/types.js';
 
 /** Captures a tool's registered handler so it can be invoked directly, without spinning up a real MCP server/transport. */
-export function fakeServer(): { server: McpServer; call: (name: string, args: unknown) => Promise<unknown> } {
+export function fakeServer(): {
+  server: McpServer;
+  call: (name: string, args: unknown) => Promise<unknown>;
+  /** The tool's registered inputSchema, for tests of what the schema itself accepts — `call` bypasses it. */
+  inputSchema: (name: string) => ZodRawShape;
+} {
   const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+  const schemas = new Map<string, ZodRawShape>();
   const server = {
-    registerTool: (name: string, _meta: unknown, handler: (args: unknown) => Promise<unknown>) => {
+    registerTool: (name: string, meta: { inputSchema?: ZodRawShape }, handler: (args: unknown) => Promise<unknown>) => {
       handlers.set(name, handler);
+      schemas.set(name, meta.inputSchema ?? {});
     },
   } as unknown as McpServer;
   return {
     server,
+    inputSchema: (name) => {
+      const schema = schemas.get(name);
+      if (!schema) throw new Error(`No tool registered as "${name}"`);
+      return schema;
+    },
     call: async (name, args) => {
       const handler = handlers.get(name);
       if (!handler) throw new Error(`No tool registered as "${name}"`);

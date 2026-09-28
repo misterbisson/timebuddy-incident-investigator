@@ -40,7 +40,7 @@ export function registerCorrelateLogs(server: McpServer, { registry, logRegistry
         startsAtMs: epochMsSchema.describe('Search window start — epoch ms or an ISO 8601 date/time'),
         endsAtMs: epochMsSchema.optional().describe('Search window end — epoch ms or ISO 8601; defaults to now'),
         streamId: z.string().optional().describe('Graylog only: restrict every stream in the query to one Graylog stream; overrides the connection\'s own default streamId if it has one'),
-        limit: z.number().optional().describe(`Max messages fetched per stream before joining (capped at ${config.maxLogLines})`),
+        limit: z.number().int().positive().optional().describe(`Max messages fetched per stream before joining (capped at ${config.maxLogLines})`),
         connection: z
           .string()
           .optional()

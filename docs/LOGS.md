@@ -143,7 +143,13 @@ only. Its header says why that is enough for LogQL. Four details are load-bearin
   numeric frame (a metric result) or an unrecognized layout throws rather than reading as
   "no lines".
 - **`direction: backward`** (newest first, Loki's default), so a capped search keeps the end
-  of the window.
+  of the window. That decides *which* lines come back, since Loki applies the limit to the
+  newest lines overall, but not their order: Grafana groups a frame's rows by stream.
+  `parseLokiLogFrames` therefore sorts newest first itself, by nanosecond timestamp. That is
+  `tsNs` in the legacy layout, and in the dataplane layout the time column's epoch ms plus the
+  frame's `data.nanos` offset (the plugin SDK leaves `nanos` out when every offset is zero).
+  The test fixture groups rows by stream the same way, so a test that assumed arrival order
+  fails.
 
 **Correlation** uses [`HistoricalLokiAdapter`](../src/logs/lokiAdapter.ts), registered under
 `loki` so `loki(...)` streams reach it. `correlate_logs` checks each stream's source name

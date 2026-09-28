@@ -106,9 +106,16 @@ function toRecord(value: unknown): Record<string, string> {
  * recognizable line field is a layout this doesn't know — both are refused
  * rather than read as "no lines", since an empty result is exactly what a
  * misread would look like.
+ *
+ * Lines come back **newest first**, sorted here. Loki applies the limit to the
+ * newest lines overall, but Grafana then groups a frame's rows by stream, so
+ * they don't arrive in time order. The sort key is the nanosecond timestamp:
+ * the legacy layout's `tsNs` column, otherwise the time column's epoch ms plus
+ * the frame's `data.nanos` offset for that row. The plugin SDK leaves `nanos`
+ * out when every offset is zero, so a missing one means exact milliseconds.
  */
 export function parseLokiLogFrames(frames: GrafanaFrame[]): LokiLine[] {
-  const lines: LokiLine[] = [];
+  const lines: Array<{ line: LokiLine; sortNs: bigint | undefined }> = [];
   for (const frame of frames) {
     const fields = frame.schema.fields;
     if (fields.some((f) => f.type === 'number')) {
@@ -130,22 +137,43 @@ export function parseLokiLogFrames(frames: GrafanaFrame[]): LokiLine[] {
     // Older Grafana put one stream per frame, with that stream's labels on the
     // line field itself rather than in a labels column.
     const frameLabels = fields[lineIdx]!.labels ?? {};
+    const nanos = frame.data.nanos?.[timeIdx] ?? undefined;
 
     const times = frame.data.values[timeIdx] ?? [];
     const bodies = frame.data.values[lineIdx] ?? [];
     for (let i = 0; i < times.length; i += 1) {
       const t = times[i];
       const ms = typeof t === 'number' ? t : Date.parse(String(t));
-      const tsNs = tsNsIdx === -1 ? undefined : frame.data.values[tsNsIdx]?.[i];
+      const timestampNs = nanosecondTimestamp(ms, tsNsIdx === -1 ? undefined : frame.data.values[tsNsIdx]?.[i], nanos?.[i]);
       lines.push({
-        timestamp: Number.isFinite(ms) ? new Date(ms).toISOString() : String(t),
-        ...(typeof tsNs === 'string' ? { timestampNs: tsNs } : {}),
-        message: String(bodies[i] ?? ''),
-        labels: { ...frameLabels, ...(labelsIdx === -1 ? {} : toRecord(frame.data.values[labelsIdx]?.[i])) },
+        line: {
+          timestamp: Number.isFinite(ms) ? new Date(ms).toISOString() : String(t),
+          ...(timestampNs !== undefined ? { timestampNs } : {}),
+          message: String(bodies[i] ?? ''),
+          labels: { ...frameLabels, ...(labelsIdx === -1 ? {} : toRecord(frame.data.values[labelsIdx]?.[i])) },
+        },
+        sortNs: timestampNs === undefined ? undefined : BigInt(timestampNs),
       });
     }
   }
-  return lines;
+  // Newest first; a line whose time couldn't be read sorts last. Array#sort is
+  // stable, so lines at the same nanosecond keep the frame's order.
+  lines.sort((a, b) => {
+    if (a.sortNs === undefined || b.sortNs === undefined) return a.sortNs === undefined ? (b.sortNs === undefined ? 0 : 1) : -1;
+    return a.sortNs === b.sortNs ? 0 : a.sortNs > b.sortNs ? -1 : 1;
+  });
+  return lines.map((l) => l.line);
+}
+
+/**
+ * A row's Unix-nanosecond timestamp as a decimal string: the legacy layout's
+ * `tsNs` when it has one, otherwise epoch ms plus the `data.nanos` offset.
+ * Undefined when neither is readable.
+ */
+function nanosecondTimestamp(ms: number, tsNs: unknown, nanoOffset: number | undefined): string | undefined {
+  if (typeof tsNs === 'string' && /^\d+$/.test(tsNs)) return tsNs;
+  if (!Number.isInteger(ms)) return undefined;
+  return (BigInt(ms) * 1_000_000n + BigInt(Number.isInteger(nanoOffset) ? nanoOffset! : 0)).toString();
 }
 
 /**
