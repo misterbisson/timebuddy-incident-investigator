@@ -75,7 +75,7 @@ describe('list_log_sources tool', () => {
       isError?: boolean;
     };
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toMatch(/Unknown connection id "bogus"/);
+    expect(result.content[0]!.text).toMatch(/Unknown log source "bogus"/);
   });
 
   // Regression for #62/#88: even list_log_sources' stream listing goes through a

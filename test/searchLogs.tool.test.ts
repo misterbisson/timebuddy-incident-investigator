@@ -215,6 +215,6 @@ describe('search_logs tool', () => {
       isError?: boolean;
     };
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toMatch(/No Graylog connections configured/);
+    expect(result.content[0]!.text).toMatch(/No log sources available/);
   });
 });

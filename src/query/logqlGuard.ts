@@ -125,8 +125,8 @@ export function classifyLogQLMetric(raw: string): AdhocVerdict {
       allowed: false,
       reason:
         'This is a log query (it begins with a stream selector), which returns log lines rather than series. ' +
-        'To count or rate its lines here, wrap it in a metric query — e.g. sum(count_over_time(<query> [1m])) ' +
-        'or sum by (level) (rate(<query> [5m])).',
+        'To read the lines, run it with search_logs against this Loki source; to count or rate them here, wrap ' +
+        'it in a metric query — e.g. sum(count_over_time(<query> [1m])) or sum by (level) (rate(<query> [5m])).',
     };
   }
   return { allowed: true, statement: verdict.statement };

@@ -1,7 +1,8 @@
-# Log integration (Graylog)
+# Log integration (Graylog and Loki)
 
 This is the contributor-facing design doc for the log-search subsystem added in v0.3.0
-(`src/graylog/`, `src/logs/`, and the three log tools). It's the log counterpart to
+(`src/graylog/`, `src/logs/`, and the three log tools), and for Loki as a second kind of log
+source (issue #265, [below](#loki-a-log-source-derived-from-grafana-not-configured)). It's the log counterpart to
 `docs/BEHAVIOR.md`: read it before changing anything under those directories. The
 end-user's view — how to configure a Graylog connection and use the tools — is in the root
 `README.md`; this file is the *why*.
@@ -101,6 +102,73 @@ leak into the next), and the engine holds internal timers that would otherwise k
 Node process alive. By the time `engine.correlate()` finishes, every stream has been
 drained, so `adapter.fetchStats` is fully populated for the caller to inspect.
 
+## Loki: a log source derived from Grafana, not configured
+
+Loki has no web UI and, in practice, no credential of its own that users hold: people reach
+it through Grafana, whose datasource config keeps Loki's URL and secret server-side. So a
+Loki source is **not a new kind of `LogConnection`**. [`src/logs/sources.ts`](../src/logs/sources.ts)
+derives one from every `loki` datasource on every Grafana connection, on every call, with
+id `<grafanaConnectionId>/<datasourceUid>` (split on the *last* `/`, since a datasource uid
+can't contain one) and its Grafana connection's `tags`. Nothing to configure, no second
+secret, and a datasource added in Grafana is searchable on the next call. A direct-to-Loki
+connection kind is deliberately not built: it would need a gateway URL, a token, and a
+tenant id that nobody outside the owning team usually has. Revisit that only if the Grafana
+path turns out to be the problem.
+
+**Resolution** mirrors `resolveConnection()` — explicit id, else the sole source, else a
+hard error listing ids — with one rule added because sources are now *discovered*: a
+Grafana connection whose datasource list can't be read blocks the sole-source default. It
+might hold a Loki datasource, so "only one source" can't be established, and falling back
+to the lone Graylog connection anyway is the exact failure this exists to stop (a Loki-only
+service searched in Graylog, empty, read as "no errors"). An explicit id never needs the
+listing. `list_log_sources` reports the same failures as `lokiDiscoveryProblems` rather than
+failing.
+
+**The query path** ([`src/logs/loki.ts`](../src/logs/loki.ts)) is the already-allowlisted
+`POST /api/ds/query` — no new endpoint. The query is model-authored, exactly as a Graylog
+`search_logs` query always was, and like that path it needs no per-workspace ad-hoc flag.
+Its guard is [`query/logqlGuard.ts`](../src/query/logqlGuard.ts) (shared with
+`execute_adhoc_query`'s LogQL dialect): one expression, never rewritten, **log** queries
+only. Its header says why that is enough for LogQL. Four details are load-bearing:
+
+- **`maxLines` is always sent.** Unset, Grafana leaves the limit to the datasource's own
+  setting, which is invisible from here — and a cap nobody can see makes "truncated"
+  unknowable.
+- **`truncated` is `returned >= limit`.** Loki reports no match total, so Graylog's
+  `total > fetched` isn't available. The heuristic is conservative, which is the direction
+  the `unless` refusal below needs, and `StreamFetchStat.total` is left unset for Loki rather
+  than faked.
+- **Two frame layouts, read by field name.** Grafana emits `labels`/`Time`/`Line`/`tsNs`/`id`
+  by default and `labels`/`timestamp`/`body`/`id` behind its `lokiLogsDataplane` toggle. A
+  numeric frame (a metric result) or an unrecognized layout throws rather than reading as
+  "no lines".
+- **`direction: backward`** (newest first, Loki's default), so a capped search keeps the end
+  of the window.
+
+**Correlation** uses [`HistoricalLokiAdapter`](../src/logs/lokiAdapter.ts), registered under
+`loki` so `loki(...)` streams reach it. `correlate_logs` checks each stream's source name
+against the resolved source before running, so a `graylog(...)` query against a Loki source
+fails with a message saying so. log-correlator's grammar takes only a **bare stream selector**
+inside `loki(...)` — no pipeline — so a query can't ask Loki for `| json`. The adapter
+therefore builds each event's labels itself: stream labels plus the fields `| json` would
+extract, under the same names (nested keys joined with `_`, invalid characters to `_`, arrays
+skipped, `_extracted` on a collision). Without that, events would be joinable only on stream
+labels, and join keys like request ids are almost never stream labels. A JSON payload
+double-encoded inside a string field isn't reached; that takes `line_format`, which only
+`search_logs` can express.
+
+Note the selector the adapter runs is the join parser's normalized form (e.g. whitespace
+after a matcher's comma removed), not the caller's exact text. It is still the string the
+guard scanned, and `joinShape`'s right-side selectors come from the same parser, so the
+anti-join check compares like with like.
+
+**Label discovery.** `list_log_sources({connection: <loki id>})` returns the datasource's
+stream label *names* (`GrafanaClient.getLokiLabelNames`), which is the Loki counterpart of a
+Graylog connection's streams. Grafana's Loki backend prefixes every resource path with
+`/loki/api/v1/` itself (unchanged 9.5 through 12.x), so resource paths here are only what
+follows it. `getLokiLabelValues` used to repeat the prefix and 404, and its test asserted the
+doubled path.
+
 ## Truncation: surfaced for joins, refused for anti-joins
 
 A search capped at `limit` (default `MAX_LOG_LINES`, 500) gives the join a partial view.
@@ -126,14 +194,16 @@ it can't identify the sides.
 
 ```
 search_logs        ─┐
-correlate_logs     ─┼─→ resolveLogToolClient (resolve.ts, generic)
+correlate_logs     ─┼─→ resolveLogSource (logs/sources.ts)
 list_log_sources   ─┘        │
-                             ↓
-                    LogConnectionRegistry ──→ GraylogClient (closed allowlist)
-                             │                     │
-        correlate_logs only  ↓                     ↓ searchAbsolute() / listStreams()
-                    CorrelationEngine          Graylog /api/search/universal/absolute
-                    + HistoricalGraylogAdapter      /api/streams
+              ┌──────────────┴───────────────┐
+              ↓ graylog                      ↓ loki
+   LogConnectionRegistry → GraylogClient    ConnectionRegistry → GrafanaClient
+              │   searchAbsolute() /             │   queryDs() via logs/loki.ts
+              │   listStreams()                  │   (logqlGuard), getLokiLabelNames()
+              ↓                                  ↓
+   Graylog /api/search/universal/absolute   Grafana /api/ds/query → Loki query_range
+   correlate_logs: HistoricalGraylogAdapter correlate_logs: HistoricalLokiAdapter
 ```
 
 All three tools follow the same `withAudit(...) { … redact(result, patterns) }` pattern as
@@ -144,11 +214,12 @@ output is text and all of it goes through `redact()`.
 ## Tag-based pairing
 
 `GrafanaConnection` and `LogConnection` both carry free-form `tags` (e.g. `prod`,
-`us-east`). `list_datasources` surfaces each Grafana connection's tags (as
+`us-east`); a Loki source inherits its Grafana connection's. `list_datasources` surfaces each Grafana connection's tags (as
 `connectionTags`) and `list_log_sources` surfaces each log connection's — so a skill can
 pair "the log source covering the same environment as this dashboard" by shared tag
 instead of guessing. The `/timebuddy:investigate` skill's log-evidence step does exactly
-this: one match → use it; zero or many → ask. Keep `list_datasources` and
+this: one match → use it; zero or many of the same kind → ask; a Graylog and a Loki
+source both covering the environment → search both, since a service may log to either. Keep `list_datasources` and
 `list_log_sources` symmetric on this field if you touch either.
 
 ## Standalone-CLI env vars
@@ -167,12 +238,17 @@ sources log connections from its own `safeStorage`-backed store instead. See
   label-mapping joins (`on(a=b)`) and `group_left()`/`group_right()` many-to-one grouping
   exist in the underlying library but aren't exercised by this project's tests yet.
 - Stream **name → id** resolution isn't implemented; pass `streamId` directly.
+- Loki only through a Grafana datasource, never directly; a `loki(...)` join stream takes a
+  bare selector, so a field inside a double-encoded JSON payload isn't joinable.
 
 ## Tests
 
 `test/graylogClient`, `test/graylogRegistry`, `test/graylogUrlBuilder`,
 `test/logsAdapter`, `test/logsCorrelate` (inner/left/anti-join plus a 3-stream join), and
-tool-level tests for all three tools. `electron/test/connectionStore.test.js` exercises
+tool-level tests for all three tools. Loki: `test/lokiSearch` (both frame layouts, the
+request shape, truncation, refusals), `test/lokiAdapter` (the `| json` mirroring, and joins
+through the real engine), `test/logSources` (resolution, including the discovery-failure
+rule), and `test/lokiLogTools.tool` (all three tools against a Loki source). `electron/test/connectionStore.test.js` exercises
 both connection kinds against the real Electron binary;
 `electron/test/mcpServerMode.mjs` proves `search_logs` reaches a real network attempt via
 a seeded Graylog connection. None require a live Graylog instance.

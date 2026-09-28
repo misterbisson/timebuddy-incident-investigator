@@ -38,7 +38,7 @@ describe('correlateLogs', () => {
     });
 
     const { events: results } = await correlateLogs({
-      client,
+      target: { sourceType: 'graylog', client },
       query: 'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
       toMs: 1,
@@ -59,7 +59,7 @@ describe('correlateLogs', () => {
     });
 
     const { events: results } = await correlateLogs({
-      client,
+      target: { sourceType: 'graylog', client },
       query: 'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
       toMs: 1,
@@ -76,7 +76,7 @@ describe('correlateLogs', () => {
     });
 
     const { events: results } = await correlateLogs({
-      client,
+      target: { sourceType: 'graylog', client },
       query: 'graylog(service:frontend)[5m] unless on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
       toMs: 1,
@@ -96,7 +96,7 @@ describe('correlateLogs', () => {
     });
 
     const { events: results } = await correlateLogs({
-      client,
+      target: { sourceType: 'graylog', client },
       query: 'graylog(service:frontend)[5m] or on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
       toMs: 1,
@@ -116,7 +116,7 @@ describe('correlateLogs', () => {
     });
 
     const { events: results } = await correlateLogs({
-      client,
+      target: { sourceType: 'graylog', client },
       query:
         'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m] and on(request_id) graylog(service:db)[5m]',
       fromMs: 0,
@@ -152,7 +152,7 @@ describe('correlateLogs', () => {
     });
 
     const { events, streams } = await correlateLogs({
-      client,
+      target: { sourceType: 'graylog', client },
       query: 'graylog(service:frontend)[5m] and on(request_id) graylog(service:backend)[5m]',
       fromMs: 0,
       toMs: 1,

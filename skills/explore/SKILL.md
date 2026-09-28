@@ -104,17 +104,21 @@ If multiple connections are configured, mention which ones responded by name/id 
 good moment for someone to notice if a connection they expected isn't there or isn't working, well
 before they'd need it during a real incident.
 
-9. **Survey log connections too.** Call `list_log_sources` with no arguments — it lists every
-   configured Graylog connection (id, name, tags, default stream) the same way `find_related_dashboards`
-   surveys Grafana connections above. An empty `sources` array just means no Graylog connection has
-   been configured yet, not an error — mention it's optional and where to add one (the same
-   connection-manager app, a Grafana/Graylog kind toggle on the same "Add connection" form) rather
-   than treating it as a problem. When there are entries, mention each one's `tags` — those are what
+9. **Survey log sources too.** Call `list_log_sources` with no arguments — it lists every
+   configured Graylog connection (id, name, tags, default stream) and every Loki datasource on the
+   Grafana connections (`sourceType: "loki"`, id `<grafanaConnection>/<datasourceUid>`, tags
+   inherited from that Grafana connection), the same way `find_related_dashboards` surveys Grafana
+   connections above. Loki needs no setup of its own — it's found through Grafana — so report what
+   was found, and mention any `lokiDiscoveryProblems` (a Grafana connection whose datasources
+   couldn't be read, so its Loki sources, if any, aren't listed). An empty `sources` array just
+   means there's no Graylog connection and no Loki datasource, not an error — mention Graylog is
+   optional and where to add one (the same connection-manager app, a Grafana/Graylog kind toggle
+   on the same "Add connection" form) rather than treating it as a problem. When there are entries, mention each one's `tags` — those are what
    let `/timebuddy:investigate` pair a log connection to the right Grafana connection automatically
    during a real incident, so it's worth confirming now that connections meant to cover the same
    environment actually share a tag (e.g. both tagged `prod`), rather than discovering a mismatch
    mid-incident.
-   - Flag plainly any entry with no `streamId`/`streamName` (no default stream configured). Some
+   - Flag plainly any Graylog entry with no `streamId`/`streamName` (no default stream configured). Some
      Graylog roles grant search permission scoped to individual streams but not the
      unscoped/"universal" search across all of them — a connection with no default stream will send
      every `search_logs`/`correlate_logs` call that omits an explicit `streamId` out unscoped, which
