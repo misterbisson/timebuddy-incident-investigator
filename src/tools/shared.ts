@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { GrafanaApiError, type GrafanaClient } from '../grafana/client.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
-import type { DashboardJson, TemplateVariable } from '../grafana/types.js';
-import { findPanel, type ResolvedPanel, type ResolvedTarget } from '../dashboards/panelQueries.js';
+import type { DashboardJson, DatasourceInfo, TemplateVariable } from '../grafana/types.js';
+import { GRAFANA_PSEUDO_DATASOURCE_REFS, findPanel, type ResolvedPanel, type ResolvedTarget } from '../dashboards/panelQueries.js';
 import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards/variables.js';
 import type { QueryWindow } from '../dashboards/variables.js';
 import { resolveConnection } from '../connections/resolve.js';
@@ -277,12 +277,29 @@ export interface ResolvedPanelForWindow {
 }
 
 /**
- * Resolves a target's datasourceUid when it's a Grafana datasource-picker
- * template variable ($datasource, ${DS_PROMETHEUS}, ...) rather than a fixed
- * UID — see dashboards/variables.ts's resolveDatasourceVariable for why this
- * is needed at all. Only touches the client (an extra listDatasources() call)
- * when the ref actually looks like a variable reference; the common case
- * (a real UID already) is untouched and costs nothing extra.
+ * Resolves a target's datasource ref to a UID /api/ds/query will accept.
+ *
+ * Two kinds of ref need more than a pass-through:
+ *
+ * - A datasource-picker template variable ($datasource, ${DS_PROMETHEUS}, ...)
+ *   — see dashboards/variables.ts's resolveDatasourceVariable for why.
+ * - A literal ref holding the datasource's *name* rather than its UID (#262).
+ *   Grafana's frontend resolves a ref by UID and then by name, so such a panel
+ *   renders fine; /api/ds/query resolves strictly by UID and 404s. A variable's
+ *   current value can be a name for the same reason (older Grafana stored
+ *   names there).
+ *
+ * So whatever the ref resolves to is checked against the datasource list: a
+ * UID match wins, then an exact name match, else the value is returned as-is
+ * and the query reports its own 404. That costs a listDatasources() call per
+ * target, which GrafanaClient memoizes briefly so a render_dashboard over many
+ * panels doesn't turn into one request each. Grafana's pseudo-datasources are
+ * never in that list and skip the lookup entirely.
+ *
+ * A failed lookup (e.g. a token without datasources:read) passes the value
+ * through rather than failing the call: a real-UID panel replayed fine for such
+ * a token before this lookup existed, and the worst a skipped lookup costs is
+ * the same 404 the query would have produced anyway.
  */
 export async function resolveTargetDatasource(
   client: GrafanaClient,
@@ -290,15 +307,17 @@ export async function resolveTargetDatasource(
   variables: TemplateVariable[],
   overrides: Record<string, string[]>,
 ): Promise<string | undefined> {
-  if (!ref || !ref.startsWith('$')) return ref;
-  const resolved = resolveDatasourceVariable(ref, variables, overrides);
-  if (!resolved) return resolved;
-  // The variable's current value might already be a UID (modern Grafana) or
-  // a datasource name (older Grafana) — only worth a lookup once we're
-  // already on this exceptional path.
-  const datasources = await client.listDatasources();
-  if (datasources.some((d) => d.uid === resolved)) return resolved;
-  return datasources.find((d) => d.name === resolved)?.uid ?? resolved;
+  if (!ref) return ref;
+  const value = ref.startsWith('$') ? resolveDatasourceVariable(ref, variables, overrides) : ref;
+  if (!value || GRAFANA_PSEUDO_DATASOURCE_REFS.has(value)) return value;
+  let datasources: DatasourceInfo[];
+  try {
+    datasources = await client.listDatasources();
+  } catch {
+    return value;
+  }
+  if (datasources.some((d) => d.uid === value)) return value;
+  return datasources.find((d) => d.name === value)?.uid ?? value;
 }
 
 /**
