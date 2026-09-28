@@ -109,3 +109,54 @@ describe('resolveLogSource', () => {
     expect(r.source.id).toBe('gl');
   });
 });
+
+// #279: Grafana only enforces a `/`-free datasource uid from v12, and uids
+// created earlier survive an upgrade, so the id can't be split on its last `/`.
+describe('resolveLogSource with a "/" in the datasource uid', () => {
+  const prod: GrafanaConnection = { id: 'prod', name: 'Prod', url: 'https://grafana.example.com', authType: 'bearer', token: 'p' };
+  const prodTeam: GrafanaConnection = { id: 'prod/team', name: 'Prod Team', url: 'https://grafana-team.example.com', authType: 'bearer', token: 't' };
+  const TEAM_LOGS: DatasourceInfo = { uid: 'team/logs', id: 3, name: 'Team-Logs', type: 'loki' };
+  const noGraylog = () => fakeLogRegistry([], fakeGraylogClient({}).client);
+
+  it('resolves the id list_log_sources gave it, explicitly and as the sole source', async () => {
+    const registry = grafanaRegistry({ prod: [TEAM_LOGS] }, [prod]);
+    const { sources } = await listLogSources(noGraylog(), registry);
+    expect(sources.map((s) => s.id)).toEqual(['prod/team/logs']);
+
+    for (const id of ['prod/team/logs', undefined]) {
+      const r = await resolveLogSource(noGraylog(), registry, id);
+      expect(r.sourceType).toBe('loki');
+      if (r.sourceType !== 'loki') return;
+      expect([r.source.grafanaConnection, r.source.datasourceUid]).toEqual(['prod', 'team/logs']);
+    }
+  });
+
+  it('picks the connection that actually has the datasource when two connection ids prefix the id', async () => {
+    const registry = grafanaRegistry({ prod: [LOKI], 'prod/team': [{ ...LOKI, uid: 'logs' }] }, [prod, prodTeam]);
+    const r = await resolveLogSource(noGraylog(), registry, 'prod/team/logs');
+    expect(r.sourceType === 'loki' && [r.source.grafanaConnection, r.source.datasourceUid]).toEqual(['prod/team', 'logs']);
+  });
+
+  it('refuses an id two connections could both mean, naming both', async () => {
+    const registry = grafanaRegistry({ prod: [TEAM_LOGS], 'prod/team': [{ ...LOKI, uid: 'logs' }] }, [prod, prodTeam]);
+    await expect(resolveLogSource(noGraylog(), registry, 'prod/team/logs')).rejects.toThrow(
+      /matches more than one log source.*"prod".*"team\/logs".*"prod\/team".*"logs"/,
+    );
+  });
+
+  // #279: the Graylog connection used to win silently.
+  it('refuses an id that is both a Graylog connection and a Loki source, naming both', async () => {
+    const glSlash: LogConnection = { ...graylog, id: 'prod/lk1' };
+    const registry = grafanaRegistry({ prod: [LOKI] }, [prod]);
+    await expect(resolveLogSource(fakeLogRegistry([glSlash], fakeGraylogClient({}).client), registry, 'prod/lk1')).rejects.toThrow(
+      /matches more than one log source.*Graylog connection "prod\/lk1".*"prod".*"lk1"/,
+    );
+  });
+
+  it('still resolves a Graylog id shaped like a Loki id when no such Loki datasource exists', async () => {
+    const glSlash: LogConnection = { ...graylog, id: 'prod/lk1' };
+    const registry = grafanaRegistry({ prod: [PROM] }, [prod]);
+    const r = await resolveLogSource(fakeLogRegistry([glSlash], fakeGraylogClient({}).client), registry, 'prod/lk1');
+    expect(r.sourceType).toBe('graylog');
+  });
+});
