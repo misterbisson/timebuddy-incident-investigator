@@ -230,5 +230,40 @@ describe('correlate_logs with Loki', () => {
     });
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/returned the full 2-line cap \(Loki reports no total\)/);
+    // #281: the cap named is the one this call ran with, not MAX_LOG_LINES,
+    // and the advice is to raise it: a smaller limit only truncates more.
+    expect(r.text).toMatch(/truncated at the 2-line cap/);
+    expect(r.text).not.toMatch(/500-line cap|smaller/);
+    expect(r.text).toMatch(/raise "limit" \(up to MAX_LOG_LINES=500\)/);
+  });
+
+  it('advises raising MAX_LOG_LINES, not limit, when the call already ran at that cap', async () => {
+    const many = Array.from({ length: 500 }, (_, i) => ({ t: T0 + i, line: `{"request_id":"b${i}"}`, labels: { app: 'backend' } }));
+    const { run } = setup({ linesByExpr: { '{app="frontend"}': front, '{app="backend"}': many } });
+    const r = await run('correlate_logs', {
+      query: 'loki({app="frontend"})[5m] unless on(request_id) loki({app="backend"})[5m]',
+      startsAtMs: T0,
+      endsAtMs: T0 + 60_000,
+      connection: SOURCE,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/truncated at the 500-line cap/);
+    expect(r.text).toMatch(/raise MAX_LOG_LINES/);
+    expect(r.text).not.toMatch(/raise "limit"/);
+  });
+
+  // #281: the metric-query refusal told correlate_logs callers to use
+  // execute_adhoc_query, which can't be put inside a join.
+  it('refuses a non-selector inside loki(...) in terms of the join, not search_logs', async () => {
+    const { run } = setup({});
+    const r = await run('correlate_logs', {
+      query: 'loki(service:frontend)[5m] and on(request_id) loki({app="backend"})[5m]',
+      startsAtMs: T0,
+      endsAtMs: T0 + 60_000,
+      connection: SOURCE,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/loki\(\.\.\.\) stream in correlate_logs takes a stream selector/);
+    expect(r.text).not.toMatch(/search_logs returns|execute_adhoc_query/);
   });
 });

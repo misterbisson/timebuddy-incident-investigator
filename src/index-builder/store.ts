@@ -100,8 +100,12 @@ export interface MetricIndex {
  * version, and its TTL hadn't expired. A version mismatch is treated as
  * unconditionally stale (see isStale below), regardless of TTL, so a real
  * logic fix actually takes effect on the very next read.
+ *
+ * 3: brokenDatasources stopped reporting a datasource *name* stored in a
+ * panel's uid field (#266) and Grafana's built-in datasources (#271). A
+ * version-2 file still lists both as broken.
  */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 function indexDir(config: Config): string {
   return join(config.dataDir, 'metric-index');
