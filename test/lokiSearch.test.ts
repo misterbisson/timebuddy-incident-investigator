@@ -59,6 +59,11 @@ describe('guardLokiLogQuery', () => {
     expect(() => guardLokiLogQuery('sum(count_over_time({app="x"}[1m]))')).toThrow(/metric query.*execute_adhoc_query/s);
   });
 
+  // #281: Graylog syntax against a Loki source used to be called "a metric query".
+  it('says a query without a stream selector may be another source\'s syntax', () => {
+    expect(() => guardLokiLogQuery('service:frontend AND level:ERROR')).toThrow(/doesn't start with a stream selector.*Graylog syntax/s);
+  });
+
   it('refuses a structurally broken query with the guard\'s reason', () => {
     expect(() => guardLokiLogQuery('{app="x"')).toThrow(/LogQL query refused: .*unbalanced brackets/);
   });

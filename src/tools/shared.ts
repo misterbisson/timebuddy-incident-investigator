@@ -14,6 +14,7 @@ import type { LogConnectionRegistry } from '../graylog/registry.js';
 import type { ActivityLog } from '../activity/activityLog.js';
 import type { Config } from '../config.js';
 import { redact } from '../security/redact.js';
+import { enforceWindowLimit } from '../security/limits.js';
 
 /**
  * A time boundary as either a raw epoch-ms number or an ISO 8601 date/time
@@ -268,6 +269,48 @@ export function windowSizeWarning(
     `endsAtMs was not provided and defaulted to now, producing a ${(durationHours / 24).toFixed(1)}-day window ` +
     '(preWindow and every control window inherit the same duration) — pass endsAtMs explicitly for a resolved/historical alert.'
   );
+}
+
+/** How far back a Loki label listing looks when the caller gives no window. */
+export const LOKI_LABEL_DEFAULT_LOOKBACK_HOURS = 24;
+
+/** The window a Loki label listing covered, as reported back on the result. */
+export interface LabelWindowReport {
+  from: string;
+  to: string;
+  /** True when the caller passed neither bound, so the window is the default lookback ending now. */
+  defaulted: boolean;
+}
+
+/**
+ * The window list_log_sources and discover_label_values ask Loki for label
+ * names or values over. Loki itself defaults both endpoints to the last 6
+ * hours, which silently drops a service that stopped logging before that, so
+ * a window is always sent. It is also always reported, since which labels
+ * exist depends on it.
+ *
+ * A missing end is now. A missing start is LOKI_LABEL_DEFAULT_LOOKBACK_HOURS
+ * before the end, or MAX_LOOKBACK_HOURS if that's shorter. The same
+ * MAX_LOOKBACK_HOURS cap as every query window applies.
+ */
+export function resolveLabelWindow(
+  startsAtMs: number | undefined,
+  endsAtMs: number | undefined,
+  config: Config,
+  now: number = Date.now(),
+): { window: { fromMs: number; toMs: number }; report: LabelWindowReport } {
+  const toMs = endsAtMs ?? now;
+  const lookbackHours = Math.min(LOKI_LABEL_DEFAULT_LOOKBACK_HOURS, config.maxLookbackHours);
+  const fromMs = startsAtMs ?? toMs - lookbackHours * 3_600_000;
+  enforceWindowLimit({ label: 'label discovery', fromMs, toMs }, config);
+  return {
+    window: { fromMs, toMs },
+    report: {
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+      defaulted: startsAtMs === undefined && endsAtMs === undefined,
+    },
+  };
 }
 
 export interface ResolvedPanelForWindow {

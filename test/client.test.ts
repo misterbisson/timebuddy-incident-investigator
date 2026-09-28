@@ -21,6 +21,9 @@ function config(): Config {
   };
 }
 
+// 2026-03-01T10:00:00Z → 2026-03-02T10:00:00Z
+const LOKI_WINDOW = { fromMs: 1772359200000, toMs: 1772445600000 };
+
 describe('buildAuthHeader', () => {
   it('builds a Bearer header for a bearer connection', () => {
     expect(buildAuthHeader(connection({ authType: 'bearer', token: 'glsa_abc123' }))).toBe('Bearer glsa_abc123');
@@ -87,7 +90,7 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
     const { urls } = stubFetch({ status: 'success', data: ['api', 'worker'] });
     const client = new GrafanaClient(connection({ token: 't' }), config());
 
-    const values = await client.getLokiLabelValues('loki1', 'pod', '{job="app"}');
+    const values = await client.getLokiLabelValues('loki1', 'pod', LOKI_WINDOW, '{job="app"}');
 
     expect(values).toEqual(['api', 'worker']);
     const url = new URL(urls[0]!);
@@ -95,14 +98,32 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
     expect(url.searchParams.get('query')).toBe('{job="app"}');
   });
 
-  it('getLokiLabelNames hits the label-names resource path', async () => {
+  // #277: Loki defaults both label endpoints to the last 6 hours, so a window
+  // is always sent, as Unix nanoseconds.
+  it('getLokiLabelValues always sends the window as start/end nanoseconds', async () => {
+    const { urls } = stubFetch({ status: 'success', data: [] });
+    const client = new GrafanaClient(connection({ token: 't' }), config());
+
+    await client.getLokiLabelValues('loki1', 'pod', LOKI_WINDOW);
+
+    const url = new URL(urls[0]!);
+    expect(url.searchParams.get('start')).toBe('1772359200000000000');
+    expect(url.searchParams.get('end')).toBe('1772445600000000000');
+    expect(url.searchParams.has('query')).toBe(false);
+  });
+
+  // #277: Grafana 9.5 through 10.4 only forward a Loki resource URL starting
+  // with `labels?` — a bare `labels` is refused before it reaches Loki.
+  it('getLokiLabelNames hits the label-names resource path with a query string and the window', async () => {
     const { urls } = stubFetch({ status: 'success', data: ['app', 'env', 'level'] });
     const client = new GrafanaClient(connection({ token: 't' }), config());
 
-    await expect(client.getLokiLabelNames('loki1')).resolves.toEqual(['app', 'env', 'level']);
+    await expect(client.getLokiLabelNames('loki1', LOKI_WINDOW)).resolves.toEqual(['app', 'env', 'level']);
     const url = new URL(urls[0]!);
     expect(url.pathname).toBe('/api/datasources/uid/loki1/resources/labels');
-    expect(url.search).toBe('');
+    expect(urls[0]).toContain('/resources/labels?');
+    expect(url.searchParams.get('start')).toBe('1772359200000000000');
+    expect(url.searchParams.get('end')).toBe('1772445600000000000');
   });
 
   it('throws on a datasource-level non-success status even though the proxy returns HTTP 200', async () => {

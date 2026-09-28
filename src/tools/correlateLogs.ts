@@ -129,12 +129,17 @@ export function registerCorrelateLogs(server: McpServer, { registry, logRegistry
                     : `"${s.selector}" fetched ${s.fetched} of ${s.total}`,
                 )
                 .join('; ');
+              // A bigger cap is the remedy, so name the one this call ran with
+              // and the next step up from it.
+              const raise =
+                clampedLimit < config.maxLogLines
+                  ? `raise "limit" (up to MAX_LOG_LINES=${config.maxLogLines})`
+                  : 'raise MAX_LOG_LINES';
               throw new Error(
                 `correlate_logs: the right-hand side of an "unless" anti-join was truncated at the ` +
-                  `${config.maxLogLines}-line cap (${detail}). A truncated right side can report left events as ` +
+                  `${clampedLimit}-line cap (${detail}). A truncated right side can report left events as ` +
                   `unmatched when a match exists beyond the cap, inverting the result — refusing rather than ` +
-                  `returning a wrong answer. Narrow the query or window, raise MAX_LOG_LINES, or pass a smaller ` +
-                  `"limit" per stream and retry.`,
+                  `returning a wrong answer. Narrow the query or window, or ${raise}, and retry.`,
               );
             }
           }

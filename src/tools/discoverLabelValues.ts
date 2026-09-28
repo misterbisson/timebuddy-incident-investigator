@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import type { GrafanaClient } from '../grafana/client.js';
-import { resolveToolClient, toolErrorResult } from './shared.js';
+import { epochMsSchema, resolveLabelWindow, resolveToolClient, toolErrorResult, type LabelWindowReport } from './shared.js';
 import { buildShowTagValuesQuery, runTagValuesQuery } from './discoverInfluxdbSchema.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -60,7 +60,14 @@ async function resolveLabelDatasource(
 }
 
 /** Dispatches the value enumeration to the right per-datasource primitive and returns a deduped, sorted list. */
-async function enumerateValues(client: GrafanaClient, type: SupportedType, uid: string, metric: string, label: string): Promise<string[]> {
+async function enumerateValues(
+  client: GrafanaClient,
+  type: SupportedType,
+  uid: string,
+  metric: string,
+  label: string,
+  lokiWindow: { fromMs: number; toMs: number } | undefined,
+): Promise<string[]> {
   let values: string[];
   if (type === 'influxdb') {
     // Reuse the exact proven SHOW TAG VALUES request shape (and error surfacing)
@@ -73,7 +80,7 @@ async function enumerateValues(client: GrafanaClient, type: SupportedType, uid: 
   } else if (type === 'prometheus') {
     values = await client.getPrometheusLabelValues(uid, label, metric);
   } else {
-    values = await client.getLokiLabelValues(uid, label, metric);
+    values = await client.getLokiLabelValues(uid, label, lokiWindow!, metric);
   }
   return [...new Set(values)].sort();
 }
@@ -97,7 +104,9 @@ export function registerDiscoverLabelValues(server: McpServer, { registry, confi
         'query failure (or an unrecognized response) is a hard error — but note that a mistyped label or metric name ' +
         'is NOT an error to the datasource, it just matches nothing, so an empty "values" can mean either "no values ' +
         'in scope" or "wrong label/metric name". Verify the names against the panel\'s own series labels / ' +
-        'discover_influxdb_schema tagKeys before concluding a set is truly empty. Goes through the same connection ' +
+        'discover_influxdb_schema tagKeys before concluding a set is truly empty. Loki only returns values seen in a ' +
+        'time range, so for Loki pass the incident window as startsAtMs/endsAtMs; without them it covers the last ' +
+        '24 hours, and "window" reports the range actually used. Goes through the same connection ' +
         'resolution, redaction, and audit logging as every other tool.',
       inputSchema: {
         metric: z
@@ -114,16 +123,30 @@ export function registerDiscoverLabelValues(server: McpServer, { registry, confi
           .describe('The label/tag key whose values to enumerate, e.g. "host" / "instance" / "pod"'),
         datasourceUid: z.string().optional().describe('Which datasource to query (InfluxDB/Prometheus/Loki); omit when the connection has exactly one label-capable datasource'),
         limit: z.number().optional().default(50).describe('Max values to return; see valuesTotal for the untruncated count'),
+        startsAtMs: epochMsSchema
+          .optional()
+          .describe('Loki only: start of the range to list values over — epoch ms or ISO 8601; defaults to 24 hours before endsAtMs'),
+        endsAtMs: epochMsSchema.optional().describe('Loki only: end of that range — epoch ms or ISO 8601; defaults to now'),
         connection: z.string().optional().describe('Which Grafana connection to use; omit when only one is configured'),
       },
       annotations: { readOnlyHint: true, title: 'Discover label/tag values' },
     },
-    async ({ metric, label, datasourceUid, limit, connection }) => {
+    async ({ metric, label, datasourceUid, limit, startsAtMs, endsAtMs, connection }) => {
       try {
-        return await withAudit('discover_label_values', { metric, label, datasourceUid, connection }, config, async () => {
+        return await withAudit('discover_label_values', { metric, label, datasourceUid, startsAtMs, endsAtMs, connection }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
           const { uid, type } = await resolveLabelDatasource(client, datasourceUid);
-          const values = await enumerateValues(client, type, uid, metric, label);
+          let lokiWindow: { window: { fromMs: number; toMs: number }; report: LabelWindowReport } | undefined;
+          if (type === 'loki') {
+            lokiWindow = resolveLabelWindow(startsAtMs, endsAtMs, config);
+          } else if (startsAtMs !== undefined || endsAtMs !== undefined) {
+            // Refused rather than ignored: a caller passing a window expects it to scope the values.
+            throw new Error(
+              `startsAtMs/endsAtMs only apply to a Loki datasource; "${uid}" is ${type}, whose values here aren't ` +
+                'time-scoped. Drop them for this datasource.',
+            );
+          }
+          const values = await enumerateValues(client, type, uid, metric, label, lokiWindow?.window);
           const result = {
             connectionId,
             datasourceUid: uid,
@@ -132,6 +155,7 @@ export function registerDiscoverLabelValues(server: McpServer, { registry, confi
             label,
             values: values.slice(0, limit),
             valuesTotal: values.length,
+            ...(lokiWindow ? { window: lokiWindow.report } : {}),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
