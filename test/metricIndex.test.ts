@@ -123,6 +123,24 @@ describe('buildMetricIndex', () => {
     ]);
   });
 
+  it('does not flag a ref that holds an existing datasource\'s name rather than its uid (#262)', async () => {
+    const dashboards: DashboardGetResponse[] = [
+      {
+        dashboard: {
+          uid: 'd1',
+          title: 'Name-referenced dashboard',
+          panels: [
+            { id: 1, title: 'By name, object form', targets: [{ refId: 'A', datasource: { uid: 'Prometheus' }, expr: 'up' }] },
+            { id: 2, title: 'By name, string form', targets: [{ refId: 'A', datasource: 'Prometheus', expr: 'up' }] },
+          ],
+        },
+        meta: {},
+      },
+    ];
+    const index = await buildMetricIndex(fakeClient(dashboards));
+    expect(index.brokenDatasources).toEqual([]);
+  });
+
   it('flags a panel a real alert rule is wired to via __dashboardUid__/__panelId__ annotations', async () => {
     const dashboards: DashboardGetResponse[] = [
       {

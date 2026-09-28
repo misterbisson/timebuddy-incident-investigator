@@ -35,11 +35,11 @@ export function registerListDatasources(server: McpServer, { registry, config }:
       title: 'List datasources',
       description:
         'Lists the datasources configured on a Grafana connection: uid, name, type, and which one is the default. ' +
-        'The main use: checking whether a datasource a panel references by a literal name rather than a UID (e.g. ' +
-        'a non-"$"-prefixed entry in find_related_dashboards\'s brokenDatasources) still exists under some other ' +
-        'UID — if a matching name shows up here, that reference is fixable (Grafana-side, by correcting the ' +
-        'panel\'s datasource UID); if nothing close appears, the datasource was genuinely deleted/renamed with no ' +
-        'trace and no tool can resolve that reference, only a Grafana-side fix can. Pass "query" to filter by a ' +
+        'The main use: explaining a non-"$"-prefixed entry in find_related_dashboards\'s brokenDatasources. A ' +
+        'panel that references a datasource by its exact *name* instead of its UID is resolved automatically and ' +
+        'never shows up there, so an entry means neither the UID nor the exact name exists — look here for a ' +
+        'near-miss name (a rename) to report as the likely intended datasource; if nothing close appears, it was ' +
+        'deleted, and only a Grafana-side fix can resolve that reference. Pass "query" to filter by a ' +
         'case-insensitive substring match against name/type. Pass "connection" to check one connection; omit it to ' +
         'check every configured connection. "connectionTags" reports each connection\'s configured tags — cross-' +
         'reference against list_log_sources\' tags to pair a Grafana connection with the log connection covering ' +

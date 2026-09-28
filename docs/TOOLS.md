@@ -82,7 +82,7 @@ examples, and [`LOGS.md`](LOGS.md) for the subsystem's design.
 
 | Tool | What it does |
 | --- | --- |
-| `list_datasources` | List a connection's configured datasources (uid/name/type/default) and each connection's `tags` — cross-reference against `list_log_sources`' tags to pair a Grafana connection with the log connection covering the same environment. Also useful for checking whether a panel's literal-name datasource reference still exists under some other UID. |
+| `list_datasources` | List a connection's configured datasources (uid/name/type/default) and each connection's `tags` — cross-reference against `list_log_sources`' tags to pair a Grafana connection with the log connection covering the same environment. Also useful for explaining a `brokenDatasources` entry: a panel referencing a datasource by its exact name instead of its UID is resolved automatically (and isn't reported as broken), so an entry means neither exists — look here for a near-miss name that suggests a rename. |
 
 ## CSV export behavior
 
