@@ -103,7 +103,8 @@ Three things shape almost every module here and are easy to miss from a partial 
 1. **The Grafana client is a closed allowlist, not a passthrough.** `src/grafana/client.ts`
    exposes exactly the read-only endpoints the tools need (search, dashboard-by-uid,
    datasources, `/api/ds/query`, alertmanager alerts, ruler rules, annotations, short-URL
-   resolution, user/org preferences, and the Prometheus/Loki label-values *resources* proxy)
+   resolution, user/org preferences, and the Prometheus/Loki label-values — and Loki label-names —
+   *resources* proxy)
    and nothing else. Note
    the last one:
    `getPrometheusLabelValues`/`getLokiLabelValues` hit `/api/datasources/uid/:uid/resources/...`,
@@ -304,6 +305,19 @@ call (stateless across tool calls) and always tears both down in `finally`. Thre
 `list_datasources` each surface a connection's `tags` so a skill can pair a log
 connection to the right Grafana connection instead of guessing. See `NOTICE.md` for what's
 vendored from log-correlator and why its own adapters aren't used.
+
+Loki is the second kind of log source, and it is deliberately **not** a `LogConnection`:
+`src/logs/sources.ts` derives one from every `loki` datasource on every Grafana connection on
+each call (id `<grafanaConnectionId>/<datasourceUid>`), because Loki has no UI or user-held
+credential of its own — Grafana is how people reach it. The log tools resolve through
+`resolveLogSource()` rather than `resolveConnection()`, which adds one rule: a Grafana
+connection whose datasources can't be listed blocks the sole-source default, since silently
+searching the lone Graylog connection for a Loki-only service is the failure this exists to
+prevent. `src/logs/loki.ts` searches through the existing `/api/ds/query` allowlist entry
+(guarded by `query/logqlGuard.ts`, log queries only), and `src/logs/lokiAdapter.ts`'s
+`HistoricalLokiAdapter` is the correlation counterpart of the Graylog one. Its
+`lokiEventLabels` mirrors LogQL's `| json` naming, because the join grammar can't carry a
+pipeline. `docs/LOGS.md`'s Loki section has the rest.
 
 The webhook listener (`src/webhook/listener.ts`) is a separate, optional process — it's
 not part of the MCP server itself. It only accepts `POST /` and appends to

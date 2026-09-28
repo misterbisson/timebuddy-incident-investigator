@@ -250,12 +250,27 @@ export class GrafanaClient {
   /**
    * Loki counterpart of getPrometheusLabelValues, scoped by an optional stream
    * selector (`selector`). Same fixed-path, read-only rationale.
+   *
+   * Unlike Prometheus's, Grafana's Loki backend prefixes every resource path
+   * with `/loki/api/v1/` itself, so the path here is only what follows it —
+   * spelling the prefix out reached `/loki/api/v1/loki/api/v1/...` and 404ed.
    */
   async getLokiLabelValues(uid: string, label: string, selector?: string): Promise<string[]> {
     const qs = new URLSearchParams();
     if (selector) qs.set('query', selector);
     const query = qs.toString();
-    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/loki/api/v1/label/${encodeURIComponent(label)}/values${query ? `?${query}` : ''}`;
+    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/label/${encodeURIComponent(label)}/values${query ? `?${query}` : ''}`;
+    return this.parseLabelValues(await this.request<LabelValuesResponse>('GET', path), path);
+  }
+
+  /**
+   * A Loki datasource's stream label *names* (the keys a selector can match
+   * on) — the Loki side of what list_log_sources shows as a Graylog
+   * connection's streams. Fixed path to exactly the label-names resource,
+   * same rationale as getLokiLabelValues.
+   */
+  async getLokiLabelNames(uid: string): Promise<string[]> {
+    const path = `/api/datasources/uid/${encodeURIComponent(uid)}/resources/labels`;
     return this.parseLabelValues(await this.request<LabelValuesResponse>('GET', path), path);
   }
 
