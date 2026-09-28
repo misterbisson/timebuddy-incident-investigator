@@ -53,7 +53,7 @@ describe('correlate.ts / joinShape.ts defer their @liquescent import past module
     // unparseable-query case that falls back to the undefined/[] shape, so
     // this still proves the import was deferred to the call, not module load.
     const { joinShape } = await import('../src/logs/joinShape.js');
-    await expect(joinShape('graylog(service:x)[5m]')).resolves.toEqual({ joinType: undefined, rightSelectors: [] });
+    await expect(joinShape('graylog(service:x)[5m]')).resolves.toEqual({ joinType: undefined, rightSelectors: [], sources: [] });
 
     vi.doUnmock('@liquescent/log-correlator-query-parser');
     vi.resetModules();

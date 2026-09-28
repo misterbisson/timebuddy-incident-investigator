@@ -37,7 +37,14 @@ function entryLabel(entry) {
   return entry.panelTitle || entry.dashboardTitle || entry.dashboardUid;
 }
 
+function isLoki(entry) {
+  return entry.sourceType === 'loki';
+}
+
+// Loki has no streams in Graylog's sense — a search is scoped by its own
+// selector, which is already in the query — so a Loki entry has no stream row.
 function streamLabel(entry) {
+  if (isLoki(entry)) return undefined;
   return entry.streamName || entry.streamId || 'all streams';
 }
 
@@ -85,13 +92,14 @@ function selectEntry(id) {
     .join(' · ');
 
   // A log entry has no screenshot and no single panel to view live / export —
-  // its only affordance is opening the Graylog search in the browser. The
-  // panel-only buttons stay hidden for it (they'd otherwise drive the Grafana
-  // screenshotter/CSV exporter against a Graylog URL).
+  // its only affordance is opening the search in the browser: the Graylog
+  // search, or for a Loki source the Grafana Explore view. The panel-only
+  // buttons stay hidden for it (they'd otherwise drive the Grafana
+  // screenshotter/CSV exporter against a search URL).
   showScreenshotBtn.classList.toggle('hidden', log || !entry.screenshotPath);
   showLiveBtn.classList.toggle('hidden', log);
   openBrowserBtn.classList.toggle('hidden', !entry.url);
-  openBrowserBtn.textContent = log ? 'Open in Graylog' : 'Open in browser';
+  openBrowserBtn.textContent = log ? (isLoki(entry) ? 'Open in Grafana Explore' : 'Open in Graylog') : 'Open in browser';
   // Export/capture need a specific panel over a specific window — both of which
   // the entry's url carries (viewPanel + from/to + var-*). Dashboard-level
   // entries (no panelId) and log entries have nothing single-panel to export.
@@ -208,13 +216,15 @@ function showLive(entry) {
 
 // A log search isn't a single visual the way a panel screenshot is, and
 // embedding the Graylog UI would drag in the live-view auth guard — so a log
-// entry gets a plain text summary here plus the "Open in Graylog" button.
+// entry gets a plain text summary here plus an "Open in ..." button. A Loki
+// entry is summarized the same way rather than embedded as a live Explore
+// view, so both kinds of log entry behave alike.
 function showLogSummary(entry) {
   webviewEl.classList.add('hidden');
   screenshotEl.classList.add('hidden');
   const rows = [
     ['Query', entry.query],
-    ['Stream', streamLabel(entry)],
+    ...(isLoki(entry) ? [['Source', 'Loki']] : [['Stream', streamLabel(entry)]]),
     ['Results', entry.resultCount != null ? String(entry.resultCount) : '—'],
     ['Tool', entry.toolName],
   ];

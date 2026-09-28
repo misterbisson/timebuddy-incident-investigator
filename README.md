@@ -1,7 +1,7 @@
 # Timebuddy Incident Investigator
 
 **Let an AI agent run the first 30 minutes of your incident investigation — read-only,
-across your Grafana dashboards, metrics, and Graylog logs.**
+across your Grafana dashboards, metrics, and Graylog or Loki logs.**
 
 Timebuddy is an MCP server. You paste a paged alert into your Claude client; it identifies
 what fired, replays the dashboard's real queries over the incident window, compares against
@@ -24,7 +24,7 @@ Give it an alert (a link, alert JSON, or webhook payload) and it will:
   recurring patterns and likely false positives.
 - **Correlate** — rank other dashboards and panels by deviation, label overlap, and
   anomaly timing to surface what else moved.
-- **Corroborate** — pull matching Graylog log evidence using identifiers already in hand
+- **Corroborate** — pull matching Graylog or Loki log evidence using identifiers already in hand
   (host, IP, request/trace id).
 - **Report** — a verdict (`real-anomaly` / `likely-false-positive` / `inconclusive`) with
   a clickable link to every piece of evidence.
@@ -37,7 +37,8 @@ neither discovers nor reaches any of them. That's a boundary, not a gap waiting 
 
 **Inside the boundary, discovery is normalized.** A Grafana connection and a Graylog connection
 pair by shared `tags`: `list_datasources` returns each connection's `connectionTags`,
-`list_log_sources` returns each log connection's `tags`, and `/timebuddy:investigate` matches
+`list_log_sources` returns each log source's `tags` (a Loki datasource carries its Grafana
+connection's), and `/timebuddy:investigate` matches
 them instead of asking which log source belongs to which Grafana. `/timebuddy:explore` flags
 mismatched tags before an incident, when there's time to fix them. That works because both
 sides are things Timebuddy connects to — see [Multiple connections](#multiple-connections).
@@ -313,7 +314,7 @@ Either way, skills appear under the `/timebuddy:` namespace — `explore`, `inve
 Once Claude has started the app as your MCP server, a companion **Timebuddy Activity**
 window appears the moment Claude pulls data from its first panel or runs its first log
 search — a live, clickable log of what's being inspected. Each entry is one Grafana panel
-Claude actually queried or screenshotted, or one Graylog search (`search_logs`/
+Claude actually queried or screenshotted, or one log search (`search_logs`/
 `correlate_logs`) it ran, tagged **panel** or **logs** so the two read distinctly. Clicking a
 **panel** entry shows either the saved screenshot or a live, authenticated view of the real
 Grafana panel embedded in the window. A panel served from a connection's `matchHosts` alias
@@ -324,8 +325,9 @@ Each **panel** entry also has **Export CSV** and **Capture screenshot** buttons 
 export/capture the `export_panel_csv` and `screenshot_panel` tools do (same window,
 variables, formula-injection neutralization, and redaction), saved straight to your
 **Downloads** folder. A **logs** entry instead shows a short text summary of the search —
-query, stream, result count, and tool — plus an **Open in Graylog** button that opens the
-recorded search in your browser; it doesn't embed the Graylog UI (a log search isn't a single
+query, stream, result count, and tool — plus an **Open in Graylog** (or, for a Loki search,
+**Open in Grafana Explore**) button that opens the recorded search in your browser; it doesn't
+embed the log UI (a log search isn't a single
 visual), and the panel-only export/screenshot buttons stay hidden. The log is in-memory only
 and clears when the server restarts; nothing is written to disk.
 
@@ -406,23 +408,42 @@ directions, are in [`docs/BEHAVIOR.md`](docs/BEHAVIOR.md#relative-time-params-ro
 
 ## Searching logs
 
-Add a Graylog connection (see [Configuring connections](#configuring-connections)) and
+Logs come from two kinds of source:
+
+- **Graylog** — add a Graylog connection (see [Configuring connections](#configuring-connections)).
+- **Loki** — nothing to add. Loki has no UI of its own; people reach it through Grafana, and so
+  does Timebuddy: every `loki` datasource on a Grafana connection you've already added is a log
+  source, found fresh on each call, using that connection's credentials. Its id is
+  `<grafana connection>/<datasource uid>`, and it inherits that connection's `tags`.
+
 `/timebuddy:investigate` pulls corroborating log evidence automatically — it pairs the right
-log source to the dashboard by shared `tags`, builds a query from identifiers already in hand
-(hostname, IP, product string, request/trace id), and folds what it finds into the verdict.
+log source to the dashboard by shared `tags` (or, for Loki, by living on the same Grafana),
+builds a query from identifiers already in hand (hostname, IP, product string, request/trace
+id), and folds what it finds into the verdict. When both a Graylog and a Loki source cover an
+environment, it searches both: a service may log to either.
 
 To drive the log tools directly (Claude Desktop, or an ad-hoc question):
 
-- **`search_logs`** takes a Graylog query and a time window. Use identifiers a metric
-  investigation surfaced, not a bare wildcard:
+- **`search_logs`** takes a query in the source's own language and a time window. Use
+  identifiers a metric investigation surfaced, not a bare wildcard:
 
   ```
   search_logs(query: "source:api-gw-* AND level:ERROR", startsAtMs: <incident start>)
+  search_logs(query: "{app=\"api-gw\"} |= \"error\" | json", connection: "prod/abc123", startsAtMs: <incident start>)
   ```
 
-  It returns each matching message plus a clickable Graylog URL, and defaults the window end
-  to now. A search that hits the per-stream line cap (`MAX_LOG_LINES`, default 500) is flagged
-  so you know you're seeing a partial view.
+  Graylog takes Graylog query syntax; Loki takes a LogQL log query with any pipeline (`|=`, `|~`,
+  `| json`, `line_format`, …). It returns each matching message plus a clickable URL (a Graylog
+  search, or a Grafana Explore link for Loki), and defaults the window end to now. A search that
+  hits the line cap (`MAX_LOG_LINES`, default 500) is flagged so you know you're seeing a partial
+  view — for Loki, which reports no total match count, that means the cap was reached and the
+  lines shown are the newest ones.
+
+  A Loki search is model-authored query text, like a Graylog one, and like it needs no ad-hoc
+  flag: it goes through Grafana's already-allowlisted query endpoint, and a guard allows one
+  LogQL *log* query per call and never rewrites it. LogQL has no write form, and Grafana's Loki
+  backend reaches only Loki's query endpoints. A LogQL *metric* query (`count_over_time`, `rate`)
+  is refused here; that one is [`execute_adhoc_query`](#ad-hoc-queries-off-by-default)'s.
 
 - **`correlate_logs`** joins two or more streams on a shared field. The classic use is
   tracing one request across services by a shared id:
@@ -439,16 +460,23 @@ To drive the log tools directly (Claude Desktop, or an ad-hoc question):
   grammar allows has no effect. Safety behavior: an `unless` whose subtracted side got
   truncated at the line cap **errors out** rather than return a possibly-inverted answer.
 
-- **`list_log_sources`** lists your Graylog connections (and, given a `connection`, its
-  streams) — cross-reference its `tags` against `list_datasources` to see which log source
-  covers the same environment as a Grafana connection.
+  Against a Loki source, write streams as `loki({app="frontend"})`. The join grammar takes a
+  bare stream selector there, not a pipeline, so each event is joinable on its stream labels
+  plus the fields of a JSON line, named as LogQL's `| json` would name them (`{"error":{"code":…}}`
+  → `error_code`).
 
-Only Graylog's legacy (2.x–5.x) search API is supported — see [Known
+- **`list_log_sources`** lists every log source — Graylog connections and Loki datasources,
+  each with a `sourceType` — and, given a `connection`, that source's Graylog streams or Loki
+  stream label names. Cross-reference its `tags` against `list_datasources` to see which log
+  source covers the same environment as a Grafana connection.
+
+For Graylog, only the legacy (2.x–5.x) search API is supported — see [Known
 limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LOGS.md).
 
 ## Security
 
-- The Grafana and Graylog clients are **fixed allowlists of read-only endpoints**. There is
+- The Grafana and Graylog clients are **fixed allowlists of read-only endpoints** (Loki is
+  reached only through Grafana's query and label endpoints, never directly). There is
   no "make an arbitrary request" tool — nothing built on top can reach a mutating endpoint,
   even if asked to.
 - Queries normally come from a dashboard someone authored, never from the model. The one
@@ -654,7 +682,10 @@ would race the listener's own appends.
   Grafana's Inspect-drawer DOM rather than a published API, so it's more version-sensitive than
   the rest of the integration. See [`docs/TOOLS.md`](docs/TOOLS.md#csv-export-behavior).
 - **Logs:** only Graylog's legacy (2.x–5.x) Universal Search API — 6.x's Views API returns CSV
-  and isn't implemented. `correlate_logs` covers `and`/`or`/`unless` with a single join key
+  and isn't implemented. Loki is reached only through a Grafana datasource, not directly, and a
+  `correlate_logs` stream against Loki takes a bare stream selector (no pipeline), so a field
+  nested inside a string-encoded JSON payload isn't joinable — `search_logs` can still reach it
+  with `line_format`. `correlate_logs` covers `and`/`or`/`unless` with a single join key
   across 3+ streams; cross-field label-mapping joins and `group_left()`/`group_right()` grouping
   exist in the underlying library but aren't exercised by this project's tests yet.
 - **Graylog search permissions:** a token that can *list* streams can't necessarily *search*

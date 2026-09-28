@@ -44,7 +44,9 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         'Compares the alerting panel against other panels (explicitly given, or auto-discovered from the metric ' +
         'reverse index via find_related_dashboards) over the same incident window. Ranks candidates by deviation ' +
         'strength, label overlap with the primary alert, and how closely their anomaly onset lines up with the ' +
-        'primary\'s — a triage heuristic for blast radius, not a statistical proof of causation. When ' +
+        'primary\'s — a triage heuristic for blast radius, not a statistical proof of causation. "primaryErrors" ' +
+        'appears when the primary panel\'s own query was rejected or returned text rows instead of numbers; with ' +
+        'it set there is no onset to line candidates up against, so the ranking can\'t be read as usual. When ' +
         'auto-discovering (candidates omitted), checks one "scope" tier per call, narrowest first: "product" (the ' +
         'primary dashboard, plus its own ops/SLI dashboards and declared dependencies from its Timebuddy knowledge ' +
         'panel when one is published for this alert — falls back to just the primary dashboard alone when none ' +
@@ -369,6 +371,10 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               primaryConnectionId: connectionId,
               primaryUrl,
               primaryOnsetMs,
+              // Without this, a primary panel whose query failed or returned
+              // text rows (#263) reads as a primary with no onset, and every
+              // candidate is ranked against nothing with no sign why.
+              ...(Object.keys(primaryIncident.errors).length > 0 ? { primaryErrors: primaryIncident.errors } : {}),
               ...(scopeInfo ?? {}),
               candidatesChecked: candidateRefs.length,
               correlated: ranked.slice(0, limit),
