@@ -30,7 +30,7 @@
       "url": "https://logs.us-east-1.example.com",
       "authType": "basic",
       "tags": ["prd", "us-east-1"],
-      "streamName": "spc-elb"
+      "streamName": "checkout-errors"
     },
     {
       "kind": "graylog",
