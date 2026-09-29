@@ -268,7 +268,7 @@ export class GrafanaClient {
    * spelling the prefix out reached `/loki/api/v1/loki/api/v1/...` and 404ed.
    *
    * The window is required, not defaulted here: Loki's own default for both
-   * label endpoints is the last 6 hours, so a service that stopped logging
+   * label endpoints is the last hour, so a service that stopped logging
    * before that (it crashed, or was renamed) silently drops out of an
    * investigation of anything older.
    */
