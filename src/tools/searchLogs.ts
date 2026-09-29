@@ -41,7 +41,7 @@ export function registerSearchLogs(server: McpServer, { registry, logRegistry, c
           .string()
           .optional()
           .describe('Graylog only: restrict the search to one stream; overrides the connection\'s own default streamId if it has one'),
-        limit: z.number().optional().describe(`Max messages to return (capped at ${config.maxLogLines})`),
+        limit: z.number().int().positive().optional().describe(`Max messages to return (capped at ${config.maxLogLines})`),
         connection: z
           .string()
           .optional()

@@ -49,9 +49,13 @@ export interface LokiDiscoveryProblem {
 }
 
 /**
- * A Loki source's id. `/` as the separator because a Grafana datasource uid
- * can't contain one (uids are letters, digits, `-` and `_`), so the *last* `/`
- * always splits it back apart even if a connection id happens to contain one.
+ * A Loki source's id: `<grafanaConnectionId>/<datasourceUid>`.
+ *
+ * Either half can contain a `/`, so the id is never split on one. Grafana only
+ * enforces a `/`-free uid from v12 (11.1 warns, 11.2 adds an opt-in check),
+ * and a uid created earlier survives the upgrade. resolveLogSource instead
+ * matches the id against the known connection ids — the half this server
+ * controls — and takes everything after that prefix as the uid.
  */
 export function lokiSourceId(grafanaConnectionId: string, datasourceUid: string): string {
   return `${grafanaConnectionId}/${datasourceUid}`;
@@ -119,6 +123,40 @@ function describe(sources: LogSource[]): string {
   return sources.map((s) => `${s.id} (${s.sourceType}: ${s.name})`).join(', ') || 'none';
 }
 
+/** One way to read a Loki source id: this Grafana connection, and the uid left after its id and a `/`. */
+interface LokiIdSplit {
+  grafana: GrafanaConnection;
+  uid: string;
+}
+
+/** Every Grafana connection whose id, followed by `/`, begins `id` — see lokiSourceId for why not a split on `/`. */
+function lokiIdSplits(registry: ConnectionRegistry | undefined, id: string): LokiIdSplit[] {
+  return (registry?.list() ?? [])
+    .filter((c) => id.length > c.id.length + 1 && id.startsWith(`${c.id}/`))
+    .map((c) => ({ grafana: c, uid: id.slice(c.id.length + 1) }));
+}
+
+interface LokiProbe extends LokiIdSplit {
+  outcome: 'loki' | 'not-loki' | 'missing' | 'unreadable';
+  datasource?: { uid: string; name: string };
+  type?: string;
+  error?: string;
+  cause?: unknown;
+}
+
+/** What `split.uid` is on `split.grafana`, if anything. */
+async function probeLokiSplit(registry: ConnectionRegistry, split: LokiIdSplit): Promise<LokiProbe> {
+  let datasources;
+  try {
+    datasources = await registry.get(split.grafana.id).listDatasources();
+  } catch (err) {
+    return { ...split, outcome: 'unreadable', error: err instanceof Error ? err.message : String(err), cause: err };
+  }
+  const found = datasources.find((d) => d.uid === split.uid);
+  if (!found) return { ...split, outcome: 'missing' };
+  return { ...split, outcome: found.type.toLowerCase() === 'loki' ? 'loki' : 'not-loki', datasource: found, type: found.type };
+}
+
 /**
  * Picks the log source a search_logs / correlate_logs call runs against.
  *
@@ -130,7 +168,12 @@ function describe(sources: LogSource[]): string {
  * "only one source" can't be established, and defaulting to the one Graylog
  * connection anyway is exactly the failure this whole change exists to stop: a
  * service that logs to Loki gets searched in Graylog, comes back empty, and
- * reads as "no errors". Passing an id explicitly never needs the listing.
+ * reads as "no errors".
+ *
+ * An explicit id is matched as a Graylog connection id and as
+ * `<grafanaConnectionId>/<uid>` for every Grafana connection whose id prefixes
+ * it (see lokiSourceId). More than one match is refused, naming each, rather
+ * than resolved to whichever is checked first.
  */
 export async function resolveLogSource(
   logRegistry: LogConnectionRegistry | undefined,
@@ -141,36 +184,63 @@ export async function resolveLogSource(
 
   if (explicitId) {
     const graylog = graylogConnections.find((c) => c.id === explicitId);
+    const splits = lokiIdSplits(registry, explicitId);
+    if (graylog && splits.length === 0) {
+      return { sourceType: 'graylog', source: graylogSource(graylog), client: logRegistry!.get(graylog.id) };
+    }
+
+    const probes = await Promise.all(splits.map((split) => probeLokiSplit(registry!, split)));
+    const matches = probes.filter((p): p is LokiProbe & { datasource: { uid: string; name: string } } => p.outcome === 'loki');
+    const unreadable = probes.filter((p) => p.outcome === 'unreadable');
+
+    // Two things this id could mean is a hard error, never a pick.
+    const meanings = [
+      ...(graylog ? [`Graylog connection "${graylog.id}"`] : []),
+      ...matches.map((m) => `Grafana connection "${m.grafana.id}"'s Loki datasource "${m.uid}"`),
+    ];
+    if (meanings.length > 1) {
+      throw new Error(
+        `Log source id "${explicitId}" matches more than one log source: ${meanings.join(', ')}. Rename one of ` +
+          'those connections so its id no longer overlaps the other.',
+      );
+    }
+    if (graylog && unreadable.length > 0) {
+      throw new Error(
+        `Log source id "${explicitId}" is a Graylog connection, but could also be a Loki datasource on Grafana ` +
+          `connection(s) ${unreadable.map((u) => `"${u.grafana.id}" (${u.error})`).join(', ')}, whose datasources ` +
+          'could not be read, so which one it means can\'t be settled. Retry once that connection is reachable, or ' +
+          'rename one of the connections.',
+      );
+    }
     if (graylog) {
       return { sourceType: 'graylog', source: graylogSource(graylog), client: logRegistry!.get(graylog.id) };
     }
-    const sep = explicitId.lastIndexOf('/');
-    const grafana = sep > 0 ? registry?.list().find((c) => c.id === explicitId.slice(0, sep)) : undefined;
-    if (grafana) {
-      const uid = explicitId.slice(sep + 1);
-      const client = registry!.get(grafana.id);
-      const datasources = await client.listDatasources();
-      const found = datasources.find((d) => d.uid === uid);
-      if (!found) {
-        throw new Error(
-          `Grafana connection "${grafana.id}" has no datasource with uid "${uid}". Call list_log_sources to see ` +
-            'the log sources that exist.',
-        );
-      }
-      if (found.type.toLowerCase() !== 'loki') {
-        throw new Error(
-          `Datasource "${found.name}" on "${grafana.id}" is type "${found.type}", not "loki" — only Loki datasources ` +
-            'are log sources. Call list_log_sources to see the log sources that exist.',
-        );
-      }
+    if (matches.length === 1) {
+      const { grafana, datasource } = matches[0]!;
       return {
         sourceType: 'loki',
-        source: lokiSource(grafana, found),
-        client,
+        source: lokiSource(grafana, datasource),
+        client: registry!.get(grafana.id),
         grafanaUrl: grafana.url,
         grafanaName: grafana.name,
       };
     }
+    // Nothing matched. With one candidate split, say exactly why it didn't.
+    if (probes.length === 1) {
+      const [probe] = probes as [LokiProbe];
+      if (probe.outcome === 'unreadable') throw probe.cause;
+      if (probe.outcome === 'not-loki') {
+        throw new Error(
+          `Datasource "${probe.datasource!.name}" on "${probe.grafana.id}" is type "${probe.type}", not "loki" — only ` +
+            'Loki datasources are log sources. Call list_log_sources to see the log sources that exist.',
+        );
+      }
+      throw new Error(
+        `Grafana connection "${probe.grafana.id}" has no datasource with uid "${probe.uid}". Call list_log_sources ` +
+          'to see the log sources that exist.',
+      );
+    }
+    if (unreadable.length > 0) throw unreadable[0]!.cause;
     const { sources } = await listLogSources(logRegistry, registry).catch(() => ({ sources: [] as LogSource[] }));
     throw new Error(`Unknown log source "${explicitId}". Available: ${describe(sources)}.`);
   }

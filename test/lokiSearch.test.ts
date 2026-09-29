@@ -12,17 +12,50 @@ describe('parseLokiLogFrames', () => {
 
   it('reads the legacy layout (labels, Time, Line, tsNs, id)', () => {
     expect(parseLokiLogFrames([legacyLogFrame(lines)])).toEqual([
-      { timestamp: '2026-03-01T10:00:00.000Z', timestampNs: `${T0}000000`, message: 'GET /cart 500', labels: { app: 'checkout', level: 'error' } },
       { timestamp: '2026-03-01T10:00:01.000Z', timestampNs: `${T0 + 1000}000000`, message: 'GET /cart 200', labels: { app: 'checkout', level: 'info' } },
+      { timestamp: '2026-03-01T10:00:00.000Z', timestampNs: `${T0}000000`, message: 'GET /cart 500', labels: { app: 'checkout', level: 'error' } },
     ]);
   });
 
   it('reads the dataplane layout (labels, timestamp, body, id) the same way', () => {
     const parsed = parseLokiLogFrames([dataplaneLogFrame(lines)]);
-    expect(parsed.map((l) => [l.timestamp, l.message, l.labels.level])).toEqual([
-      ['2026-03-01T10:00:00.000Z', 'GET /cart 500', 'error'],
-      ['2026-03-01T10:00:01.000Z', 'GET /cart 200', 'info'],
+    expect(parsed.map((l) => [l.timestamp, l.timestampNs, l.message, l.labels.level])).toEqual([
+      ['2026-03-01T10:00:01.000Z', `${T0 + 1000}000000`, 'GET /cart 200', 'info'],
+      ['2026-03-01T10:00:00.000Z', `${T0}000000`, 'GET /cart 500', 'error'],
     ]);
+  });
+
+  // #280: Grafana groups a frame's rows by stream, so they arrive out of time
+  // order (its own v11.3 streams_simple golden frame does). The shape here is
+  // that one's: two streams, each in its own order.
+  const grouped = [
+    { t: T0 + 3000, ns: 120_500, line: 'a3', labels: { app: 'a' } },
+    { t: T0 + 1000, ns: 0, line: 'a1', labels: { app: 'a' } },
+    { t: T0 + 3000, ns: 900_000, line: 'b3', labels: { app: 'b' } },
+    { t: T0 + 2000, ns: 5, line: 'b2', labels: { app: 'b' } },
+  ];
+  const newestFirst = ['b3', 'a3', 'b2', 'a1'];
+
+  it('returns dataplane lines newest first, ordering within a millisecond by the frame\'s nanos', () => {
+    const frame = dataplaneLogFrame(grouped);
+    expect(frame.data.nanos).toEqual([null, [120_500, 0, 900_000, 5], null, null]);
+    const parsed = parseLokiLogFrames([frame]);
+    expect(parsed.map((l) => l.message)).toEqual(newestFirst);
+    expect(parsed.map((l) => l.timestampNs)).toEqual([
+      `${T0 + 3000}900000`,
+      `${T0 + 3000}120500`,
+      `${T0 + 2000}000005`,
+      `${T0 + 1000}000000`,
+    ]);
+  });
+
+  it('returns legacy lines newest first by tsNs', () => {
+    expect(parseLokiLogFrames([legacyLogFrame(grouped)]).map((l) => l.message)).toEqual(newestFirst);
+  });
+
+  it('orders across frames too (older Grafana sent one frame per stream)', () => {
+    const [a, b] = [grouped.filter((l) => l.labels.app === 'a'), grouped.filter((l) => l.labels.app === 'b')];
+    expect(parseLokiLogFrames([dataplaneLogFrame(a), legacyLogFrame(b)]).map((l) => l.message)).toEqual(newestFirst);
   });
 
   it('takes per-stream labels from the line field when there is no labels column (older Grafana)', () => {
@@ -35,7 +68,9 @@ describe('parseLokiLogFrames', () => {
       },
       data: { values: [[T0], ['hello']] },
     };
-    expect(parseLokiLogFrames([frame])).toEqual([{ timestamp: '2026-03-01T10:00:00.000Z', message: 'hello', labels: { app: 'checkout' } }]);
+    expect(parseLokiLogFrames([frame])).toEqual([
+      { timestamp: '2026-03-01T10:00:00.000Z', timestampNs: `${T0}000000`, message: 'hello', labels: { app: 'checkout' } },
+    ]);
   });
 
   it('refuses a numeric frame (a metric query result) rather than returning no lines', () => {
@@ -57,6 +92,11 @@ describe('guardLokiLogQuery', () => {
 
   it('refuses a metric query and points at execute_adhoc_query', () => {
     expect(() => guardLokiLogQuery('sum(count_over_time({app="x"}[1m]))')).toThrow(/metric query.*execute_adhoc_query/s);
+  });
+
+  // #281: Graylog syntax against a Loki source used to be called "a metric query".
+  it('says a query without a stream selector may be another source\'s syntax', () => {
+    expect(() => guardLokiLogQuery('service:frontend AND level:ERROR')).toThrow(/doesn't start with a stream selector.*Graylog syntax/s);
   });
 
   it('refuses a structurally broken query with the guard\'s reason', () => {

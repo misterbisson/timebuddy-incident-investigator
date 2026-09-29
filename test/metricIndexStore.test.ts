@@ -120,4 +120,10 @@ describe('isStale', () => {
     const older = { ...baseIndex, schemaVersion: CURRENT_SCHEMA_VERSION - 1 };
     expect(isStale(older, 60_000, 30_000)).toBe(true);
   });
+
+  // #266 and #271 changed which datasource refs brokenDatasources reports, so a
+  // version-2 file still lists name refs and Grafana's built-ins as broken.
+  it('rebuilds a cache file from before the broken-datasource fixes (version 2)', () => {
+    expect(isStale({ ...baseIndex, schemaVersion: 2 }, 60_000, 30_000)).toBe(true);
+  });
 });

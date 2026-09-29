@@ -225,7 +225,7 @@ contains tokens or passwords, so it's safe to keep in a shared repo. See
     { "kind": "grafana", "name": "prod-us-east-1", "url": "https://metrics.us-east-1.example.com",
       "authType": "basic", "tags": ["prd", "us-east-1"] },
     { "kind": "graylog", "name": "prod-us-logs", "url": "https://logs.us-east-1.example.com",
-      "authType": "basic", "tags": ["prd", "us-east-1"], "streamName": "spc-elb" }
+      "authType": "basic", "tags": ["prd", "us-east-1"], "streamName": "checkout-errors" }
   ]
 }
 ```
@@ -413,7 +413,8 @@ Logs come from two kinds of source:
 - **Graylog** — add a Graylog connection (see [Configuring connections](#configuring-connections)).
 - **Loki** — nothing to add. Loki has no UI of its own; people reach it through Grafana, and so
   does Timebuddy: every `loki` datasource on a Grafana connection you've already added is a log
-  source, found fresh on each call, using that connection's credentials. Its id is
+  source, found on each call (from a datasource list reused for up to 30 seconds), using that
+  connection's credentials. Its id is
   `<grafana connection>/<datasource uid>`, and it inherits that connection's `tags`.
 
 `/timebuddy:investigate` pulls corroborating log evidence automatically — it pairs the right
@@ -467,7 +468,8 @@ To drive the log tools directly (Claude Desktop, or an ad-hoc question):
 
 - **`list_log_sources`** lists every log source — Graylog connections and Loki datasources,
   each with a `sourceType` — and, given a `connection`, that source's Graylog streams or Loki
-  stream label names. Cross-reference its `tags` against `list_datasources` to see which log
+  stream label names. Loki only lists labels seen in a time range, so pass the incident window
+  as `startsAtMs`/`endsAtMs` for a past incident; it defaults to the last 24 hours. Cross-reference its `tags` against `list_datasources` to see which log
   source covers the same environment as a Grafana connection.
 
 For Graylog, only the legacy (2.x–5.x) search API is supported — see [Known

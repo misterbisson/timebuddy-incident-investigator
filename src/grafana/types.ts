@@ -201,6 +201,12 @@ export interface GrafanaFrame {
   };
   data: {
     values: unknown[][];
+    /**
+     * Per field, the sub-millisecond part (0-999999 ns) of each row of a time
+     * field, whose `values` hold epoch ms. Null for a field without one, and the
+     * whole array is left out when every offset is zero.
+     */
+    nanos?: Array<number[] | null>;
   };
 }
 
