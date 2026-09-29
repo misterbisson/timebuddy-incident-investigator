@@ -73,6 +73,14 @@ describe('parseLokiLogFrames', () => {
     ]);
   });
 
+  // #284 review: toRecord assigned with out[k] = ..., so a stream label named
+  // "__proto__" hit the prototype setter and vanished.
+  it('keeps a stream label named "__proto__"', () => {
+    const frame = legacyLogFrame([{ t: T0, line: 'x', labels: JSON.parse('{"__proto__":"p","app":"a"}') }]);
+    const [parsed] = parseLokiLogFrames([frame]);
+    expect(Object.getOwnPropertyDescriptor(parsed!.labels, '__proto__')?.value).toBe('p');
+  });
+
   it('refuses a numeric frame (a metric query result) rather than returning no lines', () => {
     const frame = { schema: { fields: [{ name: 'Time', type: 'time' }, { name: 'Value', type: 'number' }] }, data: { values: [[T0], [3]] } };
     expect(() => parseLokiLogFrames([frame])).toThrow(/numeric series rather than log lines/);

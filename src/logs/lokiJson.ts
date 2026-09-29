@@ -3,89 +3,189 @@
  * for HistoricalLokiAdapter (see lokiEventLabels in lokiAdapter.ts for why the
  * adapter needs them at all).
  *
- * This is a scanner rather than `JSON.parse` because `JSON.parse` loses three
- * things Loki keeps, and each one changes what a join matches:
+ * This is a port rather than a `JSON.parse` call, because `JSON.parse` differs
+ * from Loki in ways that change what a join matches:
  *
- * - **A number's source text.** Loki's `readValue` returns a number token's
- *   bytes as-is. `String(JSON.parse(...))` rounds to a double, so
- *   `12345678901234567891` and `12345678901234567890` became the same join
- *   value, and `1.0` became `"1"`.
+ * - **A number's source text.** Loki returns a number token's bytes as-is.
+ *   `String(JSON.parse(...))` rounds to a double, so `12345678901234567891`
+ *   and `12345678901234567890` became the same join value.
  * - **A truncated line's leading fields.** Loki walks the object with
  *   jsonparser's `ObjectEach`, so every field before the point a clipped line
  *   breaks is already extracted when the error arrives. `JSON.parse` is
  *   all-or-nothing.
- * - **Keys spelled like Object.prototype members.** Built on a plain object, a
- *   `__proto__` field set the prototype instead of a label, and a
- *   `constructor` field looked like a stream-label collision.
+ * - **Raw control characters.** jsonparser keeps a raw tab or newline inside a
+ *   string; `JSON.parse` rejects the whole line.
+ * - **Keys spelled like Object.prototype members**, which a plain object
+ *   mishandles (`__proto__` sets the prototype).
  *
- * Mirrored from Loki's `JSONParser` (pkg/logql/log/parser.go) and
- * `sanitizeLabelKey`/`appendSanitized` (util.go):
+ * Ported from Loki v3.7.8's `JSONParser` (pkg/logql/log/parser.go,
+ * `sanitizeLabelKey`/`appendSanitized` in util.go) and the jsonparser fork it
+ * pins (github.com/grafana/jsonparser at 023329977675: `ObjectEach`,
+ * `getType`, `Unescape`):
  *
- * - Nested keys join with `_`. A key is trimmed of whitespace, and every code
- *   point outside `[a-zA-Z0-9_]` becomes `_`. Only the first segment of a
- *   name gets a `_` prefix for a leading digit, and a segment that trims to
- *   nothing adds no prefix of its own.
- * - Strings, numbers, and booleans are extracted. Nulls and arrays are
- *   skipped. U+FFFD in a string becomes a space, and a string whose escapes
- *   don't decode becomes `""`.
- * - A name that is already a stream label gets `_extracted` appended.
- * - A line that isn't one JSON object, or breaks partway, gets `__error__` set
- *   to `JSONParserErr`, with whatever came before the break still extracted.
- *   A nested object's end is found before any of its fields are read, as
- *   jsonparser does, so an unterminated nested object contributes nothing.
+ * - **Walk.** Whitespace is space, tab, CR and LF only. A trailing comma
+ *   before `}` is accepted. A nested object's end is found first (by bracket
+ *   counting that skips strings), its fields are read inside that span only,
+ *   and the outer walk resumes after it. An unterminated one therefore
+ *   contributes nothing. Arrays and nulls are skipped. A number is any token
+ *   starting `-` or a digit, up to the next delimiter, kept as written.
+ *   `true`/`false` are kept. Any other literal, `undefined` included, is an
+ *   error.
+ * - **Strings.** Only `\"` `\\` `\/` `\b` `\f` `\n` `\r` `\t` and `\uXXXX`
+ *   decode. A surrogate needs a second `\u` escape after it. Any other escape
+ *   makes a value `""`, and a key a parse error. U+FFFD in a value becomes a
+ *   space.
+ * - **Names.** A top-level key is trimmed of whitespace (Go's
+ *   `unicode.IsSpace` set, not `String#trim`'s), gets a `_` prefix for a
+ *   leading digit, and has every code point outside `[a-zA-Z0-9_]` replaced
+ *   with `_`. A nested name joins its path's segments with `_`. Segments that
+ *   trim to nothing are skipped, and the digit prefix applies only to the
+ *   first segment written. A name that is already a stream label gets
+ *   `_extracted` (on a nested name, appended to the raw last key before
+ *   sanitizing). When two fields land on the same name, **the first one
+ *   wins**, as Loki's `Extracted` check does.
+ * - **Errors.** A line that isn't one JSON object, or breaks partway, gets
+ *   `__error__` set to `JSONParserErr`, with whatever came before the break
+ *   still extracted.
  *
- * One deliberate difference: a name that sanitizes to the empty string is
- * dropped. Loki sets it, but no selector or `on()` clause can name it, so it
- * can never take part in a join.
+ * Where this deliberately differs:
  *
- * Also not mirrored: jsonparser's `__error_details__` message text, which is
- * specific to its implementation.
+ * - A nested path whose every segment is blank (`{" ":{" ":"x"}}`) names no
+ *   label here. Loki emits a label named `""`, which no selector or `on()`
+ *   clause can name, so it can never take part in a join. (A blank top-level
+ *   key is skipped by Loki too.)
+ * - Nesting deeper than MAX_DEPTH is a parse error at that point. Loki keeps
+ *   going. Its walk re-scans every nested object to find its end before
+ *   reading it, which is quadratic in depth, and a recursive port overflows
+ *   the stack somewhere past a few thousand levels.
+ * - `__error_details__`, whose message text is specific to jsonparser, isn't
+ *   set.
  */
 
 const ERROR_LABEL = '__error__';
 const JSON_PARSER_ERR = 'JSONParserErr';
 const DUPLICATE_SUFFIX = '_extracted';
 
+/** Nesting depth past which a line is treated as unparseable — see the module header. */
+export const MAX_DEPTH = 100;
+
 class ScanError extends Error {}
 
-/** One name segment, sanitized the way Loki's appendSanitized does. `first` is whether nothing precedes it in the name. */
-function sanitizeSegment(key: string, first: boolean): string {
-  const trimmed = key.trim();
-  if (trimmed === '') return '';
-  let out = first && trimmed[0]! >= '0' && trimmed[0]! <= '9' ? '_' : '';
+/** jsonparser's whitespace, for the walk itself (nextToken). */
+const isJsonSpace = (ch: string | undefined) => ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t';
+
+/** The characters that end an unquoted token (jsonparser's tokenEnd). */
+const isTokenEnd = (ch: string) => isJsonSpace(ch) || ch === ',' || ch === '}' || ch === ']';
+
+/** Go's unicode.IsSpace, which strings.TrimSpace uses to trim a key. */
+function isGoSpace(cp: number): boolean {
+  return (
+    (cp >= 0x09 && cp <= 0x0d) ||
+    cp === 0x20 ||
+    cp === 0x85 ||
+    cp === 0xa0 ||
+    cp === 0x1680 ||
+    (cp >= 0x2000 && cp <= 0x200a) ||
+    cp === 0x2028 ||
+    cp === 0x2029 ||
+    cp === 0x202f ||
+    cp === 0x205f ||
+    cp === 0x3000
+  );
+}
+
+function goTrimSpace(s: string): string {
+  const cps = [...s];
+  let start = 0;
+  let end = cps.length;
+  while (start < end && isGoSpace(cps[start]!.codePointAt(0)!)) start++;
+  while (end > start && isGoSpace(cps[end - 1]!.codePointAt(0)!)) end--;
+  return cps.slice(start, end).join('');
+}
+
+/** Loki's appendSanitized: trims `key`, then appends it to `to` with invalid characters as `_`. */
+function appendSanitized(to: string, key: string): string {
+  const trimmed = goTrimSpace(key);
+  if (trimmed === '') return to;
+  let out = to === '' && trimmed[0]! >= '0' && trimmed[0]! <= '9' ? '_' : '';
   for (const ch of trimmed) out += /^[a-zA-Z0-9_]$/.test(ch) ? ch : '_';
+  return to + out;
+}
+
+/** Loki's buildSanitizedPrefixFromBuffer: a nested path's name, blank segments skipped. */
+function sanitizedPath(path: readonly string[]): string {
+  let out = '';
+  path.forEach((part, i) => {
+    if (goTrimSpace(part) === '') return;
+    if (i > 0 && out !== '') out += '_';
+    out = appendSanitized(out, part);
+  });
   return out;
 }
 
-/** The characters that end an unquoted token, per jsonparser's tokenEnd. */
-const TOKEN_END = new Set([' ', '\n', '\r', '\t', ',', '}', ']']);
+/**
+ * jsonparser's Unescape: undefined for an escape it doesn't accept. Raw
+ * control characters pass through untouched.
+ */
+function unescape(raw: string): string | undefined {
+  if (!raw.includes('\\')) return raw;
+  let out = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (ch !== '\\') {
+      out += ch;
+      continue;
+    }
+    const e = raw[i + 1];
+    const simple: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+    if (e !== undefined && Object.hasOwn(simple, e)) {
+      out += simple[e];
+      i += 1;
+      continue;
+    }
+    if (e !== 'u') return undefined;
+    const r = hex4(raw, i + 2);
+    if (r === undefined) return undefined;
+    if (r < 0xd800 || r > 0xdfff) {
+      out += String.fromCodePoint(r);
+      i += 5;
+      continue;
+    }
+    // A surrogate (high or low) needs a second \u escape, at or above 0xDC00.
+    if (raw[i + 6] !== '\\' || raw[i + 7] !== 'u') return undefined;
+    const r2 = hex4(raw, i + 8);
+    if (r2 === undefined || r2 < 0xdc00) return undefined;
+    const combined = 0x10000 + ((r - 0xd800) << 10) + (r2 - 0xdc00);
+    // utf8.EncodeRune writes U+FFFD for anything that isn't a valid code point.
+    out += combined > 0x10ffff || (combined >= 0xd800 && combined <= 0xdfff) ? '�' : String.fromCodePoint(combined);
+    i += 11;
+  }
+  return out;
+}
 
-class Scanner {
-  private pos = 0;
+function hex4(s: string, at: number): number | undefined {
+  const digits = s.slice(at, at + 4);
+  return /^[0-9a-fA-F]{4}$/.test(digits) ? parseInt(digits, 16) : undefined;
+}
 
+type Emit = (path: readonly string[], key: string, value: string) => void;
+
+/** A port of jsonparser's ObjectEach, over text[start, end), with Loki's JSONParser callback. */
+class Walker {
   constructor(
     private readonly text: string,
-    private readonly onField: (name: string, value: string) => void,
+    private readonly emit: Emit,
   ) {}
 
-  /** Walks the top-level object. Throws ScanError where Loki's ObjectEach would fail. */
-  run(): void {
-    this.skipWs();
-    this.parseObject('');
+  /** First non-whitespace index in [from, end), or -1. */
+  private nextToken(from: number, end: number): number {
+    for (let i = from; i < end; i++) if (!isJsonSpace(this.text[i])) return i;
+    return -1;
   }
 
-  private skipWs(): void {
-    while (this.pos < this.text.length && ' \n\r\t'.includes(this.text[this.pos]!)) this.pos++;
-  }
-
-  private expect(ch: string): void {
-    if (this.text[this.pos] !== ch) throw new ScanError(`expected "${ch}" at ${this.pos}`);
-    this.pos++;
-  }
-
-  /** Index just past the closing quote of the string starting at `start`, or -1 if it never closes. */
-  private stringEnd(start: number): number {
-    for (let i = start + 1; i < this.text.length; i++) {
+  /** Index just past the quote closing a string whose body starts at `from`, or -1. */
+  private stringEnd(from: number, end: number): number {
+    for (let i = from; i < end; i++) {
       const ch = this.text[i];
       if (ch === '\\') i++;
       else if (ch === '"') return i + 1;
@@ -93,96 +193,93 @@ class Scanner {
     return -1;
   }
 
-  /** Index just past the bracket closing the object or array starting at `start`, or -1 if it never closes. */
-  private blockEnd(start: number): number {
-    const open = this.text[start]!;
-    const close = open === '{' ? '}' : ']';
-    let depth = 0;
-    for (let i = start; i < this.text.length; i++) {
+  /** Index just past the bracket closing the block opening at `from`, or -1 (jsonparser's blockEnd). */
+  private blockEnd(from: number, end: number, open: string, close: string): number {
+    let level = 0;
+    for (let i = from; i < end; i++) {
       const ch = this.text[i];
       if (ch === '"') {
-        const end = this.stringEnd(i);
-        if (end === -1) return -1;
-        i = end - 1;
+        const se = this.stringEnd(i + 1, end);
+        if (se === -1) return -1;
+        i = se - 1;
       } else if (ch === open) {
-        depth++;
-      } else if (ch === close && --depth === 0) {
+        level++;
+      } else if (ch === close && --level === 0) {
         return i + 1;
       }
     }
     return -1;
   }
 
-  /** Reads a string token, returning its decoded value, or undefined if its escapes don't decode. */
-  private readString(): string | undefined {
-    const end = this.stringEnd(this.pos);
-    if (end === -1) throw new ScanError(`unterminated string at ${this.pos}`);
-    const raw = this.text.slice(this.pos, end);
-    this.pos = end;
-    try {
-      // The token's own text, quotes included, is a JSON string literal
-      // exactly when its escapes are valid.
-      return JSON.parse(raw) as string;
-    } catch {
-      return undefined;
+  objectEach(start: number, end: number, path: readonly string[]): void {
+    if (path.length > MAX_DEPTH) throw new ScanError('nested too deeply');
+    let pos = this.nextToken(start, end);
+    if (pos === -1 || this.text[pos] !== '{') throw new ScanError('not an object');
+    pos = this.nextToken(pos + 1, end);
+    if (pos === -1) throw new ScanError('unterminated object');
+    if (this.text[pos] === '}') return;
+
+    while (pos < end) {
+      // Step 1: the key (or the closing brace, which also accepts a trailing comma).
+      const ch = this.text[pos];
+      if (ch === '}') return;
+      if (ch !== '"') throw new ScanError(`expected a key at ${pos}`);
+      const keyEnd = this.stringEnd(pos + 1, end);
+      if (keyEnd === -1) throw new ScanError('unterminated key');
+      const key = unescape(this.text.slice(pos + 1, keyEnd - 1));
+      if (key === undefined) throw new ScanError('invalid escape in a key');
+
+      // Step 2: the colon.
+      pos = this.nextToken(keyEnd, end);
+      if (pos === -1 || this.text[pos] !== ':') throw new ScanError(`expected ":" at ${pos}`);
+
+      // Step 3: the value.
+      pos = this.nextToken(pos + 1, end);
+      if (pos === -1) throw new ScanError('missing value');
+      pos = this.value(pos, end, path, key);
+
+      // Step 4: a comma, or the end of the object.
+      pos = this.nextToken(pos, end);
+      if (pos === -1) throw new ScanError('unterminated object');
+      if (this.text[pos] === '}') return;
+      if (this.text[pos] !== ',') throw new ScanError(`expected "," or "}" at ${pos}`);
+      pos = this.nextToken(pos + 1, end);
+      if (pos === -1) throw new ScanError('unterminated object');
     }
+    throw new ScanError('unterminated object');
   }
 
-  private readToken(): string {
-    const start = this.pos;
-    while (this.pos < this.text.length && !TOKEN_END.has(this.text[this.pos]!)) this.pos++;
-    return this.text.slice(start, this.pos);
-  }
-
-  private parseObject(prefix: string): void {
-    this.expect('{');
-    this.skipWs();
-    if (this.text[this.pos] === '}') {
-      this.pos++;
-      return;
-    }
-    for (;;) {
-      this.skipWs();
-      if (this.text[this.pos] !== '"') throw new ScanError(`expected a key at ${this.pos}`);
-      const key = this.readString();
-      if (key === undefined) throw new ScanError('key with an invalid escape');
-      this.skipWs();
-      this.expect(':');
-      this.skipWs();
-      this.parseValue(prefix, key);
-      this.skipWs();
-      const next = this.text[this.pos];
-      this.pos++;
-      if (next === '}') return;
-      if (next !== ',') throw new ScanError(`expected "," or "}" at ${this.pos - 1}`);
-    }
-  }
-
-  private parseValue(prefix: string, key: string): void {
-    const ch = this.text[this.pos];
+  /** jsonparser's getType plus Loki's parseObject for the value at `pos`. Returns the index past it. */
+  private value(pos: number, end: number, path: readonly string[], key: string): number {
+    const ch = this.text[pos]!;
     if (ch === '"') {
-      const value = this.readString() ?? '';
-      this.emit(prefix, key, value.replace(/�/g, ' '));
-    } else if (ch === '{') {
-      if (this.blockEnd(this.pos) === -1) throw new ScanError(`unterminated object at ${this.pos}`);
-      const segment = sanitizeSegment(key, prefix === '');
-      this.parseObject(prefix === '' ? segment : `${prefix}_${segment}`);
-    } else if (ch === '[') {
-      const end = this.blockEnd(this.pos);
-      if (end === -1) throw new ScanError(`unterminated array at ${this.pos}`);
-      this.pos = end;
-    } else if (ch === '-' || (ch !== undefined && ch >= '0' && ch <= '9')) {
-      this.emit(prefix, key, this.readToken());
-    } else {
-      const token = this.readToken();
-      if (token === 'true' || token === 'false') this.emit(prefix, key, token);
-      else if (token !== 'null') throw new ScanError(`unknown value type at ${this.pos}`);
+      const se = this.stringEnd(pos + 1, end);
+      if (se === -1) throw new ScanError('unterminated string');
+      // An escape Unescape refuses makes the value "", not an error (readValue).
+      const value = unescape(this.text.slice(pos + 1, se - 1)) ?? '';
+      this.emit(path, key, value.replace(/�/g, ' '));
+      return se;
     }
-  }
-
-  private emit(prefix: string, key: string, value: string): void {
-    const name = prefix === '' ? sanitizeSegment(key, true) : `${prefix}_${sanitizeSegment(key, false)}`;
-    if (name !== '') this.onField(name, value);
+    if (ch === '{' || ch === '[') {
+      const blockEnd = this.blockEnd(pos, end, ch, ch === '{' ? '}' : ']');
+      if (blockEnd === -1) throw new ScanError('unterminated block');
+      if (ch === '{') this.objectEach(pos, blockEnd, [...path, key]);
+      return blockEnd;
+    }
+    let tokenEnd = pos;
+    while (tokenEnd < end && !isTokenEnd(this.text[tokenEnd]!)) tokenEnd++;
+    const token = this.text.slice(pos, tokenEnd);
+    if (ch === 't' || ch === 'f') {
+      if (token !== 'true' && token !== 'false') throw new ScanError(`unknown literal ${token}`);
+      this.emit(path, key, token);
+    } else if (ch === 'n' || ch === 'u') {
+      if (token !== 'null') throw new ScanError(`unknown literal ${token}`);
+    } else if (ch === '-' || (ch >= '0' && ch <= '9')) {
+      this.emit(path, key, token);
+    } else {
+      throw new ScanError(`unknown value type at ${pos}`);
+    }
+    return tokenEnd;
   }
 }
 
@@ -193,18 +290,30 @@ class Scanner {
  * `__proto__` or `constructor` field is an ordinary label.
  */
 export function lokiJsonLabels(line: string, streamLabels: Record<string, string>): Record<string, string> {
-  const labels = new Map<string, string>(Object.entries(streamLabels));
+  const isStreamLabel = (name: string) => Object.hasOwn(streamLabels, name);
   const extracted = new Map<string, string>();
+  const emit: Emit = (path, key, value) => {
+    let name: string;
+    if (path.length === 0) {
+      name = appendSanitized('', key);
+      if (name === '') return;
+      if (isStreamLabel(name)) name += DUPLICATE_SUFFIX;
+    } else {
+      name = sanitizedPath([...path, key]);
+      if (isStreamLabel(name)) name = sanitizedPath([...path, key + DUPLICATE_SUFFIX]);
+      if (name === '') return; // Loki emits "" here; see the header.
+    }
+    if (!extracted.has(name)) extracted.set(name, value);
+  };
+
   let failed = false;
   try {
-    new Scanner(line, (name, value) => extracted.set(name, value)).run();
+    new Walker(line, emit).objectEach(0, line.length, []);
   } catch (err) {
     if (!(err instanceof ScanError)) throw err;
     failed = true;
   }
-  for (const [name, value] of extracted) {
-    labels.set(Object.hasOwn(streamLabels, name) ? `${name}${DUPLICATE_SUFFIX}` : name, value);
-  }
+  const labels = new Map<string, string>([...Object.entries(streamLabels), ...extracted]);
   if (failed) labels.set(ERROR_LABEL, JSON_PARSER_ERR);
   // Object.fromEntries defines each key as an own property, "__proto__" included.
   return Object.fromEntries(labels);

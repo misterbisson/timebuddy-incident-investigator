@@ -133,9 +133,96 @@ describe('lokiEventLabels — the fields | json would extract', () => {
     // can't express — search_logs is the tool for that shape.
     expect(lokiEventLabels(line('{"payload":"{\\"request_id\\":\\"r1\\"}"}'))).toEqual({ app: 'checkout', payload: '{"request_id":"r1"}' });
   });
+
+  // #284 review, each row checked against Loki v3.7.8's JSONParser: when two
+  // fields land on one label name, Loki keeps the first (parseLabelValue skips
+  // a name ParserLabelHints().Extracted already has).
+  it.each([
+    ['two keys that sanitize to one name', '{"request_id":"r1","request-id":"r2"}', {}, { request_id: 'r1' }],
+    ['a repeated key', '{"k":"first","k":"second"}', {}, { k: 'first' }],
+    ['a dotted key and the nested path it spells', '{"a.b":"x","a":{"b":"y"}}', {}, { a_b: 'x' }],
+    ['a suffixed collision and a key already named that', '{"app":"x","app_extracted":"y"}', { app: 'checkout' }, { app: 'checkout', app_extracted: 'x' }],
+  ])('keeps the first value for %s', (_name, json, stream, want) => {
+    expect(lokiEventLabels(line(json, stream))).toEqual(want);
+  });
+
+  // #284 review: jsonparser accepts raw control characters inside a string;
+  // JSON.parse rejects them.
+  it('keeps a raw tab or newline inside a string value', () => {
+    expect(lokiEventLabels(line('{"msg":"a\tb","k":"v"}', {}))).toEqual({ msg: 'a\tb', k: 'v' });
+    expect(lokiEventLabels(line('{"msg":"line1\nline2","request_id":"r1"}', {}))).toEqual({ msg: 'line1\nline2', request_id: 'r1' });
+  });
+
+  it('reads a key containing a raw tab', () => {
+    expect(lokiEventLabels(line('{"a\tb":"x","k":"v"}', {}))).toEqual({ a_b: 'x', k: 'v' });
+  });
+
+  it('gives a value with a lone surrogate escape "", as Loki does, and keeps the line\'s other fields', () => {
+    expect(lokiEventLabels(line('{"a":"\\ud800","k":"v"}', {}))).toEqual({ a: '', k: 'v' });
+  });
+
+  it('decodes a surrogate pair escape', () => {
+    expect(lokiEventLabels(line('{"a":"\\ud83d\\ude00"}', {}))).toEqual({ a: '\u{1F600}' });
+  });
+
+  it('treats an unknown escape in a value as "", and in a key as a parse error', () => {
+    expect(lokiEventLabels(line('{"a":"x\\qy","k":"v"}', {}))).toEqual({ a: '', k: 'v' });
+    expect(lokiEventLabels(line('{"k":"v","b\\q":"x","c":"y"}', {}))).toEqual({ k: 'v', __error__: 'JSONParserErr' });
+  });
+
+  // #284 review: Loki parses a nested object inside the span blockEnd found,
+  // then resumes the outer walk after that span.
+  it('resumes after a malformed nested object where Loki does', () => {
+    expect(lokiEventLabels(line('{"x":{"a":1{},"b":2},"c":3}', {}))).toEqual({ x_a: '1{', c: '3' });
+  });
+
+  it('skips an empty or whitespace nested key segment, adding no "_" for it', () => {
+    expect(lokiEventLabels(line('{"a":{" ":{"b":"x"}}}', {}))).toEqual({ a_b: 'x' });
+    expect(lokiEventLabels(line('{" ":{"1b":"x"}}', {}))).toEqual({ _1b: 'x' });
+  });
+
+  it('accepts a trailing comma, as jsonparser\'s ObjectEach does', () => {
+    expect(lokiEventLabels(line('{"a":1,}', {}))).toEqual({ a: '1' });
+  });
+
+  it('reads "undefined" as an error, like any unknown literal', () => {
+    expect(lokiEventLabels(line('{"k":"v","u":undefined}', {}))).toEqual({ k: 'v', __error__: 'JSONParserErr' });
+  });
+
+  // #284 review: ~5000 levels overflowed the stack, and the RangeError aborted
+  // the whole correlate_logs call.
+  it('marks a pathologically deep line as a parse error instead of throwing', () => {
+    const deep = `{"k":"v","d":${'{"a":'.repeat(20_000)}1${'}'.repeat(20_000)}}`;
+    expect(lokiEventLabels(line(deep, {}))).toEqual({ k: 'v', __error__: 'JSONParserErr' });
+  });
+
+  // #284 review: Go's unicode.IsSpace and String#trim disagree on U+FEFF and U+0085.
+  it('trims keys with Go\'s whitespace set, not JavaScript\'s', () => {
+    expect(lokiEventLabels(line('{"\u{FEFF}id":"x"}', {}))).toEqual({ _id: 'x' });
+    expect(lokiEventLabels(line('{"id\u{0085}":"x"}', {}))).toEqual({ id: 'x' });
+  });
+
+  it('drops a name that is empty only because every nested segment was blank (Loki emits "")', () => {
+    expect(lokiEventLabels(line('{" ":{" ":"bar"},"k":"v"}', {}))).toEqual({ k: 'v' });
+  });
 });
 
 describe('correlateLogs against a Loki source', () => {
+  // #284 review: last-wins here made this join empty; Loki joins r1.
+  it('joins on the first of two fields that sanitize to the join key', async () => {
+    const front = [{ t: T0, line: '{"request_id":"r1"}', labels: { app: 'frontend' } }];
+    const back = [{ t: T0 + 500, line: '{"request_id":"r1","request.id":"r2"}', labels: { app: 'backend' } }];
+    const { client } = fakeLokiClient({ linesByExpr: { '{app="frontend"}': front, '{app="backend"}': back } });
+    const { events } = await correlateLogs({
+      target: { sourceType: 'loki', client, datasourceUid: 'logs1' },
+      query: 'loki({app="frontend"})[5m] and on(request_id) loki({app="backend"})[5m]',
+      fromMs: T0,
+      toMs: T0 + 60_000,
+      limit: 100,
+    });
+    expect(events.map((e) => e.joinValue)).toEqual(['r1']);
+  });
+
   // #278: both ids rounded to 12345678901234567000, so the anti-join found a
   // backend line for a request that never reached the backend.
   it('keeps large numeric ids distinct through an unless join', async () => {

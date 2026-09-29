@@ -98,12 +98,13 @@ function toRecord(value: unknown): Record<string, string> {
     }
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-    if (v === null || v === undefined) continue;
-    out[k] = typeof v === 'string' ? v : JSON.stringify(v);
-  }
-  return out;
+  // Object.fromEntries rather than `out[k] = ...`, which drops a label named
+  // "__proto__" into the prototype setter.
+  return Object.fromEntries(
+    Object.entries(obj as Record<string, unknown>)
+      .filter(([, v]) => v !== null && v !== undefined)
+      .map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]),
+  );
 }
 
 /**

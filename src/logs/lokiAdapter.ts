@@ -22,7 +22,8 @@ import { lokiJsonLabels } from './lokiJson.js';
  * It mirrors `| json` rather than inventing a naming scheme, so a field is
  * named the same thing here as in a search_logs query the agent writes against
  * the same source, and has the same value: a number keeps its source text, so
- * two large integer ids never collapse into one join value.
+ * two large integer ids never collapse into one join value, and when two
+ * fields land on one name the first wins, as in Loki.
  *
  * A JSON payload nested inside a string field (double-encoded JSON) stays a
  * string — in Loki that takes `line_format` and a second `| json`, which the
