@@ -129,8 +129,12 @@ could then never be resolved. The resolver matches the id against the known Graf
 connection ids instead, since those are the half this server controls, and takes the rest as
 the uid. An id that means two things is refused, naming both, rather than resolved to either:
 two connection ids that both prefix it, or a Graylog connection id that is also a Loki
-source's id (the Graylog one used to win silently). So an explicit Graylog id reads a Grafana
-connection's datasource list only when it begins with that connection's id and a `/`.
+source's id (the Graylog one used to win silently). So is an id with one reading when another
+candidate connection's datasources couldn't be read, since that connection might hold a second.
+So an explicit Graylog id reads a Grafana connection's datasource list only when it begins with
+that connection's id and a `/`. `list_log_sources` marks any id that names more than one
+source with `ambiguousWith`, listing the other readings, so the collision shows up before a
+call is refused over it.
 
 **The query path** ([`src/logs/loki.ts`](../src/logs/loki.ts)) is the already-allowlisted
 `POST /api/ds/query` — no new endpoint. The query is model-authored, exactly as a Graylog

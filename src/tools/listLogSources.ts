@@ -20,7 +20,9 @@ export function registerListLogSources(server: McpServer, { registry, logRegistr
         'pair the right log source with the dashboard/alert you\'re investigating, instead of guessing or asking ' +
         'when there\'s only one obvious match. A service may log to Loki rather than Graylog (or both), so check ' +
         'every source that matches before concluding there are no logs. "lokiDiscoveryProblems" lists Grafana ' +
-        'connections whose datasources couldn\'t be read — a Loki source there may exist but isn\'t listed. Pass ' +
+        'connections whose datasources couldn\'t be read — a Loki source there may exist but isn\'t listed. A ' +
+        'source with "ambiguousWith" shares its id with the sources listed there, so none of them can be selected ' +
+        'until a connection is renamed. Pass ' +
         '"connection" (a source id) to also list what can scope a search there: a Graylog connection\'s streams ' +
         '(id + title, for "streamId"), or a Loki source\'s stream label names (for a {label="..."} selector — get ' +
         'a label\'s values with discover_label_values). Loki only lists labels seen in a time range, so for a Loki ' +
