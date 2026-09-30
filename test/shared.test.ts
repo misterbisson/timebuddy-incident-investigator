@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dashboardUrlFor, epochMsSchema, folderUrlFor, resolveGotoUrl, resolveTargetDatasource, toolErrorResult, windowSizeWarning } from '../src/tools/shared.js';
+import {
+  dashboardUrlFor,
+  epochMsSchema,
+  folderUrlFor,
+  resolveGotoUrl,
+  resolveLabelWindow,
+  resolveTargetDatasource,
+  toolErrorResult,
+  windowSizeWarning,
+} from '../src/tools/shared.js';
 import type { Config } from '../src/config.js';
 import { GrafanaApiError, type GrafanaClient } from '../src/grafana/client.js';
 import type { ConnectionRegistry } from '../src/grafana/registry.js';
@@ -256,5 +265,35 @@ describe('windowSizeWarning', () => {
     const warning = windowSizeWarning(0, undefined, 8 * DAY);
     expect(warning).toMatch(/endsAtMs was not provided/);
     expect(warning).toMatch(/8\.0-day window/);
+  });
+});
+
+// #283 review: the default start is capped by MAX_LOOKBACK_HOURS, the window
+// is refused past it, and `defaulted` reports either bound being defaulted.
+describe('resolveLabelWindow', () => {
+  const NOW = Date.parse('2026-03-02T10:00:00Z');
+  const HOUR = 3_600_000;
+  const cfg = (maxLookbackHours: number) => ({ maxLookbackHours }) as Config;
+
+  it('defaults to the 24 hours before now', () => {
+    const { window, report } = resolveLabelWindow(undefined, undefined, cfg(720), NOW);
+    expect(window).toEqual({ fromMs: NOW - 24 * HOUR, toMs: NOW });
+    expect(report.defaulted).toBe(true);
+  });
+
+  it('caps the default start at MAX_LOOKBACK_HOURS when that is shorter', () => {
+    const { window } = resolveLabelWindow(undefined, undefined, cfg(6), NOW);
+    expect(window).toEqual({ fromMs: NOW - 6 * HOUR, toMs: NOW });
+  });
+
+  it('reports the window as defaulted when only one bound was given', () => {
+    expect(resolveLabelWindow(undefined, NOW, cfg(720), NOW).report.defaulted).toBe(true);
+    expect(resolveLabelWindow(NOW - HOUR, undefined, cfg(720), NOW).report.defaulted).toBe(true);
+    expect(resolveLabelWindow(NOW - HOUR, NOW, cfg(720), NOW).report.defaulted).toBe(false);
+  });
+
+  it('refuses a window wider than MAX_LOOKBACK_HOURS, or a reversed one', () => {
+    expect(() => resolveLabelWindow(NOW - 10 * HOUR, NOW, cfg(6), NOW)).toThrow(/exceeding MAX_LOOKBACK_HOURS=6/);
+    expect(() => resolveLabelWindow(NOW, NOW - HOUR, cfg(720), NOW)).toThrow(/non-positive duration/);
   });
 });

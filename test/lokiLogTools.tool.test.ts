@@ -20,7 +20,7 @@ const graylog: LogConnection[] = [
 ];
 const SOURCE = 'prod/logs1';
 
-function config(redactionPatterns: RegExp[] = []): Config {
+function config(redactionPatterns: RegExp[] = [], maxLookbackHours = 720): Config {
   return {
     connections: grafana,
     logConnections: [],
@@ -28,7 +28,7 @@ function config(redactionPatterns: RegExp[] = []): Config {
     requestTimeoutMs: 1000,
     screenshotTimeoutMs: 45000,
     maxConcurrency: 4,
-    maxLookbackHours: 720,
+    maxLookbackHours,
     maxDataPoints: 2000,
     maxLogLines: 500,
     redactionPatterns,
@@ -37,14 +37,16 @@ function config(redactionPatterns: RegExp[] = []): Config {
   };
 }
 
-function setup(opts: { linesByExpr?: Record<string, FixtureLine[] | Error>; labelNames?: string[]; withGraylog?: boolean; redact?: RegExp[] } = {}) {
+function setup(
+  opts: { linesByExpr?: Record<string, FixtureLine[] | Error>; labelNames?: string[]; withGraylog?: boolean; redact?: RegExp[]; maxLookbackHours?: number } = {},
+) {
   const loki = fakeLokiClient({ linesByExpr: opts.linesByExpr, labelNames: opts.labelNames });
   const activityLog = createActivityLog();
   const { server, call, inputSchema } = fakeServer();
   const ctx = {
     registry: fakeRegistry(grafana, loki.client),
     logRegistry: fakeLogRegistry(opts.withGraylog ? graylog : [], fakeGraylogClient({ messages: [] }).client),
-    config: config(opts.redact),
+    config: config(opts.redact, opts.maxLookbackHours),
     activityLog,
   } as never;
   registerSearchLogs(server, ctx);
@@ -96,6 +98,14 @@ describe('list_log_sources with Loki', () => {
     expect(window.toMs).toBeGreaterThanOrEqual(before);
     expect(window.toMs - window.fromMs).toBe(24 * 3_600_000);
     expect(body.labelWindow.defaulted).toBe(true);
+  });
+
+  // #283 review: the description said 24 hours even when MAX_LOOKBACK_HOURS
+  // made the default shorter.
+  it('states the effective default lookback in its description', () => {
+    const describe = (h: number) => setup({ maxLookbackHours: h }).inputSchema('list_log_sources').startsAtMs!.description;
+    expect(describe(720)).toMatch(/defaults to 24 hours before endsAtMs/);
+    expect(describe(6)).toMatch(/defaults to 6 hours before endsAtMs/);
   });
 
   it('refuses a window when there are no Loki label names for it to scope', async () => {

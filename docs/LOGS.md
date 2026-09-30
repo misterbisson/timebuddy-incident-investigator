@@ -184,13 +184,14 @@ follows it. `getLokiLabelValues` used to repeat the prefix and 404, and its test
 doubled path.
 
 Both label calls always send a `start`/`end` window, for two reasons. Loki defaults both
-endpoints to the last 6 hours, so without one a service that stopped logging before that (it
+endpoints to the last hour (`defaultSince`), so without one a service that stopped logging before that (it
 crashed, or was renamed) disappears from an investigation of anything older. And Grafana 9.5
 through 10.4 only forward a Loki resource URL beginning `labels?`, so a bare `labels` is refused
 before it reaches Loki; v11 dropped that check. The window is required on the client methods
 rather than defaulted there. `list_log_sources` and `discover_label_values` take an optional
 `startsAtMs`/`endsAtMs`, default to the 24 hours before now (or `MAX_LOOKBACK_HOURS` if
-shorter), and report the range used, since which labels exist depends on it. Passing a window
+shorter), and report the range used, with `defaulted` set when either bound was filled in,
+since which labels exist depends on it. Passing a window
 where it would scope nothing (no Loki source, or a non-Loki datasource) is refused rather than
 ignored.
 
