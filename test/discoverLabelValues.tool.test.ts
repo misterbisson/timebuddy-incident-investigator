@@ -118,8 +118,8 @@ describe('discover_label_values tool', () => {
     expect(parsed.window.defaulted).toBe(true);
   });
 
-  // #277: Loki only returns values seen in a time range (6 hours by default,
-  // on Loki's side), so the incident window has to reach it.
+  // #277: Loki only returns values seen in a time range (the last hour by
+  // default, on Loki's side), so the incident window has to reach it.
   it('passes the given window to Loki and reports it', async () => {
     const { client, getLokiLabelValues } = fakeClient({
       datasources: [{ uid: 'loki1', id: 1, name: 'Loki', type: 'loki' }],

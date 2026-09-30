@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import type { GrafanaClient } from '../grafana/client.js';
-import { epochMsSchema, resolveLabelWindow, resolveToolClient, toolErrorResult, type LabelWindowReport } from './shared.js';
+import { epochMsSchema, labelLookbackHours, resolveLabelWindow, resolveToolClient, toolErrorResult, type LabelWindowReport } from './shared.js';
 import { buildShowTagValuesQuery, runTagValuesQuery } from './discoverInfluxdbSchema.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -106,7 +106,7 @@ export function registerDiscoverLabelValues(server: McpServer, { registry, confi
         'in scope" or "wrong label/metric name". Verify the names against the panel\'s own series labels / ' +
         'discover_influxdb_schema tagKeys before concluding a set is truly empty. Loki only returns values seen in a ' +
         'time range, so for Loki pass the incident window as startsAtMs/endsAtMs; without them it covers the last ' +
-        '24 hours, and "window" reports the range actually used. Goes through the same connection ' +
+        `${labelLookbackHours(config)} hours, and "window" reports the range actually used. Goes through the same connection ` +
         'resolution, redaction, and audit logging as every other tool.',
       inputSchema: {
         metric: z
@@ -125,7 +125,7 @@ export function registerDiscoverLabelValues(server: McpServer, { registry, confi
         limit: z.number().optional().default(50).describe('Max values to return; see valuesTotal for the untruncated count'),
         startsAtMs: epochMsSchema
           .optional()
-          .describe('Loki only: start of the range to list values over — epoch ms or ISO 8601; defaults to 24 hours before endsAtMs'),
+          .describe(`Loki only: start of the range to list values over — epoch ms or ISO 8601; defaults to ${labelLookbackHours(config)} hours before endsAtMs`),
         endsAtMs: epochMsSchema.optional().describe('Loki only: end of that range — epoch ms or ISO 8601; defaults to now'),
         connection: z.string().optional().describe('Which Grafana connection to use; omit when only one is configured'),
       },

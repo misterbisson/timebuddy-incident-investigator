@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import { epochMsSchema, resolveLabelWindow, toolErrorResult } from './shared.js';
+import { epochMsSchema, labelLookbackHours, resolveLabelWindow, toolErrorResult } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 import { listLogSources, resolveLogSource } from '../logs/sources.js';
@@ -26,8 +26,8 @@ export function registerListLogSources(server: McpServer, { registry, logRegistr
         '"connection" (a source id) to also list what can scope a search there: a Graylog connection\'s streams ' +
         '(id + title, for "streamId"), or a Loki source\'s stream label names (for a {label="..."} selector — get ' +
         'a label\'s values with discover_label_values). Loki only lists labels seen in a time range, so for a Loki ' +
-        'source pass the incident window as startsAtMs/endsAtMs; without them it covers the last 24 hours, and ' +
-        '"labelWindow" reports the range actually used.',
+        'source pass the incident window as startsAtMs/endsAtMs; without them it covers the last ' +
+        `${labelLookbackHours(config)} hours, and "labelWindow" reports the range actually used.`,
       inputSchema: {
         connection: z
           .string()
@@ -35,7 +35,7 @@ export function registerListLogSources(server: McpServer, { registry, logRegistr
           .describe('Also list this source\'s streams (Graylog) or stream label names (Loki); omit to just list every log source'),
         startsAtMs: epochMsSchema
           .optional()
-          .describe('Loki only: start of the range to list label names over — epoch ms or ISO 8601; defaults to 24 hours before endsAtMs'),
+          .describe(`Loki only: start of the range to list label names over — epoch ms or ISO 8601; defaults to ${labelLookbackHours(config)} hours before endsAtMs`),
         endsAtMs: epochMsSchema.optional().describe('Loki only: end of that range — epoch ms or ISO 8601; defaults to now'),
       },
       annotations: { readOnlyHint: true, title: 'List log sources' },

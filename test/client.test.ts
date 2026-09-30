@@ -98,7 +98,7 @@ describe('GrafanaClient label-values (datasource resources proxy)', () => {
     expect(url.searchParams.get('query')).toBe('{job="app"}');
   });
 
-  // #277: Loki defaults both label endpoints to the last 6 hours, so a window
+  // #277: Loki defaults both label endpoints to the last hour, so a window
   // is always sent, as Unix nanoseconds.
   it('getLokiLabelValues always sends the window as start/end nanoseconds', async () => {
     const { urls } = stubFetch({ status: 'success', data: [] });
