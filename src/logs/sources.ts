@@ -26,6 +26,8 @@ export interface GraylogLogSource {
   tags?: string[];
   streamId?: string;
   streamName?: string;
+  /** See LokiLogSource.ambiguousWith. */
+  ambiguousWith?: string[];
 }
 
 export interface LokiLogSource {
@@ -38,6 +40,12 @@ export interface LokiLogSource {
   tags?: string[];
   grafanaConnection: string;
   datasourceUid: string;
+  /**
+   * Set only when another listed source has the same id, naming each of them.
+   * Resolution refuses an id with two meanings, so neither can be selected
+   * until one of the connections is renamed.
+   */
+  ambiguousWith?: string[];
 }
 
 export type LogSource = GraylogLogSource | LokiLogSource;
@@ -112,12 +120,29 @@ export async function listLogSources(
 ): Promise<{ sources: LogSource[]; problems: LokiDiscoveryProblem[] }> {
   const graylog = (logRegistry?.list() ?? []).map(graylogSource);
   const loki = await listLokiSources(registry);
-  return { sources: [...graylog, ...loki.sources], problems: loki.problems };
+  return { sources: markAmbiguous([...graylog, ...loki.sources]), problems: loki.problems };
 }
 
 export type ResolvedLogSource =
   | { sourceType: 'graylog'; source: GraylogLogSource; client: GraylogClient }
   | { sourceType: 'loki'; source: LokiLogSource; client: GrafanaClient; grafanaUrl: string; grafanaName: string };
+
+/** How a refusal or `ambiguousWith` names one reading of an id. */
+function meaningOf(source: LogSource): string {
+  return source.sourceType === 'graylog'
+    ? `Graylog connection "${source.id}"`
+    : `Grafana connection "${source.grafanaConnection}"'s Loki datasource "${source.datasourceUid}"`;
+}
+
+/** Sets ambiguousWith on every source whose id another source also has. */
+function markAmbiguous(sources: LogSource[]): LogSource[] {
+  const byId = new Map<string, LogSource[]>();
+  for (const s of sources) byId.set(s.id, [...(byId.get(s.id) ?? []), s]);
+  return sources.map((s) => {
+    const others = byId.get(s.id)!.filter((o) => o !== s);
+    return others.length > 0 ? { ...s, ambiguousWith: others.map(meaningOf) } : s;
+  });
+}
 
 function describe(sources: LogSource[]): string {
   return sources.map((s) => `${s.id} (${s.sourceType}: ${s.name})`).join(', ') || 'none';
@@ -204,9 +229,11 @@ export async function resolveLogSource(
           'those connections so its id no longer overlaps the other.',
       );
     }
-    if (graylog && unreadable.length > 0) {
+    // One reading found, but an unreadable connection might hold another, so
+    // the one found can't be taken as the answer.
+    if (meanings.length === 1 && unreadable.length > 0) {
       throw new Error(
-        `Log source id "${explicitId}" is a Graylog connection, but could also be a Loki datasource on Grafana ` +
+        `Log source id "${explicitId}" matches ${meanings[0]}, but could also be a Loki datasource on Grafana ` +
           `connection(s) ${unreadable.map((u) => `"${u.grafana.id}" (${u.error})`).join(', ')}, whose datasources ` +
           'could not be read, so which one it means can\'t be settled. Retry once that connection is reachable, or ' +
           'rename one of the connections.',
@@ -240,9 +267,17 @@ export async function resolveLogSource(
           'to see the log sources that exist.',
       );
     }
-    if (unreadable.length > 0) throw unreadable[0]!.cause;
     const { sources } = await listLogSources(logRegistry, registry).catch(() => ({ sources: [] as LogSource[] }));
-    throw new Error(`Unknown log source "${explicitId}". Available: ${describe(sources)}.`);
+    const reasons = probes.map((p) => {
+      if (p.outcome === 'unreadable') return `Grafana connection "${p.grafana.id}"'s datasources could not be read (${p.error})`;
+      if (p.outcome === 'not-loki') {
+        return `Grafana connection "${p.grafana.id}" has datasource "${p.uid}" (${p.datasource!.name}), but it is type "${p.type}", not "loki"`;
+      }
+      return `Grafana connection "${p.grafana.id}" has no datasource with uid "${p.uid}"`;
+    });
+    throw new Error(
+      `Unknown log source "${explicitId}"${reasons.length > 0 ? `: ${reasons.join('; ')}` : ''}. Available: ${describe(sources)}.`,
+    );
   }
 
   const { sources, problems } = await listLogSources(logRegistry, registry);
@@ -260,7 +295,15 @@ export async function resolveLogSource(
     );
   }
   if (sources.length > 1) {
-    throw new Error(`Could not determine which log source to use. Available: ${describe(sources)}. Pass "connection" explicitly.`);
+    const ambiguousIds = [...new Set(sources.filter((s) => s.ambiguousWith).map((s) => s.id))];
+    const note =
+      ambiguousIds.length > 0
+        ? ` Note that ${ambiguousIds.map((id) => `"${id}"`).join(', ')} names more than one source and can't be ` +
+          'selected until one of those connections is renamed to a non-overlapping id.'
+        : '';
+    throw new Error(
+      `Could not determine which log source to use. Available: ${describe(sources)}. Pass "connection" explicitly.${note}`,
+    );
   }
   // Exactly one: re-enter the explicit path so there is one construction of each kind.
   return resolveLogSource(logRegistry, registry, sources[0]!.id);

@@ -159,4 +159,49 @@ describe('resolveLogSource with a "/" in the datasource uid', () => {
     const r = await resolveLogSource(fakeLogRegistry([glSlash], fakeGraylogClient({}).client), registry, 'prod/lk1');
     expect(r.sourceType).toBe('graylog');
   });
+
+  // #289 item 1: the unreadable connection might hold a Loki "logs", so the
+  // one readable match can't be taken as the answer.
+  it('refuses a single Loki match when another prefixing connection could not be read', async () => {
+    const registry = grafanaRegistry({ prod: [TEAM_LOGS], 'prod/team': new Error('503 unavailable') }, [prod, prodTeam]);
+    await expect(resolveLogSource(noGraylog(), registry, 'prod/team/logs')).rejects.toThrow(
+      /Grafana connection "prod"'s Loki datasource "team\/logs".*"prod\/team" \(503 unavailable\).*could not be read/s,
+    );
+  });
+
+  // #289 item 2: the listing emitted the same id twice with no warning, and
+  // the no-connection error said to pass an id that is then refused.
+  it('marks ids that name more than one source in the listing', async () => {
+    const prodEu: GrafanaConnection = { ...prodTeam, id: 'prod/eu' };
+    const registry = grafanaRegistry({ prod: [{ ...LOKI, uid: 'eu/x' }], 'prod/eu': [{ ...LOKI, uid: 'x' }] }, [prod, prodEu]);
+    const { sources } = await listLogSources(noGraylog(), registry);
+    expect(sources.map((s) => [s.id, s.ambiguousWith])).toEqual([
+      ['prod/eu/x', ['Grafana connection "prod/eu"\'s Loki datasource "x"']],
+      ['prod/eu/x', ['Grafana connection "prod"\'s Loki datasource "eu/x"']],
+    ]);
+    const plain = await listLogSources(noGraylog(), grafanaRegistry({ prod: [LOKI] }, [prod]));
+    expect(plain.sources[0]).not.toHaveProperty('ambiguousWith');
+  });
+
+  it('marks a Graylog id that is also a Loki source id', async () => {
+    const glSlash: LogConnection = { ...graylog, id: 'prod/lk1' };
+    const { sources } = await listLogSources(fakeLogRegistry([glSlash], fakeGraylogClient({}).client), grafanaRegistry({ prod: [LOKI] }, [prod]));
+    expect(sources.map((s) => s.ambiguousWith)).toEqual([['Grafana connection "prod"\'s Loki datasource "lk1"'], ['Graylog connection "prod/lk1"']]);
+  });
+
+  it('says in the no-connection error which listed ids cannot be selected', async () => {
+    const prodEu: GrafanaConnection = { ...prodTeam, id: 'prod/eu' };
+    const registry = grafanaRegistry({ prod: [{ ...LOKI, uid: 'eu/x' }], 'prod/eu': [{ ...LOKI, uid: 'x' }] }, [prod, prodEu]);
+    await expect(resolveLogSource(noGraylog(), registry, undefined)).rejects.toThrow(
+      /"prod\/eu\/x" names more than one source.*rename/s,
+    );
+  });
+
+  // #289 item 3: with several candidate splits the per-split reason was dropped.
+  it('explains every candidate reading when none of them is a Loki source', async () => {
+    const registry = grafanaRegistry({ prod: [{ ...PROM, uid: 'team/logs' }], 'prod/team': [] }, [prod, prodTeam]);
+    await expect(resolveLogSource(noGraylog(), registry, 'prod/team/logs')).rejects.toThrow(
+      /Grafana connection "prod" has datasource "team\/logs".*type "prometheus", not "loki".*Grafana connection "prod\/team" has no datasource with uid "logs"/s,
+    );
+  });
 });

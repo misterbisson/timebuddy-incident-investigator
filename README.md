@@ -469,8 +469,9 @@ To drive the log tools directly (Claude Desktop, or an ad-hoc question):
 - **`list_log_sources`** lists every log source — Graylog connections and Loki datasources,
   each with a `sourceType` — and, given a `connection`, that source's Graylog streams or Loki
   stream label names. Loki only lists labels seen in a time range, so pass the incident window
-  as `startsAtMs`/`endsAtMs` for a past incident; it defaults to the last 24 hours. Cross-reference its `tags` against `list_datasources` to see which log
-  source covers the same environment as a Grafana connection.
+  as `startsAtMs`/`endsAtMs` for a past incident; it defaults to the last 24 hours.
+  Cross-reference its `tags` against `list_datasources` to see which log source covers the same
+  environment as a Grafana connection.
 
 For Graylog, only the legacy (2.x–5.x) search API is supported — see [Known
 limitations](#known-limitations-mvp). Design rationale: [`docs/LOGS.md`](docs/LOGS.md).

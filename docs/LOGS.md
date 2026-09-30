@@ -129,8 +129,12 @@ could then never be resolved. The resolver matches the id against the known Graf
 connection ids instead, since those are the half this server controls, and takes the rest as
 the uid. An id that means two things is refused, naming both, rather than resolved to either:
 two connection ids that both prefix it, or a Graylog connection id that is also a Loki
-source's id (the Graylog one used to win silently). So an explicit Graylog id reads a Grafana
-connection's datasource list only when it begins with that connection's id and a `/`.
+source's id (the Graylog one used to win silently). So is an id with one reading when another
+candidate connection's datasources couldn't be read, since that connection might hold a second.
+So an explicit Graylog id reads a Grafana connection's datasource list only when it begins with
+that connection's id and a `/`. `list_log_sources` marks any id that names more than one
+source with `ambiguousWith`, listing the other readings, so the collision shows up before a
+call is refused over it.
 
 **The query path** ([`src/logs/loki.ts`](../src/logs/loki.ts)) is the already-allowlisted
 `POST /api/ds/query` — no new endpoint. The query is model-authored, exactly as a Graylog
@@ -212,13 +216,14 @@ follows it. `getLokiLabelValues` used to repeat the prefix and 404, and its test
 doubled path.
 
 Both label calls always send a `start`/`end` window, for two reasons. Loki defaults both
-endpoints to the last 6 hours, so without one a service that stopped logging before that (it
+endpoints to the last hour (`defaultSince`), so without one a service that stopped logging before that (it
 crashed, or was renamed) disappears from an investigation of anything older. And Grafana 9.5
 through 10.4 only forward a Loki resource URL beginning `labels?`, so a bare `labels` is refused
 before it reaches Loki; v11 dropped that check. The window is required on the client methods
 rather than defaulted there. `list_log_sources` and `discover_label_values` take an optional
 `startsAtMs`/`endsAtMs`, default to the 24 hours before now (or `MAX_LOOKBACK_HOURS` if
-shorter), and report the range used, since which labels exist depends on it. Passing a window
+shorter), and report the range used, with `defaulted` set when either bound was filled in,
+since which labels exist depends on it. Passing a window
 where it would scope nothing (no Loki source, or a non-Loki datasource) is refused rather than
 ignored.
 
