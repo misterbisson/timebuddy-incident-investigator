@@ -47,20 +47,19 @@ function redactValue(value: unknown, customPatterns: RegExp[], exempt: readonly 
     return value.map((item) => redactValue(item, customPatterns, exempt));
   }
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value)) {
-      if (SECRET_KEY_PATTERN.test(key)) {
-        out[key] = REDACTED;
-      } else if (exempt.includes(key)) {
+    // Object.fromEntries rather than `out[key] = ...`: assignment to a
+    // "__proto__" key hits the prototype setter, which dropped a log field or
+    // label of that name from the output.
+    return Object.fromEntries(
+      Object.entries(value).map(([key, val]) => {
+        if (SECRET_KEY_PATTERN.test(key)) return [key, REDACTED];
         // Pass through untouched — including nested values, since an exempt key
         // holding an object (a query model, say) would be just as broken by a
         // partial rewrite as an exempt string.
-        out[key] = val;
-      } else {
-        out[key] = redactValue(val, customPatterns, exempt);
-      }
-    }
-    return out;
+        if (exempt.includes(key)) return [key, val];
+        return [key, redactValue(val, customPatterns, exempt)];
+      }),
+    );
   }
   return value;
 }

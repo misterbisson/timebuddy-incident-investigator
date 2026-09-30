@@ -169,11 +169,39 @@ against the resolved source before running, so a `graylog(...)` query against a 
 fails with a message saying so. log-correlator's grammar takes only a **bare stream selector**
 inside `loki(...)` — no pipeline — so a query can't ask Loki for `| json`. The adapter
 therefore builds each event's labels itself: stream labels plus the fields `| json` would
-extract, under the same names (nested keys joined with `_`, invalid characters to `_`, arrays
-skipped, `_extracted` on a collision). Without that, events would be joinable only on stream
-labels, and join keys like request ids are almost never stream labels. A JSON payload
-double-encoded inside a string field isn't reached; that takes `line_format`, which only
-`search_logs` can express.
+extract, under the same names and with the same values, apart from the narrow differences
+below. Without that, events would be joinable only on stream labels, and join keys like
+request ids are almost never stream labels.
+
+The extraction is [`lokiJson.ts`](../src/logs/lokiJson.ts), a port of Loki v3.7.8's
+`JSONParser` and the jsonparser fork it pins, rather than a `JSON.parse` call, which differs
+from Loki in ways that change what a join matches. `JSON.parse` rounds a large integer to a
+double, so two distinct 20-digit request ids became one join value and an `unless` reported a
+request as having reached the backend when it never had. Loki keeps a number's source text.
+`JSON.parse` is also all-or-nothing, where Loki extracts a clipped line's leading fields and
+then sets `__error__=JSONParserErr`, so a line cut off after its request id still joins. And
+it rejects a raw tab or newline inside a string, which jsonparser keeps, so a multi-line
+message cost the line all its fields.
+
+Two rules from the port are easy to lose in a rewrite, because each one changes join results.
+When two fields land on one label name (`request_id` and `request-id`, a repeated key, or `a.b`
+and `{"a":{"b":…}}`), **the first one wins**, as Loki's `Extracted` check does. A nested object
+is read only inside the span found by counting its brackets, and the outer walk resumes after
+that span, so malformed input recovers where Loki's does. The key rules come from
+`sanitizeLabelKey`/`appendSanitized`/`buildSanitizedPrefixFromBuffer`: trimmed with Go's
+`unicode.IsSpace` set, one `_` per code point outside `[a-zA-Z0-9_]`, and blank nested segments
+skipped. The tests port Loki's own `TestJSONParser` cases, plus each case where a review found
+this code and real Loki disagreeing.
+
+The deliberate differences are narrow. A nested path whose every segment is blank
+(`{" ":{" ":"x"}}`) names no label here, where Loki emits a label named `""`; nothing can
+name that in a join. (A blank *top-level* key is skipped by Loki too.) Nesting past 100 levels
+is a parse error at that point, where Loki keeps going, because its walk is quadratic in depth
+and a recursive port overflows the stack a few thousand levels down. `__error_details__`
+isn't set.
+
+A JSON payload double-encoded inside a string field isn't reached; that takes `line_format`,
+which only `search_logs` can express.
 
 Note the selector the adapter runs is the join parser's normalized form (e.g. whitespace
 after a matcher's comma removed), not the caller's exact text. It is still the string the
