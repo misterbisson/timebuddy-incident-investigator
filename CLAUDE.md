@@ -52,6 +52,15 @@ A PR merged with a non-conventional title (e.g. a bare description with no type 
 real, shipped code that this pipeline can't see: no version bump, no changelog entry, even
 though `main` moved.
 
+**A title carries no other PR or issue numbers.** It says what this PR changes, and nothing
+else: no `(#106)`, no `(#24 → this)` chain of earlier PRs. Links to the issue a PR closes
+or the PR it follows up on go in the description ("Closes #106", "Follows #246"). Squash
+merge here uses `PR_BODY` as the body, so that link still reaches `main`, and GitHub renders
+the backlink from it. A number in the title adds nothing. GitHub already appends this PR's
+own number, and release-please copies the title verbatim into `CHANGELOG.md`, so a stray
+reference becomes permanent. #112's changelog entry links both `#106` and `#112`. Where a past title
+carries one, that is a mistake to stop copying, not a convention to match.
+
 **The PR *description* is part of that message, and can break it the same way.** The repo
 squash-merges with `PR_TITLE` as the subject and `PR_BODY` as the body, and release-please
 parses the whole thing — so an unparseable *body* discards the commit exactly as an
