@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.13.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.12.1...v0.13.0) (2026-10-01)
+
+
+### Features
+
+* accept LogQL metric queries in execute_adhoc_query ([#268](https://github.com/misterbisson/timebuddy-incident-investigator/issues/268)) ([232bd38](https://github.com/misterbisson/timebuddy-incident-investigator/commit/232bd386f307041b941490fd5a0a15a1d2eed505))
+* search and correlate Loki logs through Grafana ([#269](https://github.com/misterbisson/timebuddy-incident-investigator/issues/269)) ([3c873ce](https://github.com/misterbisson/timebuddy-incident-investigator/commit/3c873ce146a295a68e947aba84afd03874e3df90))
+
+
+### Bug Fixes
+
+* correct Loki label-window defaults and their reporting ([#291](https://github.com/misterbisson/timebuddy-incident-investigator/issues/291)) ([c83f312](https://github.com/misterbisson/timebuddy-incident-investigator/commit/c83f3127a39a138a181a75b4264ac81e2ca37795))
+* **deps-dev:** bump brace-expansion from 1.1.18 to 1.1.21 ([#295](https://github.com/misterbisson/timebuddy-incident-investigator/issues/295)) ([2747a09](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2747a09cd201fae2f7622320bf84d6803ee133d5))
+* **deps:** bump fast-uri from 3.1.7 to 3.1.8 ([#294](https://github.com/misterbisson/timebuddy-incident-investigator/issues/294)) ([cc04884](https://github.com/misterbisson/timebuddy-incident-investigator/commit/cc04884af8782a5a6f68340814cd0ec0ed49befe))
+* **deps:** bump ip-address from 10.4.0 to 10.7.2 ([#293](https://github.com/misterbisson/timebuddy-incident-investigator/issues/293)) ([4599916](https://github.com/misterbisson/timebuddy-incident-investigator/commit/459991690767092e80a950cde11e9ac94f097fc3))
+* **deps:** bump the minor-and-patch group with 6 updates ([#290](https://github.com/misterbisson/timebuddy-incident-investigator/issues/290)) ([c2d7009](https://github.com/misterbisson/timebuddy-incident-investigator/commit/c2d7009c4669322482543540c794f0fbf4a2d8a3))
+* keep Loki JSON fields as Loki's | json extracts them ([#284](https://github.com/misterbisson/timebuddy-incident-investigator/issues/284)) ([e5e7bf1](https://github.com/misterbisson/timebuddy-incident-investigator/commit/e5e7bf140f739f883b821533a1f20f8bd274c672))
+* make Loki log-tool refusals name the right tool and cap ([#287](https://github.com/misterbisson/timebuddy-incident-investigator/issues/287)) ([6b0ccf9](https://github.com/misterbisson/timebuddy-incident-investigator/commit/6b0ccf9a890b3943416d1f755690a25833fca303))
+* rebuild metric indexes cached before the broken-datasource fixes ([#288](https://github.com/misterbisson/timebuddy-incident-investigator/issues/288)) ([9ebd81d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/9ebd81dc77b64afd7b9f9d27f3488e7f128f60d5))
+* refuse and flag ambiguous Loki source ids ([#292](https://github.com/misterbisson/timebuddy-incident-investigator/issues/292)) ([14e3047](https://github.com/misterbisson/timebuddy-incident-investigator/commit/14e3047f54487d1b3d570015c64d41ed094606b8))
+* replay panels that store a datasource name in the uid field ([#266](https://github.com/misterbisson/timebuddy-incident-investigator/issues/266)) ([d28ff55](https://github.com/misterbisson/timebuddy-incident-investigator/commit/d28ff555a45111dadd01f5c65476e14b4ccbd841))
+* report log-lines results instead of replaying them as empty ([#267](https://github.com/misterbisson/timebuddy-incident-investigator/issues/267)) ([4c3fb3d](https://github.com/misterbisson/timebuddy-incident-investigator/commit/4c3fb3d2a6b726ade1a1f65970d358dd4d0a6288))
+* resolve Loki sources whose datasource uid contains a slash ([#285](https://github.com/misterbisson/timebuddy-incident-investigator/issues/285)) ([411709c](https://github.com/misterbisson/timebuddy-incident-investigator/commit/411709c6a5ffe5b9f4489c961341f25d83d979e9))
+* return Loki lines newest first, with nanoseconds, and validate limit ([#286](https://github.com/misterbisson/timebuddy-incident-investigator/issues/286)) ([f988e29](https://github.com/misterbisson/timebuddy-incident-investigator/commit/f988e29847ae4b80198b5d6acbf012e1fc8a630e))
+* send a time window with Loki label listings ([#283](https://github.com/misterbisson/timebuddy-incident-investigator/issues/283)) ([7f4ed45](https://github.com/misterbisson/timebuddy-incident-investigator/commit/7f4ed45f69c1fb16e7f079481349438e390a213c))
+* stop reporting Grafana's built-in datasources as broken ([#275](https://github.com/misterbisson/timebuddy-incident-investigator/issues/275)) ([678b90e](https://github.com/misterbisson/timebuddy-incident-investigator/commit/678b90e281c60c1e5b04b64163ccdfe95af30b13))
+
 ## [0.12.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.12.0...v0.12.1) (2026-09-12)
 
 
