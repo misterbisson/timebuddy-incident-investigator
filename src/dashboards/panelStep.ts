@@ -1,4 +1,4 @@
-import type { TemplateVariable } from '../grafana/types.js';
+import type { DatasourceInfo, TemplateVariable } from '../grafana/types.js';
 import type { ResolvedPanel, ResolvedTarget } from './panelQueries.js';
 import { rangeIntervalMs, substituteVariables, type QueryWindow } from './variables.js';
 import type { QuerySeries } from '../query/executor.js';
@@ -21,11 +21,22 @@ import { observedSpacing, reportedStep } from '../query/stepReport.js';
  * `max(floor, span / maxDataPoints)` — the second term is why a long window can
  * still come back coarser than the panel declares, as it does in Grafana.
  *
- * A panel that declares no floor gets **no** `intervalMs`, deliberately. Grafana
- * treats a sent `intervalMs` as the floor *instead of* the datasource's own
- * (its configured scrape interval, or 15s for Prometheus when unset), so sending
- * a span-derived one would drop that floor and run finer than the panel renders
- * — the same bug in the other direction.
+ * A panel that declares no floor takes its datasource's, when that can be read.
+ * Grafana treats a sent `intervalMs` as the floor *instead of* the datasource's
+ * own, so a span-derived one would drop that floor and run finer than the panel
+ * renders — the same bug in the other direction. But sending nothing isn't
+ * neutral either, because `$__interval` is substituted here rather than by
+ * Grafana: with no `intervalMs`, Prometheus's backend floors the step at the
+ * datasource's scrape interval (promlib's `CalculatePrometheusInterval`, via
+ * `gtime.GetIntervalFrom`: `jsonData.timeInterval`, else 15s), while the text
+ * got span/maxDataPoints — `rate(x[5s])` evaluated at a 15s step over an hour,
+ * which is empty. So for a `prometheus` datasource whose settings were listed,
+ * the floor is that scrape interval, exactly as Grafana's own panel query runner
+ * takes it (the Prometheus datasource's `interval`: `timeInterval || '15s'`),
+ * and `intervalMs` carries it so the text and the step agree by construction.
+ * Anything else — another datasource type, a panel over several datasources,
+ * settings that weren't listed or a `timeInterval` this can't read — still
+ * sends nothing: a wrong floor is worse than Grafana's own.
  */
 export interface PanelStep {
   /** maxDataPoints sent with every target: the panel's own, capped at MAX_DATA_POINTS. */
@@ -33,7 +44,9 @@ export interface PanelStep {
   /** Sent as `intervalMs` and substituted for `$__interval`. Unset when no floor was declared. */
   intervalMs?: number;
   /** Which floor intervalMs came from; `datasource-default` when none was sent. */
-  source: 'minIntervalMs' | 'panel' | 'datasource-default';
+  source: 'minIntervalMs' | 'panel' | 'datasource' | 'datasource-default';
+  /** The datasource's configured scrape interval, verbatim, when source is `datasource` and one was set. */
+  datasourceTimeInterval?: string;
   /** The panel's declared min interval, verbatim. */
   panelInterval?: string;
   /** The panel's min interval after variable substitution, when it couldn't be read as a duration and was skipped. */
@@ -68,6 +81,23 @@ export function parseGrafanaIntervalMs(text: string): number | undefined {
   return Number.isFinite(ms) && ms >= 1 ? Math.round(ms) : undefined;
 }
 
+/** Grafana's Prometheus floor for a query that sends no intervalMs, when no scrape interval is configured. */
+const PROMETHEUS_DEFAULT_SCRAPE_MS = 15_000;
+
+/**
+ * The step floor Grafana applies on its own to a query against `datasource`
+ * that sends no `intervalMs`, or undefined when it can't be known for sure.
+ * Only `prometheus` is answered: its backend's rule is read from the source
+ * (see PanelStep), and every other type's floor stays Grafana's to choose.
+ * Settings that weren't listed (`jsonData` absent) can't tell "unset, so 15s"
+ * from "set to something else", so they answer nothing rather than 15s.
+ */
+export function datasourceFloorMs(datasource: Pick<DatasourceInfo, 'type' | 'jsonData'> | undefined): number | undefined {
+  if (datasource?.type !== 'prometheus' || !datasource.jsonData) return undefined;
+  const configured = datasource.jsonData.timeInterval?.trim();
+  return configured ? parseGrafanaIntervalMs(configured) : PROMETHEUS_DEFAULT_SCRAPE_MS;
+}
+
 /**
  * Resolves the step a replay of `panel` over `window` should request. A floor
  * that can't be parsed (an unknown unit, a variable with no usable value) is
@@ -82,8 +112,10 @@ export function resolvePanelStep(args: {
   overrides: Record<string, string[]>;
   configMaxDataPoints: number;
   minIntervalMs?: number;
+  /** The one datasource every target queries, when there is one and it was listed. */
+  datasource?: Pick<DatasourceInfo, 'type' | 'jsonData'>;
 }): PanelStep {
-  const { panel, window, variables, overrides, configMaxDataPoints, minIntervalMs } = args;
+  const { panel, window, variables, overrides, configMaxDataPoints, minIntervalMs, datasource } = args;
   const maxDataPoints = Math.min(panel.maxDataPoints ?? configMaxDataPoints, configMaxDataPoints);
   const declared = panel.interval !== undefined ? { panelInterval: panel.interval } : {};
 
@@ -99,12 +131,29 @@ export function resolvePanelStep(args: {
     if (floorMs === undefined) panelIntervalIgnored = substituted;
     else source = 'panel';
   }
+  const ignored = panelIntervalIgnored !== undefined ? { panelIntervalIgnored } : {};
+  let datasourceTimeInterval: string | undefined;
+  if (floorMs === undefined) {
+    floorMs = datasourceFloorMs(datasource);
+    if (floorMs !== undefined) {
+      source = 'datasource';
+      datasourceTimeInterval = datasource?.jsonData?.timeInterval?.trim() || undefined;
+    }
+  }
 
   if (floorMs === undefined) {
-    return { maxDataPoints, source, ...declared, ...(panelIntervalIgnored !== undefined ? { panelIntervalIgnored } : {}) };
+    return { maxDataPoints, source, ...declared, ...ignored };
   }
   const intervalMs = Math.max(floorMs, rangeIntervalMs(window.toMs - window.fromMs, maxDataPoints));
-  return { maxDataPoints, intervalMs, source, floorMs, ...declared };
+  return {
+    maxDataPoints,
+    intervalMs,
+    source,
+    floorMs,
+    ...declared,
+    ...ignored,
+    ...(datasourceTimeInterval !== undefined ? { datasourceTimeInterval } : {}),
+  };
 }
 
 /** The window to substitute `$__interval` against, so the query text and the request's step agree. */
@@ -167,20 +216,33 @@ export interface ReplayStepReport {
   sourceNote?: string;
 }
 
+/** Why the panel's own min interval didn't set the floor. */
+function undeclaredReason(step: PanelStep): string {
+  return step.panelIntervalIgnored !== undefined
+    ? `The panel's min interval "${step.panelIntervalIgnored}" couldn't be read as a duration, so it was skipped`
+    : 'The panel declares no min interval';
+}
+
 function replaySourceNote(step: PanelStep): string | undefined {
   if (step.intervalMs === undefined) {
-    const why =
-      step.panelIntervalIgnored !== undefined
-        ? `The panel's min interval "${step.panelIntervalIgnored}" couldn't be read as a duration, so it was skipped`
-        : 'The panel declares no min interval';
     return (
-      `${why} and no step was requested: Grafana's datasource default chose it — the datasource's configured ` +
+      `${undeclaredReason(step)} and no step was requested: Grafana's datasource default chose it — the datasource's configured ` +
       'scrape interval (15s for Prometheus when unset), or span/maxDataPoints when that is larger. Range-vector ' +
       'functions (rate/increase/delta/*_over_time) answered at that step; observedGapGcdMs is a multiple of it. ' +
       'Pass minIntervalMs to choose one.'
     );
   }
   const parts: string[] = [];
+  if (step.source === 'datasource') {
+    const scrape =
+      step.datasourceTimeInterval !== undefined
+        ? `scrape interval "${step.datasourceTimeInterval}"`
+        : 'default scrape interval (15s, none is configured)';
+    parts.push(
+      `${undeclaredReason(step)}; the floor is the Prometheus datasource's ${scrape}, which Grafana applies to such a panel itself. ` +
+        'It was requested explicitly so $__interval in the query text matches the step evaluated.',
+    );
+  }
   if (step.source === 'minIntervalMs') {
     parts.push(
       `Step floor set by minIntervalMs (${formatMs(step.floorMs!)})` +

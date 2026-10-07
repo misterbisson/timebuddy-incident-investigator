@@ -107,7 +107,8 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'raw points and scripting the same analysis yourself. ' +
         'Replays at the panel\'s own step: its "Min interval" is sent as the step floor, so step = max(that, ' +
         'window/maxDataPoints), as in Grafana. Every window carries "step" - "requestedMs" and "source" (panel, ' +
-        'minIntervalMs, or datasource-default when the panel declares none and Grafana chose), plus what the ' +
+        'minIntervalMs, datasource when the panel declares none and the Prometheus datasource\'s scrape interval ' +
+        'set the floor as it does in Grafana, or datasource-default when no step was sent and Grafana chose), plus what the ' +
         'returned timestamps say: "consistentWithRequested": false is proof Grafana used a different step, also ' +
         'lifted to a top-level "stepWarnings" (omitted when empty). Read any rate/increase/delta/*_over_time result ' +
         'against that step - it decides the answer. Pass "minIntervalMs" to replace the panel\'s floor for one call, ' +
