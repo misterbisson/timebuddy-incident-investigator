@@ -25,6 +25,13 @@ export interface WindowQueryResult {
   errors: Record<string, string>;
 }
 
+/**
+ * `intervalMs` goes out only when the target carries one (a panel that declares
+ * a min interval — see dashboards/panelStep.ts). Grafana's backends take a sent
+ * `intervalMs` as the step floor *in place of* the datasource's own default, so
+ * sending a computed one for a panel that declares nothing would drop the
+ * datasource's scrape-interval floor rather than reproduce the panel.
+ */
 export function buildDsQueryTarget(target: ResolvedTarget, maxDataPoints: number): DsQueryTarget {
   if (!target.datasourceUid) {
     throw new Error(`Target ${target.refId} has no resolvable datasource uid`);
@@ -34,7 +41,8 @@ export function buildDsQueryTarget(target: ResolvedTarget, maxDataPoints: number
     ...rest,
     refId: target.refId,
     datasource: { uid: target.datasourceUid },
-    maxDataPoints,
+    maxDataPoints: target.maxDataPoints ?? maxDataPoints,
+    ...(target.intervalMs !== undefined ? { intervalMs: target.intervalMs } : {}),
   };
 }
 

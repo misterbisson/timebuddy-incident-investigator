@@ -10,6 +10,14 @@ export interface ResolvedTarget {
    */
   datasourceType?: string;
   raw: PanelTarget;
+  /**
+   * Sent as the query's `intervalMs` when set: the panel's step floor, resolved
+   * by dashboards/panelStep.ts. Unset means no floor was declared, and
+   * Grafana's datasource default decides.
+   */
+  intervalMs?: number;
+  /** Sent as the query's `maxDataPoints` when set, in place of the configured cap. */
+  maxDataPoints?: number;
 }
 
 export interface ResolvedDataLink {
@@ -24,6 +32,10 @@ export interface ResolvedPanel {
   panelId: number;
   title?: string;
   type?: string;
+  /** The panel's declared min interval, verbatim (may hold a template variable). See Panel.interval. */
+  interval?: string;
+  /** The panel's declared max data points. See Panel.maxDataPoints. */
+  maxDataPoints?: number;
   targets: ResolvedTarget[];
   dataLinks: ResolvedDataLink[];
   /**
@@ -208,6 +220,8 @@ export function resolvePanelQueries(dashboard: DashboardJson): ResolvedPanel[] {
         panelId: p.id,
         title: p.title,
         type: p.type,
+        ...(typeof p.interval === 'string' && p.interval.trim() !== '' ? { interval: p.interval.trim() } : {}),
+        ...(typeof p.maxDataPoints === 'number' && p.maxDataPoints > 0 ? { maxDataPoints: p.maxDataPoints } : {}),
         targets,
         dataLinks: resolvePanelDataLinks(p),
         ...(mirrorsPanelIds ? { mirrorsPanelIds } : {}),

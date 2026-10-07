@@ -7,6 +7,7 @@ import type { Screenshotter } from '../screenshot/types.js';
 import { parseGrafanaUrl } from '../alerts/urlParser.js';
 import { findPanel } from '../dashboards/panelQueries.js';
 import { mergeVariableOverrides, substituteTargetFields } from '../dashboards/variables.js';
+import { resolvePanelStep, stepWindow, withStep } from '../dashboards/panelStep.js';
 import { buildDsQueryTarget, executeQueryWindow } from '../query/executor.js';
 import {
   clampMaxDataPoints,
@@ -427,8 +428,9 @@ export async function generatePanelCsv(
   if (opts.renderWidth !== undefined && !transformationsApplied) {
     warnings.push(
       'renderWidth was supplied but had no effect: this export used the direct /api/ds/query path (the panel has ' +
-        'no transformations, or no screenshotter is available), whose resolution is governed by maxDataPoints ' +
-        `(${config.maxDataPoints}), not by render width. renderWidth only steers the browser-render path.`,
+        "no transformations, or no screenshotter is available), whose resolution is governed by the panel's own min " +
+        `interval and maxDataPoints (${config.maxDataPoints}), not by render width. renderWidth only steers the ` +
+        'browser-render path.',
     );
   }
 
@@ -480,12 +482,18 @@ export async function generatePanelCsv(
     unresolvedAllVariables = materialized.unresolvedAllVariables;
     const resolvedOverrides = materialized.overrides;
 
+    const step = resolvePanelStep({ panel: inv.panel, window, variables, overrides: resolvedOverrides, configMaxDataPoints: config.maxDataPoints });
     const targets: ResolvedTarget[] = await Promise.all(
-      inv.panel.targets.map(async (t) => ({
-        ...t,
-        datasourceUid: await resolveTargetDatasource(inv.client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
-        raw: substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints),
-      })),
+      inv.panel.targets.map(async (t) =>
+        withStep(
+          {
+            ...t,
+            datasourceUid: await resolveTargetDatasource(inv.client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
+            raw: substituteTargetFields(t.raw, variables, resolvedOverrides, stepWindow(window, step), step.maxDataPoints),
+          },
+          step,
+        ),
+      ),
     );
 
     const isTable = inv.panel.type === 'table' || inv.panel.type === 'table-old';

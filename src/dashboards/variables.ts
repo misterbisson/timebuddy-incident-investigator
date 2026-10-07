@@ -4,7 +4,7 @@ import { DEFAULT_MAX_DATA_POINTS } from '../config.js';
 export interface QueryWindow {
   fromMs: number;
   toMs: number;
-  /** Suggested step for $__interval, in milliseconds. */
+  /** Step for $__interval, in milliseconds — set when the panel declares a min interval (dashboards/panelStep.ts). */
   intervalMs?: number;
 }
 
@@ -102,7 +102,11 @@ function humanDuration(ms: number): string {
  */
 function computeIntervalMs(window: QueryWindow, maxDataPoints = DEFAULT_MAX_DATA_POINTS): number {
   if (window.intervalMs) return window.intervalMs;
-  const spanMs = window.toMs - window.fromMs;
+  return rangeIntervalMs(window.toMs - window.fromMs, maxDataPoints);
+}
+
+/** The "nice" step a span needs to fit in maxDataPoints, rounded up so it never exceeds the budget. */
+export function rangeIntervalMs(spanMs: number, maxDataPoints = DEFAULT_MAX_DATA_POINTS): number {
   const rawStepMs = spanMs / maxDataPoints;
   const steps = [1000, 5000, 10000, 30000, 60000, 300000, 600000, 1800000, 3600000, 21600000, 86400000];
   return steps.find((s) => s >= rawStepMs) ?? steps.at(-1)!;

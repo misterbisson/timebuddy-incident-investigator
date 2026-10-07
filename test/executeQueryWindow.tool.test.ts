@@ -346,3 +346,109 @@ describe('execute_query_window tool', () => {
     expect(series.points.some((p: { v: number }) => p.v === 0)).toBe(false);
   });
 });
+
+describe('execute_query_window step (#200)', () => {
+  const startsAtMs = 1_800_000_000_000;
+  const endsAtMs = startsAtMs + 3_600_000;
+
+  function pinnedDashboard(interval?: string): DashboardGetResponse {
+    return {
+      dashboard: {
+        uid: 'slo',
+        title: 'SLO',
+        version: 1,
+        panels: [
+          {
+            id: 1,
+            title: '5xx per minute',
+            ...(interval !== undefined ? { interval } : {}),
+            targets: [
+              { refId: 'A', datasource: { uid: 'prom', type: 'prometheus' }, expr: 'sum(increase(http_status_count{http_code=~"5.*"}[1m]))' },
+              { refId: 'B', datasource: { uid: 'influx1' }, query: 'SELECT count(v) FROM m WHERE $timeFilter GROUP BY time($__interval)', rawQuery: true },
+            ],
+          },
+        ],
+      },
+      meta: {},
+    };
+  }
+
+  /** Answers every query with a flat series sampled every `stepMs` across the requested window. */
+  function answerEvery(queryDs: ReturnType<typeof vi.fn>, stepMs: number): void {
+    queryDs.mockImplementation(async (req: DsQueryRequest): Promise<DsQueryResponse> => {
+      const from = Number(req.from);
+      const to = Number(req.to);
+      const times: number[] = [];
+      for (let t = from; t <= to; t += stepMs) times.push(t);
+      return {
+        results: Object.fromEntries(
+          req.queries.map((q) => [
+            q.refId,
+            { frames: [{ schema: { refId: q.refId, fields: [{ name: 'time', type: 'time' }, { name: 'value', type: 'number' }] }, data: { values: [times, times.map(() => 0)] } }] },
+          ]),
+        ),
+      };
+    });
+  }
+
+  async function run(dashboard: DashboardGetResponse, args: Record<string, unknown> = {}, stepMs?: number) {
+    const { client, queryDs } = fakeGrafanaClient({ dashboard });
+    if (stepMs !== undefined) answerEvery(queryDs, stepMs);
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+    const result = (await call('execute_query_window', {
+      dashboardUid: 'slo',
+      panelId: 1,
+      startsAtMs,
+      endsAtMs,
+      includeControls: false,
+      connection: 'test',
+      ...args,
+    })) as { content: Array<{ text: string }> };
+    return { parsed: JSON.parse(result.content[0]!.text), queryDs };
+  }
+
+  it('sends the panel\'s min interval as intervalMs, and substitutes the same step for $__interval', async () => {
+    const { queryDs } = await run(pinnedDashboard('1m'));
+    const [prom, influx] = (queryDs.mock.calls[0]![0] as DsQueryRequest).queries;
+    expect(prom!.intervalMs).toBe(60_000);
+    expect(influx!.intervalMs).toBe(60_000);
+    expect(influx!.query).toContain('GROUP BY time(1m)');
+  });
+
+  it('reports the step on every window, and confirms it when the timestamps agree', async () => {
+    const { parsed } = await run(pinnedDashboard('1m'), {}, 60_000);
+    expect(parsed.incident.step).toMatchObject({ source: 'panel', panelInterval: '1m', requestedMs: 60_000, observedGapGcdMs: 60_000, consistentWithRequested: true });
+    expect(parsed.preWindow.step).toMatchObject({ source: 'panel', requestedMs: 60_000 });
+    expect(parsed.stepWarnings).toBeUndefined();
+  });
+
+  it('lifts a step Grafana did not honour to a top-level stepWarnings', async () => {
+    const { parsed } = await run(pinnedDashboard('1m'), {}, 15_000);
+    expect(parsed.incident.step.consistentWithRequested).toBe(false);
+    expect(parsed.stepWarnings).toHaveLength(1);
+    expect(parsed.stepWarnings[0]).toContain('incident (60000ms requested)');
+  });
+
+  it('sends no intervalMs for a panel with no min interval, and says Grafana\'s default chose the step', async () => {
+    const { parsed, queryDs } = await run(pinnedDashboard(), {}, 15_000);
+    expect((queryDs.mock.calls[0]![0] as DsQueryRequest).queries[0]!.intervalMs).toBeUndefined();
+    expect(parsed.incident.step).toMatchObject({ source: 'datasource-default', observedGapGcdMs: 15_000 });
+    expect(parsed.incident.step.sourceNote).toContain('no min interval');
+    expect(parsed.stepWarnings).toBeUndefined();
+  });
+
+  it('warns at the top level when the panel\'s min interval could not be read', async () => {
+    const { parsed, queryDs } = await run(pinnedDashboard('$nope'), {}, 15_000);
+    expect((queryDs.mock.calls[0]![0] as DsQueryRequest).queries[0]!.intervalMs).toBeUndefined();
+    expect(parsed.incident.step.panelIntervalIgnored).toBe('$nope');
+    expect(parsed.stepWarnings.join(' ')).toContain('"$nope" couldn\'t be read');
+  });
+
+  it('lets minIntervalMs replace the panel floor for one call', async () => {
+    const { parsed, queryDs } = await run(pinnedDashboard('1m'), { minIntervalMs: 15_000 }, 15_000);
+    expect((queryDs.mock.calls[0]![0] as DsQueryRequest).queries[0]!.intervalMs).toBe(15_000);
+    expect(parsed.incident.step).toMatchObject({ source: 'minIntervalMs', requestedMs: 15_000, panelInterval: '1m', consistentWithRequested: true });
+    expect(parsed.incident.step.sourceNote).toContain('replacing the panel\'s own "1m"');
+  });
+});

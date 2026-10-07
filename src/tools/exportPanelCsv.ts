@@ -88,7 +88,9 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
         'from a fine one without deriving bucket width from the row spacing yourself. "approximate" is false when the ' +
         'bucket is measured from observed timestamps (this server\'s own direct export) and true when it is derived ' +
         'from the row count over the requested window (the browser-render path, whose time column is not reliably ' +
-        're-parseable). For a panel WITH transformations, resolution is a function of the render viewport width, not ' +
+        're-parseable). A direct export runs at the panel\'s own step - its "Min interval", coarsened only when the ' +
+        'window would exceed maxDataPoints - as Grafana renders it. ' +
+        'For a panel WITH transformations, resolution is a function of the render viewport width, not ' +
         'the time range - pass "renderWidth" to render wider and pull finer buckets over a wide window in one call. ' +
         'Always mention the path so the person can open the actual file. In the direct-export fallback, if a table panel\'s data comes back as more than ' +
         'one frame (more than one query, or a datasource splitting one query into several), each frame is written to ' +
