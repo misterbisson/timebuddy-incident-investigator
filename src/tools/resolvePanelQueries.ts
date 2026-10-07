@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries, stripInactiveQueryFields } from '../dashboards/panelQueries.js';
 import { substituteTargetFields } from '../dashboards/variables.js';
+import { resolvePanelStep, stepWindow } from '../dashboards/panelStep.js';
 import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
@@ -72,26 +73,34 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
           }
 
           const result = await Promise.all(
-            panels.map(async (panel) => ({
-              panelId: panel.panelId,
-              title: panel.title,
-              type: panel.type,
-              url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: panel.panelId, fromMs: window.fromMs, toMs: window.toMs }),
-              ...(panel.mirrorsPanelIds ? { mirrorsPanelIds: panel.mirrorsPanelIds } : {}),
-              // Raw URL templates (Grafana "data links"), not resolved — see
-              // resolvePanelDataLinks' doc comment. Substitute
-              // ${__from}/${__to} with window.fromMs/toMs and
-              // ${__data.fields["X"]} with each row's actual field value
-              // from this panel's query result to build a working link.
-              dataLinks: panel.dataLinks,
-              targets: await Promise.all(
-                panel.targets.map(async (t) => ({
-                  refId: t.refId,
-                  datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
-                  resolvedQuery: stripInactiveQueryFields(substituteTargetFields(t.raw, variables, resolvedOverrides, window, config.maxDataPoints)),
-                })),
-              ),
-            })),
+            panels.map(async (panel) => {
+              const step = resolvePanelStep({ panel, window, variables, overrides: resolvedOverrides, configMaxDataPoints: config.maxDataPoints });
+              return {
+                panelId: panel.panelId,
+                title: panel.title,
+                type: panel.type,
+                url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: panel.panelId, fromMs: window.fromMs, toMs: window.toMs }),
+                ...(panel.mirrorsPanelIds ? { mirrorsPanelIds: panel.mirrorsPanelIds } : {}),
+                // Raw URL templates (Grafana "data links"), not resolved — see
+                // resolvePanelDataLinks' doc comment. Substitute
+                // ${__from}/${__to} with window.fromMs/toMs and
+                // ${__data.fields["X"]} with each row's actual field value
+                // from this panel's query result to build a working link.
+                dataLinks: panel.dataLinks,
+                // What a replay of this panel over this window requests as its
+                // step, and why — the same resolution execute_query_window uses.
+                step,
+                targets: await Promise.all(
+                  panel.targets.map(async (t) => ({
+                    refId: t.refId,
+                    datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
+                    resolvedQuery: stripInactiveQueryFields(
+                      substituteTargetFields(t.raw, variables, resolvedOverrides, stepWindow(window, step), step.maxDataPoints),
+                    ),
+                  })),
+                ),
+              };
+            }),
           );
 
           const response = {

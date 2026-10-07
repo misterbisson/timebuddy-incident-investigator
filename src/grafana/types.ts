@@ -47,6 +47,14 @@ export interface Panel {
   type?: string;
   datasource?: DatasourceRef | string | null;
   targets?: PanelTarget[];
+  /**
+   * Query options → "Min interval": a Grafana interval string ("1m", "30s",
+   * ">10s", or a template variable such as "$interval"). A floor on the step,
+   * not the step itself — see dashboards/panelStep.ts.
+   */
+  interval?: string | null;
+  /** Query options → "Max data points". Unset means Grafana uses the rendered width. */
+  maxDataPoints?: number | null;
   panels?: Panel[]; // row/nested panels
   fieldConfig?: {
     /** Applies to every field. */

@@ -518,3 +518,18 @@ describe('export_panel_csv formula-injection disclosure', () => {
     expect(csv).not.toMatch(/(^|\r\n)=cmd/);
   });
 });
+
+describe('export_panel_csv step (#200)', () => {
+  it('requests the panel\'s min interval on the direct-export path rather than the datasource default', async () => {
+    const dashboard = timeseriesDashboard();
+    dashboard.dashboard.panels![0]!.interval = '5m';
+    const queryDs = vi.fn(timeseriesQueryDsResponse);
+    const client = fakeClient(dashboard, queryDs);
+    const { server, call } = fakeServer();
+    registerExportPanelCsv(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    await call('export_panel_csv', { dashboardUid: 'reqs', panelId: 2, fromMs: 0, toMs: 600_000, connection: 'test' });
+
+    expect((queryDs.mock.calls[0]![0] as DsQueryRequest).queries[0]!.intervalMs).toBe(300_000);
+  });
+});

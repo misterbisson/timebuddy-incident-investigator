@@ -140,3 +140,39 @@ describe('resolve_panel_queries tool', () => {
     expect(parsed.panels[0].targets[0].resolvedQuery.query).toContain('.*');
   });
 });
+
+describe('resolve_panel_queries step (#200)', () => {
+  it('reports the step a replay would request, and substitutes $__interval to match it', async () => {
+    const dashboard: DashboardGetResponse = {
+      dashboard: {
+        uid: 'd',
+        title: 't',
+        version: 1,
+        panels: [
+          {
+            id: 1,
+            title: 'errors',
+            interval: '1m',
+            targets: [{ refId: 'A', datasource: { uid: 'influx1' }, query: 'SELECT count(v) FROM m WHERE $timeFilter GROUP BY time($__interval)', rawQuery: true }],
+          },
+        ],
+      },
+      meta: {},
+    };
+    const { client } = fakeGrafanaClient({ dashboard });
+    const { server, call } = fakeServer();
+    registerResolvePanelQueries(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('resolve_panel_queries', {
+      dashboardUid: 'd',
+      panelId: 1,
+      windowFromMs: 1_800_000_000_000,
+      windowToMs: 1_800_003_600_000,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const [panel] = JSON.parse(result.content[0]!.text).panels;
+
+    expect(panel.step).toMatchObject({ intervalMs: 60_000, source: 'panel', panelInterval: '1m' });
+    expect(panel.targets[0].resolvedQuery.query).toContain('GROUP BY time(1m)');
+  });
+});

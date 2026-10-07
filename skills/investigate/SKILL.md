@@ -149,6 +149,16 @@ search.
      **Do this instead of fetching raw points and writing jq/python to find dip boundaries
      yourself** — that's exactly what `threshold` is for, and scripting it ad hoc from a saved
      tool-output file is slower and more error-prone mid-incident.
+   - **Read every `rate`/`increase`/`delta`/`*_over_time` number against its window's `step`.**
+     The step decides the answer for those functions: a constant counter read at a 15s step can
+     report ~1/min of events that are 0 at the panel's own 1m. `execute_query_window` replays at
+     the panel's own step (its "Min interval"), and each window's `step` says what was asked
+     (`requestedMs`, `source`) and what the timestamps show. Check the top-level `stepWarnings`
+     first. If it's there, Grafana used a different step from the one requested, or the panel's
+     interval couldn't be read; either way, reinterpret before concluding. `source:
+     "datasource-default"` means the panel declares no interval and Grafana chose the step. When a
+     result looks step-dependent, re-run with `minIntervalMs` (e.g. 60000) to check it on purpose.
+     Say so in the note if you did: those numbers answer at a step the panel doesn't render at.
    - **A query against an InfluxDB-backed panel that times out or aborts is often hitting
      InfluxDB's own hard ~15s query timeout, not a transient fluke** — this server's own default
      request timeout is coincidentally the same ~15s, so a heavy query (a fine-grained `GROUP BY

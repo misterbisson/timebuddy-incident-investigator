@@ -5,6 +5,7 @@ import type { DashboardJson, DatasourceInfo, TemplateVariable } from '../grafana
 import { findPanel, isGrafanaBuiltinDatasource, type ResolvedPanel, type ResolvedTarget } from '../dashboards/panelQueries.js';
 import { resolveDatasourceVariable, substituteTargetFields } from '../dashboards/variables.js';
 import type { QueryWindow } from '../dashboards/variables.js';
+import { resolvePanelStep, stepWindow, withStep, type PanelStep } from '../dashboards/panelStep.js';
 import { resolveConnection } from '../connections/resolve.js';
 import { parseGotoShortId } from '../alerts/urlParser.js';
 import { buildDashboardUrl, buildFolderUrl, type DashboardUrlOptions } from '../grafana/urlBuilder.js';
@@ -320,6 +321,8 @@ export interface ResolvedPanelForWindow {
   dashboard: DashboardJson;
   panel: ResolvedPanel;
   targets: ResolvedTarget[];
+  /** The step the targets request, and where it came from — see dashboards/panelStep.ts. */
+  step: PanelStep;
 }
 
 /**
@@ -373,7 +376,8 @@ export async function resolveTargetDatasource(
 /**
  * Fetches a dashboard, locates one panel, and substitutes its template
  * variables for a specific query window. Shared by execute_query_window and
- * detect_correlated_anomalies so both replay panels the same way.
+ * detect_correlated_anomalies so both replay panels the same way — including
+ * at the panel's own step (#200), which `minIntervalMs` replaces as the floor.
  */
 export async function resolvePanelForWindow(
   client: GrafanaClient,
@@ -383,6 +387,7 @@ export async function resolvePanelForWindow(
   window: QueryWindow,
   maxDataPoints: number,
   panelTitle?: string,
+  minIntervalMs?: number,
 ): Promise<ResolvedPanelForWindow> {
   const { dashboard } = await client.getDashboard(dashboardUid);
   const panel = findPanel(dashboard, panelId, panelTitle);
@@ -397,12 +402,18 @@ export async function resolvePanelForWindow(
     );
   }
   const variables = dashboard.templating?.list ?? [];
+  const step = resolvePanelStep({ panel, window, variables, overrides, configMaxDataPoints: maxDataPoints, minIntervalMs });
   const targets: ResolvedTarget[] = await Promise.all(
-    panel.targets.map(async (t) => ({
-      ...t,
-      datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides, t.datasourceType),
-      raw: substituteTargetFields(t.raw, variables, overrides, window, maxDataPoints),
-    })),
+    panel.targets.map(async (t) =>
+      withStep(
+        {
+          ...t,
+          datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides, t.datasourceType),
+          raw: substituteTargetFields(t.raw, variables, overrides, stepWindow(window, step), step.maxDataPoints),
+        },
+        step,
+      ),
+    ),
   );
-  return { dashboard, panel, targets };
+  return { dashboard, panel, targets, step };
 }

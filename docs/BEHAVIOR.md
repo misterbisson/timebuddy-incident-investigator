@@ -249,6 +249,53 @@ the URL they render, so a captured chart labels its axis in the same zone the wi
 computed in instead of the capturing machine's local one. An absolute-window capture is left
 alone.
 
+## Panel replay step: the panel's min interval
+
+For any range-vector function (`increase`, `rate`, `delta`, `*_over_time`) the step a query is
+evaluated at decides the answer, not just its resolution. Issue
+[#200](https://github.com/misterbisson/timebuddy-incident-investigator/issues/200) is what that
+costs when the step is invisible. A panel pinned at `interval: '1m'` over a counter that hadn't
+moved in eight days read 0 in Grafana. Replayed here at a 15s step, the same query read ~0.75/min
+of 5xx errors that didn't exist, and nothing in the result said the step had changed.
+
+Every tool that replays a panel's queries (`execute_query_window`, `validate_baseline`,
+`detect_correlated_anomalies`, `render_dashboard`, `resolve_panel_queries`, and
+`export_panel_csv`'s direct path) now resolves the step the way Grafana's panel query runner
+does, in `src/dashboards/panelStep.ts`:
+
+- **Floor:** the panel's "Min interval" (`panel.interval`, template variables substituted, Grafana's
+  units and its legacy `>` prefix accepted). `execute_query_window`'s `minIntervalMs` replaces it
+  for one call, the way editing the panel's query options would.
+- **Step:** `max(floor, window / maxDataPoints)`, where `maxDataPoints` is the panel's own when it
+  sets one, capped at `MAX_DATA_POINTS`. So a long window can still come back coarser than the
+  panel declares, as it does in Grafana.
+- It's sent as each query's `intervalMs` **and** substituted for `$__interval`, so the step Grafana
+  evaluates at and the step written into the query text (`GROUP BY time($__interval)`,
+  `[$__interval]`) are the same number.
+
+Two cases deliberately send **no** `intervalMs`:
+
+- **The panel declares no min interval.** Grafana's backends take a sent `intervalMs` as the
+  floor *instead of* the datasource's own (its configured scrape interval, or 15s for Prometheus
+  when unset). So sending a span-derived one would run finer than the panel renders: the same
+  bug, in the other direction.
+- **The panel's interval can't be read as a duration** (an unknown unit, or a variable with no
+  usable value). It's skipped rather than guessed, and reported as `panelIntervalIgnored`, the same
+  way an unresolvable time zone is skipped rather than failing every window on the dashboard.
+
+`execute_query_window` reports the step on every window as `step`. That's what was requested
+(`requestedMs`, `source`: `panel` / `minIntervalMs` / `datasource-default`, `panelInterval`,
+`maxDataPoints`) next to what the returned timestamps show (`observedGapGcdMs`,
+`consistentWithRequested`). The timestamps are read the same way `execute_adhoc_query` reads them
+(`src/query/stepReport.ts`): the step must divide the GCD of the gaps, so
+`consistentWithRequested: false` proves Grafana used a different step, and `true` is consistency
+rather than a match. A mismatch, or an ignored panel interval, is lifted to a top-level
+`stepWarnings`, the same way `unresolvedAllVariables` is lifted.
+
+One known gap, left as Grafana has it: a *target*-level `interval` (a query's own "Min step") is
+passed through untouched. Grafana's Prometheus backend lets it override the panel's floor, so it
+does here too, but `$__interval` in that query's text is still substituted from the panel's step.
+
 ## `export_panel_csv` resolution: render width, not time range
 
 `export_panel_csv` has two internal paths, and which one runs decides how the exported
@@ -258,9 +305,10 @@ resolution is controlled — a distinction that used to be invisible from the re
 
 - **Direct export** (`transformationsApplied: false`) — this server's own `/api/ds/query`
   call, used for a panel with no Grafana-side transformations, or when no browser
-  (screenshotter) is available. Its resolution is governed by `maxDataPoints` (config
-  `MAX_DATA_POINTS`, default 2000), substituted into `$__interval` in the query text. Passing
-  `renderWidth` here does nothing; the result's `warnings` say so.
+  (screenshotter) is available. Its resolution is governed by the panel's own min interval and
+  `maxDataPoints` (config `MAX_DATA_POINTS`, default 2000) — see
+  [Panel replay step](#panel-replay-step-the-panels-min-interval). Passing `renderWidth` here does
+  nothing; the result's `warnings` say so.
 - **Browser render** (`transformationsApplied: true`) — a hidden browser driven to Grafana's
   own Inspect → Data view, used for a panel *with* transformations. Here the effective
   resolution is a function of **the rendered viewport's pixel width**, not the time range:

@@ -12,6 +12,7 @@ import { materializeVariables } from './liveVariables.js';
 import { applyTagBreakout } from '../dashboards/tagBreakout.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import { describeReplayStep, type ReplayStepReport } from '../dashboards/panelStep.js';
 
 /**
  * Attaches per-series summary stats (min/max/mean/count/nonZeroCount) always,
@@ -55,6 +56,34 @@ function annotateSeries(
   };
 }
 
+/**
+ * The step problems a caller must not miss, lifted to the top level the way
+ * `unresolvedAllVariables` is: per-window `step` objects are easy to skim past,
+ * and #200's failure was exactly a step nobody looked at. One line per kind,
+ * naming the windows it hit.
+ */
+function replayStepWarnings(windows: Array<{ window: { label: string }; step: ReplayStepReport }>): string[] {
+  const warnings: string[] = [];
+  const mismatched = windows.filter((w) => w.step.consistentWithRequested === false);
+  if (mismatched.length > 0) {
+    warnings.push(
+      'Grafana did not evaluate at the requested step in ' +
+        `${mismatched.map((w) => `${w.window.label} (${w.step.requestedMs}ms requested)`).join(', ')} — see each ` +
+        "window's step.note, and read range-vector results (rate/increase/delta/*_over_time) against the step it " +
+        'did use.',
+    );
+  }
+  const ignored = windows.find((w) => w.step.panelIntervalIgnored !== undefined);
+  if (ignored) {
+    warnings.push(
+      `The panel's min interval "${ignored.step.panelIntervalIgnored}" couldn't be read as a duration, so this ` +
+        'replay ran at Grafana\'s datasource default step, which may not be the step the panel renders at. ' +
+        'Pass minIntervalMs to set it.',
+    );
+  }
+  return warnings;
+}
+
 export function registerExecuteQueryWindow(server: McpServer, { registry, config, activityLog }: ToolContext): void {
   server.registerTool(
     'execute_query_window',
@@ -75,7 +104,15 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         'crossing sample to its last, not a bucket-aware outage length: a dip caught in a single sample reads as 0 ms, ' +
         'and every run understates the true duration by up to one sample interval — read it alongside "pointCount" and ' +
         'the series\' sample spacing rather than as an exact length. Always prefer stats/threshold over fetching the ' +
-        'raw points and scripting the same analysis yourself. If "endsAtMs" is omitted and the alert is resolved ' +
+        'raw points and scripting the same analysis yourself. ' +
+        'Replays at the panel\'s own step: its "Min interval" is sent as the step floor, so step = max(that, ' +
+        'window/maxDataPoints), as in Grafana. Every window carries "step" - "requestedMs" and "source" (panel, ' +
+        'minIntervalMs, or datasource-default when the panel declares none and Grafana chose), plus what the ' +
+        'returned timestamps say: "consistentWithRequested": false is proof Grafana used a different step, also ' +
+        'lifted to a top-level "stepWarnings" (omitted when empty). Read any rate/increase/delta/*_over_time result ' +
+        'against that step - it decides the answer. Pass "minIntervalMs" to replace the panel\'s floor for one call, ' +
+        'e.g. to sweep the step when a result looks step-dependent. ' +
+        'If "endsAtMs" is omitted and the alert is resolved ' +
         '(not still firing), it defaults to now — for an old/resolved alert this can silently build a many-day ' +
         'window, so this call errors instead of running in that case; pass "endsAtMs" explicitly (from the alert\'s ' +
         'own resolved end, or the dashboard link\'s "to" param). A "$__all" selection on a variable Grafana computes ' +
@@ -108,6 +145,12 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
         threshold: z.number().optional().describe('When set, each returned series gets a "runs" array of contiguous points crossing this value (start/end/duration/min/max) - e.g. 1 for an uptime metric. Each run\'s "durationMs" spans its first crossing sample to its last, so a single-sample crossing is 0 ms and every run understates the outage by up to one sample interval; read it with "pointCount" and the sample spacing, not as an exact length'),
         thresholdDirection: z.enum(['below', 'above']).optional().default('below').describe('Whether "threshold" means find runs below or above that value'),
         includePoints: z.boolean().optional().default(true).describe('Set false to omit each series\' raw "points" array - stats/runs are still computed and returned either way'),
+        minIntervalMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Step floor in ms, replacing the panel\'s own min interval (Grafana\'s "Min interval" query option) for this call only - e.g. 60000 to evaluate at 1m. The step used is max(this, window/maxDataPoints). Omit to replay at the panel\'s own step; set it deliberately to sweep the step when a range-vector result (rate/increase/delta/*_over_time) may depend on it'),
         tagBreakout: z
           .object({
             key: z.string().trim().min(1).max(200).describe('Tag key to break out on, e.g. "host" / "instance" / "target_host"'),
@@ -119,10 +162,10 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
       },
       annotations: { readOnlyHint: true, title: 'Execute query window' },
     },
-    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, includePoints, tagBreakout, connection }) => {
+    async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, includePoints, minIntervalMs, tagBreakout, connection }) => {
       let resolvedConnectionId: string | undefined;
       try {
-        return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs, tagBreakout }, config, async () => {
+        return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs, minIntervalMs, tagBreakout }, config, async () => {
           const { client, connectionId } = resolveToolClient(registry, { connection });
           resolvedConnectionId = connectionId;
           const windowSet = computeWindows({
@@ -164,7 +207,16 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           let resolvedPanelTitle: string | undefined;
           const resultsPerWindow = await Promise.all(
             allWindows.map(async (window) => {
-              const { panel, targets } = await resolvePanelForWindow(client, dashboardUid, panelId, resolvedOverrides, window, config.maxDataPoints, panelTitle);
+              const { panel, targets, step } = await resolvePanelForWindow(
+                client,
+                dashboardUid,
+                panelId,
+                resolvedOverrides,
+                window,
+                config.maxDataPoints,
+                panelTitle,
+                minIntervalMs,
+              );
               resolvedPanelTitle ??= panel.title;
               // Break out by tag (per-host GROUP BY or single-host filter) after
               // variable substitution, uniformly across every window so the
@@ -173,7 +225,9 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
               // as a hard error rather than a silently un-broken-out result.
               const brokenOut = tagBreakout ? targets.map((t) => applyTagBreakout(t, tagBreakout)) : targets;
               const [result] = await executeQueryWindows(client, brokenOut, [window], config);
-              return annotateSeries(result!, threshold, thresholdDirection, includePoints, config);
+              // Measured on the full series, before annotateSeries clamps the
+              // emitted points: a clamp's stride would read as the step.
+              return { ...annotateSeries(result!, threshold, thresholdDirection, includePoints, config), step: describeReplayStep(step, result!.series) };
             }),
           );
 
@@ -198,12 +252,14 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             panelTitle: resolvedPanelTitle,
             url,
           });
+          const stepWarnings = replayStepWarnings([incident!, preWindow!, ...controls]);
           const result = {
             url,
             incident,
             preWindow,
             controls,
             ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
+            ...(stepWarnings.length > 0 ? { stepWarnings } : {}),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
