@@ -11,8 +11,8 @@ export interface ResolvedTarget {
   datasourceType?: string;
   raw: PanelTarget;
   /**
-   * Sent as the query's `intervalMs` when set: the panel's step floor, resolved
-   * by dashboards/panelStep.ts. Unset means no floor was declared, and
+   * Sent as the query's `intervalMs` when set: the replay's step, resolved by
+   * dashboards/panelStep.ts. Unset means no floor could be known, and
    * Grafana's datasource default decides.
    */
   intervalMs?: number;

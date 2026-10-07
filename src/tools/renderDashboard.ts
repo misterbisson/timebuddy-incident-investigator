@@ -18,12 +18,11 @@ import {
   type WeekStart,
 } from '../query/dateMath.js';
 import { flattenPanels, resolvePanelQueries } from '../dashboards/panelQueries.js';
-import { substituteTargetFields, mergeVariableOverrides } from '../dashboards/variables.js';
-import { resolvePanelStep, stepWindow, withStep } from '../dashboards/panelStep.js';
+import { mergeVariableOverrides } from '../dashboards/variables.js';
 import { executeQueryWindow } from '../query/executor.js';
 import { computeStats } from '../analysis/baseline.js';
 import { clampSeriesPoints, enforceWindowLimit } from '../security/limits.js';
-import { dashboardUrlFor, recordActivity, resolveGotoUrl, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
+import { dashboardUrlFor, recordActivity, resolveGotoUrl, resolvePanelReplay, resolveToolClient, toolErrorResult } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -367,19 +366,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
 
           const executed = await Promise.allSettled(
             toExecute.map(async (panel): Promise<RenderedPanel> => {
-              const step = resolvePanelStep({ panel, window, variables, overrides: resolvedOverrides, configMaxDataPoints: config.maxDataPoints });
-              const targets = await Promise.all(
-                panel.targets.map(async (t) =>
-                  withStep(
-                    {
-                      refId: t.refId,
-                      datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
-                      raw: substituteTargetFields(t.raw, variables, resolvedOverrides, stepWindow(window, step), step.maxDataPoints),
-                    },
-                    step,
-                  ),
-                ),
-              );
+              const { targets } = await resolvePanelReplay(client, panel, window, variables, resolvedOverrides, config.maxDataPoints);
               const result = await executeQueryWindow(client, targets, { label: 'render', fromMs, toMs }, config);
               const url = dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides });
               recordActivity(registry, activityLog, {

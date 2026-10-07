@@ -4,7 +4,7 @@ import { DEFAULT_MAX_DATA_POINTS } from '../config.js';
 export interface QueryWindow {
   fromMs: number;
   toMs: number;
-  /** Step for $__interval, in milliseconds — set when the panel declares a min interval (dashboards/panelStep.ts). */
+  /** Step for $__interval, in milliseconds — set when the replay requests one (dashboards/panelStep.ts). */
   intervalMs?: number;
 }
 
