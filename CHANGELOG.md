@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.0...v0.13.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* replay panels at their own min interval and report the step ([#299](https://github.com/misterbisson/timebuddy-incident-investigator/issues/299)) ([52f2fe2](https://github.com/misterbisson/timebuddy-incident-investigator/commit/52f2fe20b09b3d2826a6be698c212dafe55201fb))
+
 ## [0.13.0](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.12.1...v0.13.0) (2026-10-01)
 
 
