@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerRenderDashboard } from '../src/tools/renderDashboard.js';
 import type { Config, GrafanaConnection } from '../src/config.js';
 import type { DashboardGetResponse } from '../src/grafana/types.js';
@@ -247,8 +247,26 @@ describe('render_dashboard relative-time resolution', () => {
     return JSON.parse(result.content[0]!.text) as { window: Record<string, unknown> };
   }
 
+  // `now/w` resolves against the real clock, so every case here pins it: an
+  // unpinned week-length assertion fails in exactly the weeks that contain a
+  // DST transition, which is how this test once blocked CI from Oct 26 to Nov 1.
+  // Only Date is faked; the tool's own async work runs on real timers.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function pinClock(iso: string) {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse(iso));
+  }
+
+  async function renderThisWeek() {
+    return render({ url: 'https://grafana.example.com/d/dash2?from=now%2Fw&to=now%2Fw' });
+  }
+
   it("resolves a link's rounding shorthand against the dashboard's own zone and week-start", async () => {
-    const { window } = await render({ url: 'https://grafana.example.com/d/dash2?from=now%2Fw&to=now%2Fw' });
+    pinClock('2026-07-08T19:00:00Z'); // Wednesday noon, PDT all week
+    const { window } = await renderThisWeek();
     expect(window.relativeTime).toEqual({
       from: 'now/w',
       to: 'now/w',
@@ -258,7 +276,27 @@ describe('render_dashboard relative-time resolution', () => {
       weekStartSource: 'dashboard',
     });
     // A Monday-start week in Los Angeles, from its first millisecond to its last.
+    expect(window.fromMs).toBe(Date.parse('2026-07-06T07:00:00.000Z')); // Mon 00:00 PDT
+    expect(window.toMs).toBe(Date.parse('2026-07-13T06:59:59.999Z')); // Sun 23:59:59.999 PDT
     expect((window.toMs as number) - (window.fromMs as number)).toBe(7 * 86_400_000 - 1);
+  });
+
+  // The window follows the wall-clock week, not a fixed 7 x 24h: a week holding
+  // a DST transition is an hour longer or shorter, and Grafana's own window is too.
+  it('spans the wall-clock week, an hour longer, across a fall-back transition', async () => {
+    pinClock('2026-10-28T19:00:00Z'); // Wednesday noon; LA falls back Sun Nov 1
+    const { window } = await renderThisWeek();
+    expect(window.fromMs).toBe(Date.parse('2026-10-26T07:00:00.000Z')); // Mon 00:00 PDT
+    expect(window.toMs).toBe(Date.parse('2026-11-02T07:59:59.999Z')); // Sun 23:59:59.999 PST
+    expect((window.toMs as number) - (window.fromMs as number)).toBe(7 * 86_400_000 + 3_600_000 - 1);
+  });
+
+  it('spans the wall-clock week, an hour shorter, across a spring-forward transition', async () => {
+    pinClock('2027-03-10T20:00:00Z'); // Wednesday noon; LA springs forward Sun Mar 14
+    const { window } = await renderThisWeek();
+    expect(window.fromMs).toBe(Date.parse('2027-03-08T08:00:00.000Z')); // Mon 00:00 PST
+    expect(window.toMs).toBe(Date.parse('2027-03-15T06:59:59.999Z')); // Sun 23:59:59.999 PDT
+    expect((window.toMs as number) - (window.fromMs as number)).toBe(7 * 86_400_000 - 3_600_000 - 1);
   });
 
   it("resolves the dashboard's own saved default range when the call carries no window at all", async () => {
