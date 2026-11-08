@@ -2,12 +2,11 @@ import type { Config, GrafanaConnection } from '../config.js';
 import type { GrafanaClient } from '../grafana/client.js';
 import type { ConnectionRegistry } from '../grafana/registry.js';
 import type { DashboardJson, DsQueryRequest, GrafanaFrame } from '../grafana/types.js';
-import type { ResolvedPanel, ResolvedTarget } from '../dashboards/panelQueries.js';
+import type { ResolvedPanel } from '../dashboards/panelQueries.js';
 import type { Screenshotter } from '../screenshot/types.js';
 import { parseGrafanaUrl } from '../alerts/urlParser.js';
 import { findPanel } from '../dashboards/panelQueries.js';
-import { mergeVariableOverrides, substituteTargetFields } from '../dashboards/variables.js';
-import { resolvePanelStep, stepWindow, withStep } from '../dashboards/panelStep.js';
+import { mergeVariableOverrides } from '../dashboards/variables.js';
 import { buildDsQueryTarget, executeQueryWindow } from '../query/executor.js';
 import {
   clampMaxDataPoints,
@@ -39,7 +38,7 @@ import { resolveRenderWindow, type RelativeTimeResolution } from './renderDashbo
 import { fetchConnectionPreferences } from '../grafana/preferences.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
-import { resolveGotoUrl, resolveTargetDatasource, resolveToolClient } from './shared.js';
+import { resolveGotoUrl, resolvePanelReplay, resolveToolClient } from './shared.js';
 
 /**
  * The default capture size, shared by screenshot_panel's zod schema and the
@@ -482,19 +481,7 @@ export async function generatePanelCsv(
     unresolvedAllVariables = materialized.unresolvedAllVariables;
     const resolvedOverrides = materialized.overrides;
 
-    const step = resolvePanelStep({ panel: inv.panel, window, variables, overrides: resolvedOverrides, configMaxDataPoints: config.maxDataPoints });
-    const targets: ResolvedTarget[] = await Promise.all(
-      inv.panel.targets.map(async (t) =>
-        withStep(
-          {
-            ...t,
-            datasourceUid: await resolveTargetDatasource(inv.client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
-            raw: substituteTargetFields(t.raw, variables, resolvedOverrides, stepWindow(window, step), step.maxDataPoints),
-          },
-          step,
-        ),
-      ),
-    );
+    const { targets } = await resolvePanelReplay(inv.client, inv.panel, window, variables, resolvedOverrides, config.maxDataPoints);
 
     const isTable = inv.panel.type === 'table' || inv.panel.type === 'table-old';
 
