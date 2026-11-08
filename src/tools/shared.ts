@@ -402,18 +402,57 @@ export async function resolvePanelForWindow(
     );
   }
   const variables = dashboard.templating?.list ?? [];
-  const step = resolvePanelStep({ panel, window, variables, overrides, configMaxDataPoints: maxDataPoints, minIntervalMs });
-  const targets: ResolvedTarget[] = await Promise.all(
-    panel.targets.map(async (t) =>
-      withStep(
-        {
-          ...t,
-          datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, overrides, t.datasourceType),
-          raw: substituteTargetFields(t.raw, variables, overrides, stepWindow(window, step), step.maxDataPoints),
-        },
-        step,
-      ),
+  const { targets, step } = await resolvePanelReplay(client, panel, window, variables, overrides, maxDataPoints, minIntervalMs);
+  return { dashboard, panel, targets, step };
+}
+
+/**
+ * Resolves one panel's targets for a replay over `window`: each target's
+ * datasource, the step (#200), and the query text substituted at that step,
+ * stamped so the request sends it. Every tool that replays a panel goes
+ * through here, so the step a result reports is the one its query text used.
+ *
+ * Datasources are resolved before the step because a panel with no min
+ * interval takes its datasource's floor (dashboards/panelStep.ts) — but only
+ * when every target queries the same one: a step is per panel, and two
+ * datasources can disagree about their floor, so a mixed panel keeps sending
+ * none. A failed listing degrades the same way rather than failing the replay.
+ */
+export async function resolvePanelReplay(
+  client: GrafanaClient,
+  panel: Pick<ResolvedPanel, 'interval' | 'maxDataPoints' | 'targets'>,
+  window: QueryWindow,
+  variables: TemplateVariable[],
+  overrides: Record<string, string[]>,
+  configMaxDataPoints: number,
+  minIntervalMs?: number,
+): Promise<{ step: PanelStep; targets: ResolvedTarget[] }> {
+  const datasourceUids = await Promise.all(
+    panel.targets.map((t) => resolveTargetDatasource(client, t.datasourceUid, variables, overrides, t.datasourceType)),
+  );
+  const datasource = await soleDatasource(client, datasourceUids);
+  const step = resolvePanelStep({ panel, window, variables, overrides, configMaxDataPoints, minIntervalMs, datasource });
+  const targets = panel.targets.map((t, i) =>
+    withStep(
+      {
+        ...t,
+        datasourceUid: datasourceUids[i],
+        raw: substituteTargetFields(t.raw, variables, overrides, stepWindow(window, step), step.maxDataPoints),
+      },
+      step,
     ),
   );
-  return { dashboard, panel, targets, step };
+  return { step, targets };
+}
+
+/** The one listed datasource every target resolved to, or undefined when there isn't exactly one. */
+async function soleDatasource(client: GrafanaClient, uids: Array<string | undefined>): Promise<DatasourceInfo | undefined> {
+  const distinct = new Set(uids);
+  const [uid] = distinct;
+  if (distinct.size !== 1 || !uid) return undefined;
+  try {
+    return (await client.listDatasources()).find((d) => d.uid === uid);
+  } catch {
+    return undefined;
+  }
 }

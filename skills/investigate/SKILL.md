@@ -155,8 +155,10 @@ search.
      the panel's own step (its "Min interval"), and each window's `step` says what was asked
      (`requestedMs`, `source`) and what the timestamps show. Check the top-level `stepWarnings`
      first. If it's there, Grafana used a different step from the one requested, or the panel's
-     interval couldn't be read; either way, reinterpret before concluding. `source:
-     "datasource-default"` means the panel declares no interval and Grafana chose the step. When a
+     interval couldn't be read; either way, reinterpret before concluding. `source: "datasource"`
+     means the panel declares no interval, so the replay used the Prometheus datasource's scrape
+     interval, as Grafana does. `source: "datasource-default"` means no step was requested and
+     Grafana chose it. When a
      result looks step-dependent, re-run with `minIntervalMs` (e.g. 60000) to check it on purpose.
      Say so in the note if you did: those numbers answer at a step the panel doesn't render at.
    - **A query against an InfluxDB-backed panel that times out or aborts is often hitting

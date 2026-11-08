@@ -452,3 +452,87 @@ describe('execute_query_window step (#200)', () => {
     expect(parsed.incident.step.sourceNote).toContain('replacing the panel\'s own "1m"');
   });
 });
+
+describe('execute_query_window on a Prometheus panel with no min interval', () => {
+  const startsAtMs = 1_800_000_000_000;
+
+  function unpinnedPromDashboard(): DashboardGetResponse {
+    return {
+      dashboard: {
+        uid: 'api',
+        title: 'API',
+        version: 1,
+        panels: [
+          {
+            id: 1,
+            title: 'Request rate',
+            targets: [{ refId: 'A', datasource: { uid: 'prom', type: 'prometheus' }, expr: 'sum(rate(http_requests_total[$__interval]))' }],
+          },
+        ],
+      },
+      meta: {},
+    };
+  }
+
+  async function run(datasource: Record<string, unknown>, spanMs = 3_600_000) {
+    const { client, queryDs, listDatasources } = fakeGrafanaClient({ dashboard: unpinnedPromDashboard() });
+    listDatasources.mockResolvedValue([{ uid: 'prom', id: 2, name: 'Prometheus', type: 'prometheus', ...datasource }]);
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+    const result = (await call('execute_query_window', {
+      dashboardUid: 'api',
+      panelId: 1,
+      startsAtMs,
+      endsAtMs: startsAtMs + spanMs,
+      includeControls: false,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const sent = (queryDs.mock.calls[0]![0] as DsQueryRequest).queries[0]!;
+    return { parsed: JSON.parse(result.content[0]!.text), sent };
+  }
+
+  // Grafana's Prometheus backend (promlib's CalculatePrometheusInterval) floors a
+  // query with no intervalMs at the datasource's scrape interval, 15s when unset,
+  // so the step is 15s here. Writing span/maxDataPoints (1h/2000 -> 5s) into the
+  // text instead asks rate() over a 5s range at a 15s step: an empty answer.
+  it('writes the step Grafana evaluates at into $__interval: the 15s default scrape interval', async () => {
+    const { parsed, sent } = await run({ jsonData: {} });
+    expect(sent.expr).toBe('sum(rate(http_requests_total[15s]))');
+    expect(sent.intervalMs).toBe(15_000);
+    expect(parsed.incident.step).toMatchObject({ source: 'datasource', requestedMs: 15_000 });
+  });
+
+  it('uses the datasource\'s configured scrape interval when it has one', async () => {
+    const { parsed, sent } = await run({ jsonData: { timeInterval: '30s' } });
+    expect(sent.expr).toBe('sum(rate(http_requests_total[30s]))');
+    expect(sent.intervalMs).toBe(30_000);
+    expect(parsed.incident.step.sourceNote).toContain('scrape interval "30s"');
+  });
+
+  it('still coarsens past the scrape interval when the window needs it', async () => {
+    const { sent } = await run({ jsonData: {} }, 86_400_000);
+    expect(sent.expr).toBe('sum(rate(http_requests_total[1m]))');
+    expect(sent.intervalMs).toBe(60_000);
+  });
+
+  it('sends no step for a panel over two datasources, whose floors can differ', async () => {
+    const dashboard = unpinnedPromDashboard();
+    const panel = dashboard.dashboard.panels![0]!;
+    panel.targets = [...panel.targets!, { refId: 'B', datasource: { uid: 'prom2', type: 'prometheus' }, expr: 'up' }];
+    const { client, queryDs, listDatasources } = fakeGrafanaClient({ dashboard });
+    listDatasources.mockResolvedValue([
+      { uid: 'prom', id: 2, name: 'Prometheus', type: 'prometheus', jsonData: {} },
+      { uid: 'prom2', id: 3, name: 'Prometheus 2', type: 'prometheus', jsonData: { timeInterval: '1m' } },
+    ]);
+    const { server, call } = fakeServer();
+    registerExecuteQueryWindow(server, { registry: fakeRegistry(connections, client), config: config() });
+    await call('execute_query_window', { dashboardUid: 'api', panelId: 1, startsAtMs, endsAtMs: startsAtMs + 3_600_000, includeControls: false, connection: 'test' });
+    expect((queryDs.mock.calls[0]![0] as DsQueryRequest).queries.map((q) => q.intervalMs)).toEqual([undefined, undefined]);
+  });
+
+  it('sends no step when the datasource\'s settings could not be read, rather than guess its floor', async () => {
+    const { parsed, sent } = await run({});
+    expect(sent.intervalMs).toBeUndefined();
+    expect(parsed.incident.step.source).toBe('datasource-default');
+  });
+});

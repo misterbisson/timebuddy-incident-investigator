@@ -161,6 +161,13 @@ export interface DatasourceInfo {
   type: string;
   url?: string;
   isDefault?: boolean;
+  /**
+   * The datasource's non-secret settings, as GET /api/datasources lists them.
+   * Only `timeInterval` (the configured scrape interval, Grafana's step floor
+   * for a query that sends no intervalMs) is read — see dashboards/panelStep.ts.
+   * Absent means they weren't readable, which is not the same as "unset".
+   */
+  jsonData?: { timeInterval?: string };
 }
 
 /**

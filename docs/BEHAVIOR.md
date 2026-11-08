@@ -273,18 +273,39 @@ does, in `src/dashboards/panelStep.ts`:
   evaluates at and the step written into the query text (`GROUP BY time($__interval)`,
   `[$__interval]`) are the same number.
 
-Two cases deliberately send **no** `intervalMs`:
+A panel that declares no min interval takes its **datasource's** floor, when that can be known
+for sure. Sending nothing here isn't neutral, because this server substitutes `$__interval` itself
+rather than leaving it to Grafana. With no `intervalMs`, Grafana's Prometheus backend floors the
+step at the datasource's scrape interval: promlib's `CalculatePrometheusInterval` takes
+`gtime.GetIntervalFrom(jsonData.timeInterval, …, 15s)`, which skips to the scrape interval when
+no `intervalMs` arrives. The query text, meanwhile, got `window / maxDataPoints`. Over an hour
+that's `rate(x[5s])` evaluated at a 15s step: an empty answer from a panel Grafana draws fine.
+Grafana's own panel query runner avoids this by using the datasource's `interval` (for Prometheus,
+`jsonData.timeInterval || '15s'`) as the floor whenever the panel declares none. It then sends that
+as `intervalMs`, so its text and step agree. The replay now does the same: `source: "datasource"`.
+The floor is read from `GET /api/datasources`, the listing every replay already makes to resolve
+target datasources, so no new endpoint is involved.
 
-- **The panel declares no min interval.** Grafana's backends take a sent `intervalMs` as the
-  floor *instead of* the datasource's own (its configured scrape interval, or 15s for Prometheus
-  when unset). So sending a span-derived one would run finer than the panel renders: the same
-  bug, in the other direction.
-- **The panel's interval can't be read as a duration** (an unknown unit, or a variable with no
-  usable value). It's skipped rather than guessed, and reported as `panelIntervalIgnored`, the same
-  way an unresolvable time zone is skipped rather than failing every window on the dashboard.
+That rule is narrow on purpose, because a sent `intervalMs` replaces the backend's own floor. Get it
+wrong and the replay runs finer than the panel renders, the same bug in the other direction. So
+these cases still send **no** `intervalMs` (`source: "datasource-default"`), and the text keeps the
+span-derived `$__interval`:
+
+- **The datasource isn't `prometheus`.** Its floor isn't read from source here. InfluxQL isn't
+  affected anyway, since its `GROUP BY time($__interval)` *is* the bucketing.
+- **The panel's targets use more than one datasource.** A step is per panel, and two datasources
+  can disagree about their floor.
+- **The datasource's settings weren't listed** (no `jsonData`, or the listing failed), or its
+  `timeInterval` can't be read as a duration. Missing settings can't tell "unset, so 15s" from
+  "set to 1m".
+
+A panel interval that **can't be read as a duration** (an unknown unit, or a variable with no usable
+value) is skipped rather than guessed, and reported as `panelIntervalIgnored`, the same way an
+unresolvable time zone is skipped rather than failing every window on the dashboard. The replay then
+behaves as if the panel had declared none, taking the datasource floor if there is one.
 
 `execute_query_window` reports the step on every window as `step`. That's what was requested
-(`requestedMs`, `source`: `panel` / `minIntervalMs` / `datasource-default`, `panelInterval`,
+(`requestedMs`, `source`: `panel` / `minIntervalMs` / `datasource` / `datasource-default`, `panelInterval`,
 `maxDataPoints`) next to what the returned timestamps show (`observedGapGcdMs`,
 `consistentWithRequested`). The timestamps are read the same way `execute_adhoc_query` reads them
 (`src/query/stepReport.ts`): the step must divide the GCD of the gaps, so

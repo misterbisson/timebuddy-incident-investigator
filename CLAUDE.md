@@ -230,7 +230,8 @@ payload / pasted JSON / Grafana URL (via `alerts/urlParser.ts`) into an `AlertCo
 (resolving dashboard/panel links via `__dashboardUid__`/`__panelId__` annotations or by
 parsing the URL); `dashboards/panelQueries.ts` + `dashboards/variables.ts` turn a
 dashboard UID/panel ID into concrete, variable-substituted query targets, at the step
-`dashboards/panelStep.ts` resolves from the panel's own min interval (issue #200: for
+`dashboards/panelStep.ts` resolves from the panel's own min interval, else its Prometheus
+datasource's scrape interval (issue #200: for
 `rate`/`increase`/`delta` the step decides the answer, so a replay that drops it returns a
 confident wrong number, and every replay reports the step it asked for); `query/windows.ts`
 computes the incident/pre-window/control windows; `query/executor.ts` runs them through
