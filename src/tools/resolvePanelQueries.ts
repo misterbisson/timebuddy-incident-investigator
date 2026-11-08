@@ -2,9 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { findPanel, resolvePanelQueries as resolveAllPanelQueries, stripInactiveQueryFields } from '../dashboards/panelQueries.js';
-import { substituteTargetFields } from '../dashboards/variables.js';
-import { resolvePanelStep, stepWindow } from '../dashboards/panelStep.js';
-import { dashboardUrlFor, epochMsSchema, resolveTargetDatasource, resolveToolClient, toolErrorResult } from './shared.js';
+import { dashboardUrlFor, epochMsSchema, resolvePanelReplay, resolveToolClient, toolErrorResult } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
@@ -74,7 +72,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
 
           const result = await Promise.all(
             panels.map(async (panel) => {
-              const step = resolvePanelStep({ panel, window, variables, overrides: resolvedOverrides, configMaxDataPoints: config.maxDataPoints });
+              const { step, targets } = await resolvePanelReplay(client, panel, window, variables, resolvedOverrides, config.maxDataPoints);
               return {
                 panelId: panel.panelId,
                 title: panel.title,
@@ -90,15 +88,11 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
                 // What a replay of this panel over this window requests as its
                 // step, and why — the same resolution execute_query_window uses.
                 step,
-                targets: await Promise.all(
-                  panel.targets.map(async (t) => ({
-                    refId: t.refId,
-                    datasourceUid: await resolveTargetDatasource(client, t.datasourceUid, variables, resolvedOverrides, t.datasourceType),
-                    resolvedQuery: stripInactiveQueryFields(
-                      substituteTargetFields(t.raw, variables, resolvedOverrides, stepWindow(window, step), step.maxDataPoints),
-                    ),
-                  })),
-                ),
+                targets: targets.map((t) => ({
+                  refId: t.refId,
+                  datasourceUid: t.datasourceUid,
+                  resolvedQuery: stripInactiveQueryFields(t.raw),
+                })),
               };
             }),
           );

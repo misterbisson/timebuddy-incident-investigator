@@ -175,4 +175,32 @@ describe('resolve_panel_queries step (#200)', () => {
     expect(panel.step).toMatchObject({ intervalMs: 60_000, source: 'panel', panelInterval: '1m' });
     expect(panel.targets[0].resolvedQuery.query).toContain('GROUP BY time(1m)');
   });
+
+  it('shows a Prometheus panel with no min interval at its datasource\'s floor, the step Grafana evaluates it at', async () => {
+    const dashboard: DashboardGetResponse = {
+      dashboard: {
+        uid: 'd',
+        title: 't',
+        version: 1,
+        panels: [{ id: 1, title: 'rps', targets: [{ refId: 'A', datasource: { uid: 'prom', type: 'prometheus' }, expr: 'rate(x[$__interval])' }] }],
+      },
+      meta: {},
+    };
+    const { client, listDatasources } = fakeGrafanaClient({ dashboard });
+    listDatasources.mockResolvedValue([{ uid: 'prom', id: 2, name: 'Prometheus', type: 'prometheus', jsonData: {} }]);
+    const { server, call } = fakeServer();
+    registerResolvePanelQueries(server, { registry: fakeRegistry(connections, client), config: config() });
+
+    const result = (await call('resolve_panel_queries', {
+      dashboardUid: 'd',
+      panelId: 1,
+      windowFromMs: 1_800_000_000_000,
+      windowToMs: 1_800_003_600_000,
+      connection: 'test',
+    })) as { content: Array<{ text: string }> };
+    const [panel] = JSON.parse(result.content[0]!.text).panels;
+
+    expect(panel.step).toMatchObject({ intervalMs: 15_000, source: 'datasource' });
+    expect(panel.targets[0].resolvedQuery.expr).toBe('rate(x[15s])');
+  });
 });
