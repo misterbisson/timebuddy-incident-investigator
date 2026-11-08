@@ -53,7 +53,20 @@
 import type { AdhocVerdict } from './adhocGuard.js';
 
 /** What the scan ran out of input inside, if anything. Each is a refusal. */
-export type PromqlUnterminatedKind = 'string literal' | 'raw string literal';
+export type PromqlUnterminatedKind = 'string literal' | 'raw string literal' | 'block comment';
+
+/**
+ * Lexical options for a dialect that shares PromQL's scan but not all of its
+ * comment syntax. PromQL itself uses none of these.
+ */
+export interface PromqlScanOptions {
+  /**
+   * Also treat `//` (to end of line) and `/* … *\/` as comments. LogQL's lexer
+   * skips both (see logqlGuard.ts); PromQL's does not, so for PromQL they stay
+   * operators and a `/` is division.
+   */
+  slashComments?: boolean;
+}
 
 export interface PromqlScanResult {
   /**
@@ -71,7 +84,7 @@ export interface PromqlScanResult {
   bracketProblem?: string;
 }
 
-type State = 'normal' | 'single' | 'double' | 'backtick' | 'comment';
+type State = 'normal' | 'single' | 'double' | 'backtick' | 'comment' | 'block';
 
 const OPENERS: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
 const CLOSERS: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
@@ -83,10 +96,11 @@ const CLOSERS: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
  * PromQL has three string forms: `'…'` and `"…"` (backslash escapes) and
  * `` `…` `` (raw — a backslash is a literal backslash, so escapes must NOT be
  * honoured there or a trailing `\` would swallow the closing backtick). Comments
- * run from `#` to end of line. There is no block-comment form, which is why
- * nothing here looks for one.
+ * run from `#` to end of line. PromQL has no other comment form, so `//` and
+ * `/*` are only read as comments when a dialect asks for them
+ * (`options.slashComments`).
  */
-export function scanPromQL(expr: string): PromqlScanResult {
+export function scanPromQL(expr: string, options: PromqlScanOptions = {}): PromqlScanResult {
   let state: State = 'normal';
   let masked = '';
   let empty = true;
@@ -110,6 +124,15 @@ export function scanPromQL(expr: string): PromqlScanResult {
           // A comment is a token separator, not nothing — same reasoning as
           // adhocGuard's. Blanked rather than kept so `#` can't read as syntax.
           blank();
+          continue;
+        }
+        if (options.slashComments && ch === '/' && (expr[i + 1] === '/' || expr[i + 1] === '*')) {
+          // Both delimiter characters are blanked, like `#`, so neither can
+          // read as an operator or decide the expression's first token.
+          state = expr[i + 1] === '/' ? 'comment' : 'block';
+          blank();
+          blank();
+          i += 1;
           continue;
         }
         if (ch === "'" || ch === '"' || ch === '`') {
@@ -160,6 +183,22 @@ export function scanPromQL(expr: string): PromqlScanResult {
         blank();
         continue;
       }
+      case 'block': {
+        // Not nested: the first `*/` ends it, as in Go's text/scanner, which
+        // is what LogQL's lexer is built on.
+        if (ch === '*' && expr[i + 1] === '/') {
+          state = 'normal';
+          blank();
+          blank();
+          i += 1;
+          continue;
+        }
+        // A newline inside a block comment is kept as whitespace, so line
+        // structure in the masked view matches the input.
+        if (ch === '\n') masked += '\n';
+        else blank();
+        continue;
+      }
     }
   }
 
@@ -169,7 +208,13 @@ export function scanPromQL(expr: string): PromqlScanResult {
   }
 
   const unterminated: PromqlUnterminatedKind | undefined =
-    state === 'backtick' ? 'raw string literal' : state === 'single' || state === 'double' ? 'string literal' : undefined;
+    state === 'backtick'
+      ? 'raw string literal'
+      : state === 'single' || state === 'double'
+        ? 'string literal'
+        : state === 'block'
+          ? 'block comment'
+          : undefined;
 
   return {
     masked,
