@@ -205,8 +205,10 @@ which only `search_logs` can express.
 
 Note the selector the adapter runs is the join parser's normalized form (e.g. whitespace
 after a matcher's comma removed), not the caller's exact text. It is still the string the
-guard scanned, and `joinShape`'s right-side selectors come from the same parser, so the
-anti-join check compares like with like.
+guard scanned, and `joinShape`'s right-side selectors come from the same parser, given the
+same normalized query, so the anti-join check compares like with like. A quoted label value
+the engine would rewrite is refused before that point; see "Whitespace the engine rewrites"
+below.
 
 **Label discovery.** `list_log_sources({connection: <loki id>})` returns the datasource's
 stream label *names* (`GrafanaClient.getLokiLabelNames`), which is the Loki counterpart of a
@@ -243,10 +245,31 @@ The consequence depends on the join operator, and
 
 Knowing which selectors are on the right-hand side requires parsing the query.
 [`src/logs/joinShape.ts`](../src/logs/joinShape.ts) uses the *same* `PeggyQueryParser` the
-engine uses internally, so a query the engine accepts parses identically here. It's
+engine uses internally, and parses the query *as the engine does*: after
+`normalizeLikeEngine`, the engine's own trim-and-collapse-whitespace step. The right-side
+selectors are then the exact strings the adapters report their fetch stats under. It's
 best-effort: an unparseable query (the engine would already have thrown) yields an
 undefined `joinType`, and the guard conservatively treats *any* truncation as unsafe when
 it can't identify the sides.
+
+### Whitespace the engine rewrites
+
+`CorrelationEngine.parseQuery` runs `query.trim().replace(/\s+/g, " ")` before parsing, and
+that reaches inside quoted values. So `{app="back  end"}` or `service:"back  end"` runs as
+`"back end"`, a different value that matches different streams or none, and nothing in the
+result says so. Before issue #273 it also defeated the anti-join refusal above: `joinShape`
+parsed the query as written, so the truncated selector the engine reported (`"back end"`)
+matched none of the recorded right-side ones (`"back  end"`), and a partial anti-join came
+back as complete.
+
+The engine is vendored and the rewrite can't be switched off, so `correlate_logs` refuses
+the query instead. `joinShape` parses it twice, as written and as the engine will, and lists
+every stream selector that differs in `rewrittenSelectors`. The grammar already drops
+whitespace between tokens, so a difference means a quoted value with a repeated space, a tab
+or a newline. Any entry is refused before a single search runs, naming each rewrite. A query
+that parses *only* after normalization (a non-breaking space between tokens, say) is refused
+too, since what would run can't be compared with what was written. This is the same rule
+the ad-hoc query guards follow: run exactly the text that was checked.
 
 ## Data flow
 
