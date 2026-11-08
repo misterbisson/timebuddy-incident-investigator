@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.13.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.1...v0.13.2) (2026-11-08)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump electron from 44.4.5 to 44.9.1 ([#314](https://github.com/misterbisson/timebuddy-incident-investigator/issues/314)) ([ac9142e](https://github.com/misterbisson/timebuddy-incident-investigator/commit/ac9142ea109fa4f7aeba25b3ff911ec93ab17257))
+* **deps:** bump @hono/node-server from 2.1.0 to 2.1.6 ([#319](https://github.com/misterbisson/timebuddy-incident-investigator/issues/319)) ([1079b23](https://github.com/misterbisson/timebuddy-incident-investigator/commit/1079b23fcdb62f17402749a4c3608253b2206274))
+* **deps:** bump body-parser from 2.3.0 to 2.4.0 ([#318](https://github.com/misterbisson/timebuddy-incident-investigator/issues/318)) ([0324665](https://github.com/misterbisson/timebuddy-incident-investigator/commit/03246657aed17a885190b7826666fdc049f79548))
+* **deps:** bump fast-uri from 3.1.8 to 3.1.9 ([#316](https://github.com/misterbisson/timebuddy-incident-investigator/issues/316)) ([2e7354c](https://github.com/misterbisson/timebuddy-incident-investigator/commit/2e7354c3cc381d51ff5973e2697098865d3fb6db))
+* **deps:** bump ip-address from 10.7.2 to 10.7.6 ([#317](https://github.com/misterbisson/timebuddy-incident-investigator/issues/317)) ([8da3da0](https://github.com/misterbisson/timebuddy-incident-investigator/commit/8da3da04fb3f8d193f2fb27fa382bdddc5e4cbb4))
+* **deps:** bump proxy-addr from 2.0.7 to 2.0.8 ([#302](https://github.com/misterbisson/timebuddy-incident-investigator/issues/302)) ([11b5d9a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/11b5d9a5b3fca1222b4e9183022b5ed971e9427c))
+* **deps:** bump source-map-js from 1.2.1 to 1.2.2 ([#301](https://github.com/misterbisson/timebuddy-incident-investigator/issues/301)) ([0c4a964](https://github.com/misterbisson/timebuddy-incident-investigator/commit/0c4a964caa54f5251bb872328f4d050d0e98212a))
+* **deps:** bump vite from 8.3.1 to 8.3.6 ([#307](https://github.com/misterbisson/timebuddy-incident-investigator/issues/307)) ([046d954](https://github.com/misterbisson/timebuddy-incident-investigator/commit/046d9540c23f37cb3b58893a2205d7e1ffbd488c))
+* replay unpinned Prometheus panels at the datasource scrape interval ([#304](https://github.com/misterbisson/timebuddy-incident-investigator/issues/304)) ([21e6ddd](https://github.com/misterbisson/timebuddy-incident-investigator/commit/21e6ddd9d23aad4c17b3e3974aa366e66681bfa4))
+
 ## [0.13.1](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.0...v0.13.1) (2026-10-07)
 
 
