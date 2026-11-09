@@ -131,6 +131,72 @@ describe('correlate_logs tool', () => {
     expect(result.content[0]!.text).toMatch(/unless.*truncated|truncated.*right/i);
   });
 
+  // Issue #273: the engine collapses whitespace runs before parsing, quoted
+  // values included. A double space inside the right side's quoted value used
+  // to make the truncated selector the engine reported differ from the one
+  // joinShape recorded, so the anti-join refusal was skipped and a partial
+  // answer came back as complete, searched for a value nobody wrote.
+  describe('whitespace the engine would rewrite', () => {
+    const msg = (id: string) => ({ message: { message: 'm', timestamp: '2026-01-01T00:00:00Z', source: 's', request_id: id } });
+
+    function setup(rightSelector: string) {
+      const normalized = rightSelector.replace(/\s+/g, ' ');
+      // r2 matches on the right, but only as the 2nd message; limit 1 hides it.
+      const { client, searchAbsolute } = fakeGraylogClient({
+        messagesBySelector: { 'service:frontend': [msg('r2')], [rightSelector]: [msg('r1'), msg('r2')], [normalized]: [msg('r1'), msg('r2')] },
+      });
+      const { server, call } = fakeServer();
+      registerCorrelateLogs(server, { logRegistry: fakeLogRegistry(connections, client), config: config({ maxLogLines: 1 }) } as never);
+      const run = async (query: string) =>
+        (await call('correlate_logs', { query, startsAtMs: 0, endsAtMs: 1 })) as { content: Array<{ text: string }>; isError?: boolean };
+      return { run, searchAbsolute };
+    }
+
+    it.each([
+      ['a double space', 'service:"back  end"', '"back end"'],
+      ['a tab', 'service:"back\tend"', '"back end"'],
+    ])('refuses %s inside a quoted value, before any search, naming the rewrite', async (_label, right, sent) => {
+      const { run, searchAbsolute } = setup(right);
+      const result = await run(`graylog(service:frontend)[5m] unless on(request_id) graylog(${right})[5m]`);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/collapses every run of whitespace/);
+      expect(result.content[0]!.text).toContain(`would run as ${JSON.stringify(`service:${sent}`)}`);
+      expect(searchAbsolute).not.toHaveBeenCalled();
+    });
+
+    it('refuses a rewritten value on the left side too, and for joins other than unless', async () => {
+      const { run, searchAbsolute } = setup('service:backend');
+      const result = await run('graylog(service:"front  end")[5m] and on(request_id) graylog(service:backend)[5m]');
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain('"service:\\"front  end\\"" would run as "service:\\"front end\\""');
+      expect(searchAbsolute).not.toHaveBeenCalled();
+    });
+
+    it('still refuses the truncated anti-join when the quoted value has single spaces', async () => {
+      const { run } = setup('service:"back end"');
+      const result = await run('graylog(service:frontend)[5m] unless on(request_id) graylog(service:"back end")[5m]');
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/right-hand side of an "unless" anti-join was truncated/);
+    });
+
+    it('refuses a query that only parses after the engine normalizes it, since it cannot be compared', async () => {
+      const { run, searchAbsolute } = setup('service:backend');
+      // A non-breaking space: \s matches it, the join grammar does not.
+      const result = await run('graylog(service:frontend)[5m]\u00a0and on(request_id) graylog(service:backend)[5m]');
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/only parses after that/);
+      expect(searchAbsolute).not.toHaveBeenCalled();
+    });
+
+    it('does not refuse whitespace runs outside quotes, which the grammar already drops', async () => {
+      const { run } = setup('service:backend AND level:error');
+      const result = await run('graylog(service:frontend)[5m]\n  unless on(request_id)\n  graylog(service:backend  AND  level:error)[5m]');
+      expect(result.isError).toBe(true);
+      // The refusal that fires is the truncation one: the sides were identified.
+      expect(result.content[0]!.text).toMatch(/right-hand side of an "unless" anti-join was truncated/);
+    });
+  });
+
   // Inner/`and` joins only under-count on truncation, so they return results but
   // must flag that a stream was truncated rather than implying a complete answer.
   it('surfaces a truncated flag (without erroring) for an "and" query with a truncated stream', async () => {

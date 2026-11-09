@@ -248,6 +248,21 @@ describe('correlate_logs with Loki', () => {
     expect(r.text).toMatch(/raise "limit" \(up to MAX_LOG_LINES=500\)/);
   });
 
+  // Issue #273, on the Loki path: a label value the engine would rewrite.
+  it('refuses a selector whose quoted label value the engine would rewrite, before querying Loki', async () => {
+    const { run, queryDs } = setup({ linesByExpr: { '{app="frontend"}': front, '{app="back end"}': [...back, ...back] } });
+    const r = await run('correlate_logs', {
+      query: 'loki({app="frontend"})[5m] unless on(request_id) loki({app="back  end"})[5m]',
+      startsAtMs: T0,
+      endsAtMs: T0 + 60_000,
+      limit: 2,
+      connection: SOURCE,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('"{app=\\"back  end\\"}" would run as "{app=\\"back end\\"}"');
+    expect(queryDs).not.toHaveBeenCalled();
+  });
+
   it('advises raising MAX_LOG_LINES, not limit, when the call already ran at that cap', async () => {
     const many = Array.from({ length: 500 }, (_, i) => ({ t: T0 + i, line: `{"request_id":"b${i}"}`, labels: { app: 'backend' } }));
     const { run } = setup({ linesByExpr: { '{app="frontend"}': front, '{app="backend"}': many } });

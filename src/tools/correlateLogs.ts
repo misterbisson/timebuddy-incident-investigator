@@ -34,7 +34,8 @@ export function registerCorrelateLogs(server: McpServer, { registry, logRegistry
         'cap) and a top-level "truncated" flag when any stream hit the per-stream line cap — ' +
         'treat a truncated result as a partial view, not a complete count. An "unless" (anti-join) whose right side ' +
         'is truncated errors out instead of returning a possibly-inverted answer; narrow the query/window or raise ' +
-        'the cap and retry.',
+        'the cap and retry. Use single plain spaces inside quoted values: the join engine collapses whitespace runs, ' +
+        'even inside quotes, so a query whose quoted value it would rewrite is refused.',
       inputSchema: {
         query: z.string().describe('A log-correlator join query, e.g. "graylog(service:frontend) and on(request_id) graylog(service:backend)"'),
         startsAtMs: epochMsSchema.describe('Search window start — epoch ms or an ISO 8601 date/time'),
@@ -72,6 +73,26 @@ export function registerCorrelateLogs(server: McpServer, { registry, logRegistry
               `"${connectionId}" is a ${resolved.sourceType} log source, but the query writes stream(s) as ` +
                 `${[...new Set(mismatched)].map((s) => `${s}(...)`).join(', ')}. Write every stream as ` +
                 `${resolved.sourceType}(...) — ${resolved.sourceType === 'loki' ? 'a bare stream selector, e.g. loki({app="frontend"})' : 'Graylog query syntax, e.g. graylog(service:frontend)'}.`,
+            );
+          }
+          // The engine collapses every whitespace run to one space before it
+          // parses, quoted values included, so `"back  end"` would be searched
+          // as `"back end"`: a different value, matching other streams or none,
+          // with nothing in the result to say so. Refused before any search
+          // rather than run as text nobody wrote (issue #273).
+          if (shape.rewrittenSelectors.length > 0 || shape.parsesOnlyNormalized) {
+            const what = shape.parsesOnlyNormalized
+              ? 'the query only parses after that, so what would run can\'t be checked against what was written ' +
+                '(a non-breaking space or other unusual whitespace is the likely cause)'
+              : shape.rewrittenSelectors
+                  .map((r) => `${JSON.stringify(r.written)} would run as ${JSON.stringify(r.sent)}`)
+                  .join('; ');
+            throw new Error(
+              'correlate_logs: the join engine collapses every run of whitespace in the query to a single space ' +
+                `before running it, including inside quoted values — ${what}. A rewritten value matches different ` +
+                'streams, or none, so the query is refused rather than run as something other than what was written. ' +
+                'Use single plain spaces inside quoted values. If a value really contains a tab, newline or ' +
+                'repeated space, match it with a regular expression that spells the whitespace out (\\s) instead.',
             );
           }
           if (resolved.sourceType === 'loki' && streamId !== undefined) {
