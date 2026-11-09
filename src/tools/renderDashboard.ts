@@ -24,6 +24,7 @@ import { computeStats } from '../analysis/baseline.js';
 import { clampSeriesPoints, enforceWindowLimit } from '../security/limits.js';
 import { dashboardUrlFor, recordActivity, resolveGotoUrl, resolvePanelReplay, resolveToolClient, toolErrorResult } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
+import { describeReplayStep, replayStepWarnings, type ReplayStepReport } from '../dashboards/panelStep.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -42,6 +43,13 @@ interface RenderedPanel {
   /** Only set for a queryable panel past panelLimit — see panelsSkipped. */
   skipped?: boolean;
   targets?: RenderedTarget[];
+  /**
+   * The step this panel was replayed at, and what the returned timestamps say
+   * about it — the same report execute_query_window gives each window (see
+   * dashboards/panelStep.ts's describeReplayStep). For a range-vector function or
+   * an InfluxQL `GROUP BY time($__interval) fill(0)`, the step decides the value.
+   */
+  step?: ReplayStepReport;
   /** points is omitted (not just empty) when the caller passed includePoints: false. */
   series?: Array<Omit<QuerySeries, 'points'> & { points?: QuerySeries['points']; stats: SeriesStats }>;
   errors?: Record<string, string>;
@@ -251,6 +259,12 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
         'A panel using Grafana\'s built-in "-- Dashboard --" datasource (re-displays another panel\'s already-computed ' +
         'value client-side; no backend to query - always 404s if replayed) is never executed or reported as an error; ' +
         'it carries "mirrorsPanelIds" instead - read the referenced panel(s) in this same response for the real data. ' +
+        'Each panel replays at its own step, as Grafana renders it: max(its "Min interval", window/maxDataPoints), sent ' +
+        'as the step and substituted for $__interval. Every executed panel carries "step" - what was requested ' +
+        '("requestedMs", "source", "panelInterval") and what the returned timestamps show; "consistentWithRequested": ' +
+        'false proves Grafana used a different step, and that, or a min interval that could not be read, is lifted to a ' +
+        'top-level "stepWarnings" (omitted when empty). Read rate/increase/delta/*_over_time and fill(0)-bucketed values ' +
+        'against it - the step decides them. ' +
         'A "$__all" selection on a variable Grafana computes live (e.g. an InfluxQL "SHOW TAG VALUES" query variable) ' +
         'is best-effort live-resolved to its real value list; when that can\'t be done (unsupported datasource/query ' +
         'shape, or the live lookup itself failed) it falls back to matching everything, and the variable name is ' +
@@ -366,7 +380,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
 
           const executed = await Promise.allSettled(
             toExecute.map(async (panel): Promise<RenderedPanel> => {
-              const { targets } = await resolvePanelReplay(client, panel, window, variables, resolvedOverrides, config.maxDataPoints);
+              const { step, targets } = await resolvePanelReplay(client, panel, window, variables, resolvedOverrides, config.maxDataPoints);
               const result = await executeQueryWindow(client, targets, { label: 'render', fromMs, toMs }, config);
               const url = dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides });
               recordActivity(registry, activityLog, {
@@ -385,6 +399,9 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
                 hasTargets: true,
                 url,
                 targets: targets.map((t) => ({ refId: t.refId, datasourceUid: t.datasourceUid, resolvedQuery: t.raw })),
+                // Measured on the full series, before clampSeriesPoints strides the
+                // emitted points: a clamp's stride would read as the step.
+                step: describeReplayStep(step, result.series),
                 // stats from the full series, only the emitted points downsampled
                 // — see the note in query/executor.ts on why the clamp lives here.
                 series: clampSeriesPoints(result.series, config).map((s, i) => {
@@ -450,6 +467,13 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
               url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: p.id }),
             }));
 
+          const stepWarnings = replayStepWarnings(
+            executedPanels
+              .filter((p): p is RenderedPanel & { step: ReplayStepReport } => p.step !== undefined)
+              .map((p) => ({ label: p.title ? `"${p.title}" (panel ${p.panelId})` : `panel ${p.panelId}`, step: p.step })),
+            { unit: 'panel', remedy: 'Replay that panel with execute_query_window and minIntervalMs to set it.' },
+          );
+
           const result = {
             url: dashboardUrlFor(registry, connectionId, dashboardUid, { fromMs, toMs, variables: overrides }),
             dashboardUid,
@@ -460,6 +484,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
             panelsSkipped: skippedPanels.length,
             panels: [...executedPanels, ...skippedPanels, ...mirrorRenderedPanels, ...nonQueryablePanels],
             ...(unresolvedAllVariables.length > 0 ? { unresolvedAllVariables } : {}),
+            ...(stepWarnings.length > 0 ? { stepWarnings } : {}),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });

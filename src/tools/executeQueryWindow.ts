@@ -12,7 +12,7 @@ import { materializeVariables } from './liveVariables.js';
 import { applyTagBreakout } from '../dashboards/tagBreakout.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
-import { describeReplayStep, type ReplayStepReport } from '../dashboards/panelStep.js';
+import { describeReplayStep, replayStepWarnings } from '../dashboards/panelStep.js';
 
 /**
  * Attaches per-series summary stats (min/max/mean/count/nonZeroCount) always,
@@ -54,34 +54,6 @@ function annotateSeries(
       };
     }),
   };
-}
-
-/**
- * The step problems a caller must not miss, lifted to the top level the way
- * `unresolvedAllVariables` is: per-window `step` objects are easy to skim past,
- * and #200's failure was exactly a step nobody looked at. One line per kind,
- * naming the windows it hit.
- */
-function replayStepWarnings(windows: Array<{ window: { label: string }; step: ReplayStepReport }>): string[] {
-  const warnings: string[] = [];
-  const mismatched = windows.filter((w) => w.step.consistentWithRequested === false);
-  if (mismatched.length > 0) {
-    warnings.push(
-      'Grafana did not evaluate at the requested step in ' +
-        `${mismatched.map((w) => `${w.window.label} (${w.step.requestedMs}ms requested)`).join(', ')} — see each ` +
-        "window's step.note, and read range-vector results (rate/increase/delta/*_over_time) against the step it " +
-        'did use.',
-    );
-  }
-  const ignored = windows.find((w) => w.step.panelIntervalIgnored !== undefined);
-  if (ignored) {
-    warnings.push(
-      `The panel's min interval "${ignored.step.panelIntervalIgnored}" couldn't be read as a duration, so this ` +
-        'replay ran at Grafana\'s datasource default step, which may not be the step the panel renders at. ' +
-        'Pass minIntervalMs to set it.',
-    );
-  }
-  return warnings;
 }
 
 export function registerExecuteQueryWindow(server: McpServer, { registry, config, activityLog }: ToolContext): void {
@@ -253,7 +225,10 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
             panelTitle: resolvedPanelTitle,
             url,
           });
-          const stepWarnings = replayStepWarnings([incident!, preWindow!, ...controls]);
+          const stepWarnings = replayStepWarnings(
+            [incident!, preWindow!, ...controls].map((w) => ({ label: w.window.label, step: w.step })),
+            { unit: 'window', remedy: 'Pass minIntervalMs to set it.' },
+          );
           const result = {
             url,
             incident,

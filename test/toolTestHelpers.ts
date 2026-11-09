@@ -62,7 +62,7 @@ export function tagValuesResponse(values: string[]): DsQueryResponse {
   };
 }
 
-function numberSeriesResponse(refId: string, points: Array<[number, number]>): DsQueryResponse {
+export function numberSeriesResponse(refId: string, points: Array<[number, number]>): DsQueryResponse {
   return {
     results: {
       [refId]: {

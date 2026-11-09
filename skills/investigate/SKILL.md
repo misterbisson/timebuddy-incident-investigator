@@ -151,10 +151,11 @@ search.
      tool-output file is slower and more error-prone mid-incident.
    - **Read every `rate`/`increase`/`delta`/`*_over_time` number against its window's `step`.**
      The step decides the answer for those functions: a constant counter read at a 15s step can
-     report ~1/min of events that are 0 at the panel's own 1m. `execute_query_window` replays at
-     the panel's own step (its "Min interval"), and each window's `step` says what was asked
-     (`requestedMs`, `source`) and what the timestamps show. Check the top-level `stepWarnings`
-     first. If it's there, Grafana used a different step from the one requested, or the panel's
+     report ~1/min of events that are 0 at the panel's own 1m, and an InfluxQL
+     `GROUP BY time($__interval) fill(0)` read finer than the data turns empty buckets into zeros.
+     `execute_query_window` and `render_dashboard` replay at the panel's own step (its "Min
+     interval"), and each window's (or panel's) `step` says what was asked (`requestedMs`,
+     `source`) and what the timestamps show. Check the top-level `stepWarnings` first. If it's there, Grafana used a different step from the one requested, or the panel's
      interval couldn't be read; either way, reinterpret before concluding. `source: "datasource"`
      means the panel declares no interval, so the replay used the Prometheus datasource's scrape
      interval, as Grafana does. `source: "datasource-default"` means no step was requested and
