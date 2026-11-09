@@ -169,8 +169,10 @@ Three things shape almost every module here and are easy to miss from a partial 
    lighter touch because the same fact holds for LogQL — no write form, and Grafana's Loki
    backend only reaches Loki's query endpoints with the expression as a parameter — and its
    header argues that from LogQL's side rather than inheriting it. It reuses `scanPromQL`, since
-   LogQL's lexer is PromQL's plus pipeline stages (and has no single-quoted string, which only
-   makes the shared scan stricter). The one thing it adds is `kind`: a log query always begins
+   LogQL's lexer is PromQL's plus pipeline stages, with two lexical differences: LogQL also skips
+   `//` and `/* */` comments (Loki's lexer is Go's `text/scanner`), which the scan masks only when
+   called with `slashComments`, since in PromQL `/` is division; and it has no single-quoted
+   string, which only makes the shared scan stricter. The one thing it adds is `kind`: a log query always begins
    with a stream selector and a metric query never does, a grammar fact rather than a heuristic.
    `execute_adhoc_query` accepts metric queries only, through the same `prepareStepped` range/
    instant/step handling as PromQL, so the no-inferred-step rule is one implementation, not two.

@@ -66,6 +66,55 @@ describe('classifyLogQL', () => {
   it('refuses an empty or comment-only expression', () => {
     expect(refused('   ')).toMatch(/empty/);
     expect(refused('# just a comment')).toMatch(/empty/);
+    expect(refused('// just a comment')).toMatch(/empty/);
+    expect(refused('/* just a comment */')).toMatch(/empty/);
+  });
+
+  // Issue #272: Loki's lexer (Go's text/scanner in GoTokens mode) skips `//`
+  // and `/* */` comments, so they must be masked like `#` is.
+  describe('// and /* */ comments', () => {
+    it.each([
+      '/* note */ {app="x"} |= "error"',
+      '// note\n{app="x"}',
+      '/* multi\nline */ ({app="x"})',
+      '{app="x"} // trailing',
+    ])('a log query after a comment is still a log query: %j', (q) => {
+      expect(allowed(q).kind).toBe('log');
+    });
+
+    it.each([
+      '/* note */ count_over_time({app="x"}[1m])',
+      '// note\nsum(rate({app="x"}[1m]))',
+    ])('a metric query after a comment is still a metric query: %j', (q) => {
+      expect(allowed(q).kind).toBe('metric');
+    });
+
+    it('ignores semicolons, quotes, and brackets inside them', () => {
+      expect(allowed(`count_over_time({a="b"}[1m]) // don't`).kind).toBe('metric');
+      expect(allowed('count_over_time({a="b"}[1m]) /* ; */').kind).toBe('metric');
+      expect(allowed('count_over_time({a="b"}[1m]) /* ) { [ */').kind).toBe('metric');
+    });
+
+    it('ends a block comment at the first */ (no nesting), as Go does', () => {
+      expect(allowed('/* a /* b */ {app="x"}').kind).toBe('log');
+    });
+
+    it('does not read comment markers inside a string as comments', () => {
+      expect(allowed('{path="/a//b"} |= "/*"').kind).toBe('log');
+      expect(allowed('{app="x"} |~ `https?://`').kind).toBe('log');
+    });
+
+    it('refuses an unterminated block comment', () => {
+      expect(refused('/* note {app="x"}')).toMatch(/unterminated block comment/);
+    });
+
+    it('returns the statement verbatim, comments included', () => {
+      expect(allowed('/* note */ {app="x"}').statement).toBe('/* note */ {app="x"}');
+    });
+
+    it('a single / is still division', () => {
+      expect(allowed('sum(rate({app="x"}[1m])) / sum(rate({app="y"}[1m]))').kind).toBe('metric');
+    });
   });
 });
 
@@ -78,6 +127,12 @@ describe('classifyLogQLMetric', () => {
     const v = classifyLogQLMetric('{app="a"} |= "error"');
     expect(v.allowed).toBe(false);
     expect(v.allowed ? '' : v.reason).toMatch(/log query.*count_over_time/s);
+  });
+
+  it('refuses a log query that follows a comment (issue #272)', () => {
+    const v = classifyLogQLMetric('/* note */ {app="x"} |= "error"');
+    expect(v.allowed).toBe(false);
+    expect(v.allowed ? '' : v.reason).toMatch(/log query/);
   });
 
   it('passes a structural refusal through unchanged', () => {

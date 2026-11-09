@@ -45,12 +45,24 @@
  *
  * LogQL's lexer is PromQL's with pipeline stages added: the same `"…"`
  * (escaped) and `` `…` `` (raw) string forms, the same `#` line comments, the
- * same `()`/`[]`/`{}` brackets. So `scanPromQL` masks it correctly. The one
- * lexical difference is that LogQL has no single-quoted string, and that
- * makes the shared scan *stricter*, not looser: a stray `'` either reads as an
- * unterminated literal (refused here) or as a string Loki rejects as a syntax
- * error. That matters most for `line_format` / `label_format` templates, whose
- * `{{.field}}` braces sit inside a string and must never count as brackets.
+ * same `()`/`[]`/`{}` brackets. So `scanPromQL` masks it, with two lexical
+ * differences to account for:
+ *
+ * - **LogQL also has `//` and `/* … *\/` comments.** Loki's lexer is built on
+ *   its fork of Go's `text/scanner` (`pkg/logql/syntax/lex.go`), initialised
+ *   in `GoTokens` mode, which includes `ScanComments | SkipComments`; the `#`
+ *   handling is separate from that. So `scanPromQL` is called with
+ *   `slashComments`, which masks both forms as it masks `#` (issue #272).
+ *   Unmasked, a log query after a leading comment read as a metric query,
+ *   because the first token `kindOf` saw was `/`, not `{`. A block comment
+ *   is not nested, and one left open is refused, as Go's scanner rejects it.
+ * - **LogQL has no single-quoted string**, and that makes the shared scan
+ *   *stricter*, not looser: a stray `'` either reads as an unterminated
+ *   literal (refused here) or as a string Loki rejects as a syntax error.
+ *
+ * That masking matters most for `line_format` / `label_format` templates,
+ * whose `{{.field}}` braces sit inside a string and must never count as
+ * brackets.
  */
 
 import type { AdhocVerdict } from './adhocGuard.js';
@@ -76,8 +88,16 @@ function kindOf(masked: string): LogqlKind {
  * kind — or refused with a reason naming the specific problem.
  */
 export function classifyLogQL(raw: string): LogqlVerdict {
-  const scan = scanPromQL(raw);
+  const scan = scanPromQL(raw, { slashComments: true });
 
+  if (scan.unterminated === 'block comment') {
+    return {
+      allowed: false,
+      reason:
+        'Expression ends inside an unterminated block comment — a "/*" with no closing "*/". Loki rejects that ' +
+        'as a syntax error, so it is refused here. Close the comment, or remove it.',
+    };
+  }
   if (scan.unterminated) {
     return {
       allowed: false,
@@ -88,7 +108,7 @@ export function classifyLogQL(raw: string): LogqlVerdict {
     };
   }
   if (scan.empty) {
-    return { allowed: false, reason: 'Expression is empty (or contained only # comments).' };
+    return { allowed: false, reason: 'Expression is empty (or contained only comments).' };
   }
   if (scan.bracketProblem) {
     return {
@@ -104,7 +124,7 @@ export function classifyLogQL(raw: string): LogqlVerdict {
       reason:
         'Expression contains ";". LogQL has no statement separator, so this is either a syntax error or an ' +
         'attempt to run two queries in one call. Run one expression per call so each has its own audit record ' +
-        'and Explore URL. (Semicolons inside string literals and # comments do not count.)',
+        'and Explore URL. (Semicolons inside string literals and comments — #, //, /* */ — do not count.)',
     };
   }
 
