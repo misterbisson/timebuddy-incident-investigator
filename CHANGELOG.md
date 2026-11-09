@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.3](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.2...v0.13.3) (2026-11-09)
+
+
+### Bug Fixes
+
+* mask LogQL // and /* */ comments before classifying a query ([#326](https://github.com/misterbisson/timebuddy-incident-investigator/issues/326)) ([dcfe37c](https://github.com/misterbisson/timebuddy-incident-investigator/commit/dcfe37c187e82ac1ee6e731fe0bb44241bd66e5a))
+* refuse log joins whose quoted values the engine would rewrite ([#327](https://github.com/misterbisson/timebuddy-incident-investigator/issues/327)) ([6b12de7](https://github.com/misterbisson/timebuddy-incident-investigator/commit/6b12de79c2f6641ee8c5a428207fcfdcdbf31860))
+* report the replay step on every render_dashboard panel ([#329](https://github.com/misterbisson/timebuddy-incident-investigator/issues/329)) ([0a1c6fc](https://github.com/misterbisson/timebuddy-incident-investigator/commit/0a1c6fc5e9f16ed0699844fd7c34c56082b4b622))
+
 ## [0.13.2](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.1...v0.13.2) (2026-11-08)
 
 
