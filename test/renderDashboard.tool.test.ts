@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerRenderDashboard } from '../src/tools/renderDashboard.js';
 import type { Config, GrafanaConnection } from '../src/config.js';
 import type { DashboardGetResponse } from '../src/grafana/types.js';
-import { fakeGrafanaClient, fakeRegistry, fakeServer } from './toolTestHelpers.js';
+import { fakeGrafanaClient, fakeRegistry, fakeServer, numberSeriesResponse } from './toolTestHelpers.js';
 
 const connections: GrafanaConnection[] = [{ id: 'test', name: 'test', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' }];
 
@@ -310,5 +310,74 @@ describe('render_dashboard relative-time resolution', () => {
   it('reports a plain window with no resolution metadata when both bounds were passed as epoch ms', async () => {
     const { window } = await render({ dashboardUid: 'dash2', connection: 'test', fromMs: 1_000, toMs: 2_000 });
     expect(window).toEqual({ fromMs: 1_000, toMs: 2_000 });
+  });
+
+  // Issue #297: render_dashboard replayed this panel at a 5s $__interval over
+  // 1-minute data, and fill(0) scored the empty buckets as 0 (a healthy 1.0
+  // read as ~0.08). #299 fixed the step; this pins it here and requires the
+  // step to be reported, so a wrong one shows in the result.
+  describe('replay step (issue #297)', () => {
+    const FROM = 1_791_146_314_032;
+    const TO = FROM + 50 * 60_000;
+
+    function influxPanel(id: number, title: string, interval: string) {
+      return {
+        id,
+        title,
+        interval,
+        targets: [
+          {
+            refId: 'A',
+            datasource: { uid: 'influx1', type: 'influxdb' },
+            rawQuery: true,
+            query: 'SELECT MEAN("score") FROM "m" WHERE $timeFilter GROUP BY time($__interval) fill(0)',
+          },
+        ],
+      };
+    }
+
+    async function render(panels: unknown[], gapMs: number) {
+      const dashboard = { dashboard: { uid: 'd297', title: 'Status', version: 1, panels }, meta: {} } as unknown as DashboardGetResponse;
+      const { client, queryDs } = fakeGrafanaClient({ dashboard });
+      // Answer with points `gapMs` apart, as a datasource that honoured (or not)
+      // the requested step would.
+      queryDs.mockImplementation(async (req: { queries: Array<{ refId: string }> }) => {
+        const points: Array<[number, number]> = [];
+        for (let t = FROM; t <= TO; t += gapMs) points.push([t, 1]);
+        return numberSeriesResponse(req.queries[0]!.refId, points);
+      });
+      const { server, call } = fakeServer();
+      registerRenderDashboard(server, { registry: fakeRegistry(connections, client), config: config() });
+      const result = (await call('render_dashboard', { dashboardUid: 'd297', fromMs: FROM, toMs: TO, connection: 'test' })) as {
+        content: Array<{ text: string }>;
+      };
+      return { parsed: JSON.parse(result.content[0]!.text), queryDs };
+    }
+
+    it("substitutes the panel's 1m min interval for $__interval, and reports that step", async () => {
+      const { parsed, queryDs } = await render([influxPanel(1, 'Writer (summarized)', '1m')], 60_000);
+      const panel = parsed.panels[0];
+      expect(panel.targets[0].resolvedQuery.query).toContain('GROUP BY time(1m) fill(0)');
+      expect(queryDs.mock.calls[0]![0].queries[0].intervalMs).toBe(60_000);
+      expect(panel.step).toMatchObject({ source: 'panel', panelInterval: '1m', requestedMs: 60_000, consistentWithRequested: true });
+      expect(parsed.stepWarnings).toBeUndefined();
+    });
+
+    it('lifts a step Grafana did not honour to stepWarnings, naming the panel', async () => {
+      const { parsed } = await render([influxPanel(1, 'Writer (summarized)', '1m'), influxPanel(2, 'Reader', '1m')], 5_000);
+      expect(parsed.panels[0].step).toMatchObject({ requestedMs: 60_000, consistentWithRequested: false });
+      expect(parsed.stepWarnings).toHaveLength(1);
+      expect(parsed.stepWarnings[0]).toContain('"Writer (summarized)" (panel 1) (60000ms requested), "Reader" (panel 2)');
+      expect(parsed.stepWarnings[0]).toContain("see each panel's step.note");
+    });
+
+    it("warns, naming the panel, when a min interval can't be read and the datasource chose the step", async () => {
+      const { parsed } = await render([influxPanel(3, 'Odd', 'every minute')], 60_000);
+      expect(parsed.panels[0].step).toMatchObject({ source: 'datasource-default', panelIntervalIgnored: 'every minute' });
+      expect(parsed.stepWarnings).toEqual([
+        expect.stringContaining('The min interval of "Odd" (panel 3) ("every minute") couldn\'t be read as a duration, so that panel ran'),
+      ]);
+      expect(parsed.stepWarnings[0]).toContain('execute_query_window and minIntervalMs');
+    });
   });
 });

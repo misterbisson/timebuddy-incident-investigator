@@ -202,6 +202,48 @@ export function describeReplayStep(step: PanelStep, series: QuerySeries[]): Repl
   return { ...declared, ...observed, ...withSourceNote } as ReplayStepReport;
 }
 
+/**
+ * The step problems a caller must not miss, lifted to the top level the way
+ * `unresolvedAllVariables` is: per-window or per-panel `step` objects are easy
+ * to skim past, and #200's failure was exactly a step nobody looked at. One
+ * line per kind, naming every replay it hit.
+ *
+ * `unit` names what each labelled replay is (an execute_query_window window,
+ * a render_dashboard panel), and `remedy` is how the caller of *that* tool can
+ * set a step, since only some tools take `minIntervalMs`.
+ */
+export function replayStepWarnings(
+  replays: Array<{ label: string; step: ReplayStepReport }>,
+  { unit, remedy }: { unit: 'window' | 'panel'; remedy: string },
+): string[] {
+  const warnings: string[] = [];
+  const mismatched = replays.filter((r) => r.step.consistentWithRequested === false);
+  if (mismatched.length > 0) {
+    warnings.push(
+      'Grafana did not evaluate at the requested step in ' +
+        `${mismatched.map((r) => `${r.label} (${r.step.requestedMs}ms requested)`).join(', ')} — see each ` +
+        `${unit}'s step.note, and read range-vector results (rate/increase/delta/*_over_time) against the step it ` +
+        'did use.',
+    );
+  }
+  const ignored = replays.filter((r) => r.step.panelIntervalIgnored !== undefined);
+  if (ignored.length > 0) {
+    const first = ignored[0]!;
+    // execute_query_window replays one panel, so its windows share one interval
+    // and naming them would only repeat it. Across panels, name each one.
+    const subject =
+      unit === 'window'
+        ? `The panel's min interval "${first.step.panelIntervalIgnored}" couldn't be read as a duration, so this ` +
+          'replay ran'
+        : `The min interval of ${ignored.map((r) => `${r.label} ("${r.step.panelIntervalIgnored}")`).join(', ')} ` +
+          `couldn't be read as a duration, so ${ignored.length === 1 ? 'that panel' : 'those panels'} ran`;
+    warnings.push(
+      `${subject} at Grafana's datasource default step, which may not be the step the panel renders at. ${remedy}`,
+    );
+  }
+  return warnings;
+}
+
 export interface ReplayStepReport {
   source: PanelStep['source'];
   panelInterval?: string;

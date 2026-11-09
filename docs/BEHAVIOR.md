@@ -304,7 +304,12 @@ value) is skipped rather than guessed, and reported as `panelIntervalIgnored`, t
 unresolvable time zone is skipped rather than failing every window on the dashboard. The replay then
 behaves as if the panel had declared none, taking the datasource floor if there is one.
 
-`execute_query_window` reports the step on every window as `step`. That's what was requested
+`execute_query_window` reports the step on every window as `step`, and `render_dashboard` on every
+panel it executed (issue
+[#297](https://github.com/misterbisson/timebuddy-incident-investigator/issues/297): before the
+step fix, its `GROUP BY time($__interval) fill(0)` replays of a `1m` panel ran at 5s and scored
+the empty buckets as zeros, so a healthy 1.0 read as about 0.08, and nothing in the result said
+so). That's what was requested
 (`requestedMs`, `source`: `panel` / `minIntervalMs` / `datasource` / `datasource-default`, `panelInterval`,
 `maxDataPoints`) next to what the returned timestamps show (`observedGapGcdMs`,
 `consistentWithRequested`). The timestamps are read the same way `execute_adhoc_query` reads them
