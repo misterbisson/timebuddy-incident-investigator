@@ -87,6 +87,13 @@ describe('scanPromQL', () => {
     expect(masked).toBe('up{job="   "}      ');
     expect(masked).not.toContain(';');
   });
+
+  it('leaves // and /* as operators unless slashComments is set (PromQL has no such comments)', () => {
+    expect(scanPromQL('a //b').masked).toBe('a //b');
+    expect(scanPromQL('a /* ; */ b').masked).toContain(';');
+    expect(scanPromQL('a /* ; */ b', { slashComments: true }).masked).toBe('a         b');
+    expect(scanPromQL('a // ;\nb', { slashComments: true }).masked).toBe('a     \nb');
+  });
 });
 
 describe('resolvePromqlStep', () => {
