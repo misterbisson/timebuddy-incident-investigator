@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.4](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.3...v0.13.4) (2026-11-16)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump electron from 44.9.1 to 45.2.3 ([#330](https://github.com/misterbisson/timebuddy-incident-investigator/issues/330)) ([3aae3d5](https://github.com/misterbisson/timebuddy-incident-investigator/commit/3aae3d59c2808ac684578eb07db5db0e35ddc280))
+* **deps:** bump hono from 4.13.13 to 4.13.18 ([#331](https://github.com/misterbisson/timebuddy-incident-investigator/issues/331)) ([867e57a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/867e57acadc4f7d046c096b6cdbfd7172267c1b4))
+
 ## [0.13.3](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.2...v0.13.3) (2026-11-09)
 
 
