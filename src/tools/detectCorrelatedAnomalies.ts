@@ -192,8 +192,8 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             } else {
               // Resolve the "product" tier's dashboard set: this alert's own
               // Timebuddy knowledge panel (when one is published) declares its
-              // own ops/SLI dashboards plus explicit dependencies (e.g. MDS's
-              // compute/blockstorage/gage/iam/hermes) — the most accurate
+              // own ops/SLI dashboards plus explicit dependencies (e.g. a managed
+              // database's compute, block storage and IAM) — the most accurate
               // available signal for "what belongs to this product," far
               // better than guessing from folder structure (an alerting/SLI
               // dashboard is often filed in a folder shared by many unrelated

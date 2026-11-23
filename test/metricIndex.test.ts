@@ -107,7 +107,7 @@ describe('buildMetricIndex', () => {
           title: 'Templated dashboard',
           panels: [
             { id: 1, title: 'Templated', targets: [{ refId: 'A', datasource: '${datasource}', expr: 'up' }] },
-            { id: 2, title: 'Templated var', targets: [{ refId: 'A', datasource: '$sysops_griffin_datasource', expr: 'up' }] },
+            { id: 2, title: 'Templated var', targets: [{ refId: 'A', datasource: '$sysops_metrics_datasource', expr: 'up' }] },
             { id: 3, title: 'Stale name', targets: [{ refId: 'A', datasource: 'Old Datasource Name', expr: 'up' }] },
             { id: 4, title: 'Expression', targets: [{ refId: 'A', datasource: '__expr__', expr: '$A + $B' }] },
             { id: 5, title: 'Reused annotation', targets: [{ refId: 'A', datasource: '-- Dashboard --', expr: 'up' }] },

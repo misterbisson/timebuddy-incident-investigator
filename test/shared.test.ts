@@ -90,8 +90,8 @@ describe('resolveTargetDatasource', () => {
   });
 
   it('falls back to a name lookup when the variable resolves to a datasource name rather than a UID', async () => {
-    const { client } = fakeClient([{ uid: 'prom1', name: 'Griffin-Prometheus' }]);
-    const variables: TemplateVariable[] = [{ name: 'DS_PROMETHEUS', type: 'datasource', current: { value: 'Griffin-Prometheus' } }];
+    const { client } = fakeClient([{ uid: 'prom1', name: 'Metrics-Prometheus' }]);
+    const variables: TemplateVariable[] = [{ name: 'DS_PROMETHEUS', type: 'datasource', current: { value: 'Metrics-Prometheus' } }];
     expect(await resolveTargetDatasource(client, '${DS_PROMETHEUS}', variables, {})).toBe('prom1');
   });
 
