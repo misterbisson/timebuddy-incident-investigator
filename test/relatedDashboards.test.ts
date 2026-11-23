@@ -14,7 +14,7 @@ describe('extractRelatedDashboardUids', () => {
         controlPlane: {
           dependencies: [
             { ref: 'compute', url: '/d/product-status-ec2-sli?from=${__from}&to=${__to}' },
-            { ref: 'blockstorage', url: '/d/product-status-nbs-sli' },
+            { ref: 'blockstorage', url: '/d/product-status-blockstorage-sli' },
             { ref: 'iam', url: null },
           ],
         },
@@ -24,7 +24,7 @@ describe('extractRelatedDashboardUids', () => {
       },
     };
     expect(extractRelatedDashboardUids(json).sort()).toEqual(
-      ['product-status-ec2-sli', 'product-status-manageddatabase', 'product-status-nbs-sli'].sort(),
+      ['product-status-ec2-sli', 'product-status-manageddatabase', 'product-status-blockstorage-sli'].sort(),
     );
   });
 

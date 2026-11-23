@@ -268,7 +268,7 @@ describe('resolveDatasourceVariable', () => {
   it('returns the ref unchanged when it is not a variable reference (a real UID or a legacy literal name)', () => {
     const variables: TemplateVariable[] = [];
     expect(resolveDatasourceVariable('prom1', variables, {})).toBe('prom1');
-    expect(resolveDatasourceVariable('Griffin-ELB', variables, {})).toBe('Griffin-ELB');
+    expect(resolveDatasourceVariable('Metrics-ELB', variables, {})).toBe('Metrics-ELB');
   });
 
   it('returns undefined for a variable reference the dashboard does not define', () => {
