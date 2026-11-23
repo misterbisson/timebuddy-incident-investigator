@@ -34,8 +34,8 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-function influxTarget(refId: string): { refId: string; datasource: { uid: string }; query: string; rawQuery: boolean } {
-  return { refId, datasource: { uid: 'influx1' }, query: 'SELECT mean("v") FROM "m1" WHERE $timeFilter', rawQuery: true };
+function influxTarget(refId: string, query = `SELECT mean("v") FROM "m1" WHERE $timeFilter`): { refId: string; datasource: { uid: string }; query: string; rawQuery: boolean } {
+  return { refId, datasource: { uid: 'influx1' }, query, rawQuery: true };
 }
 
 function numericResponse(refId: string): DsQueryResponse {
@@ -59,6 +59,8 @@ interface FakeDashboard {
   tags?: string[];
   folderUid?: string;
   panelIds: number[];
+  /** InfluxQL for every panel on this dashboard; defaults to a query over measurement m1. */
+  query?: string;
 }
 
 function makeClient(dashboards: FakeDashboard[], opts: { knowledgeUid?: string; knowledgeContent?: string; folderParents?: Record<string, string | undefined> } = {}): GrafanaClient {
@@ -71,7 +73,7 @@ function makeClient(dashboards: FakeDashboard[], opts: { knowledgeUid?: string; 
           title: d.title,
           version: 1,
           tags: d.tags,
-          panels: d.panelIds.map((id) => ({ id, title: `${d.title} panel ${id}`, targets: [influxTarget('A')] })),
+          panels: d.panelIds.map((id) => ({ id, title: `${d.title} panel ${id}`, targets: [influxTarget('A', d.query)] })),
         },
         meta: { folderUid: d.folderUid },
       },
@@ -137,7 +139,13 @@ describe('detect_correlated_anomalies scope tiering', () => {
     const product = (await call('detect_correlated_anomalies', { ...base, scope: 'product' })) as { content: Array<{ text: string }> };
     const productParsed = JSON.parse(product.content[0]!.text);
     expect(productParsed.scope).toBe('product');
-    expect(productParsed.productScope).toEqual({ dashboardUids: ['primary'], source: 'same-dashboard-only' });
+    expect(productParsed.productScope).toEqual({
+      dashboardUids: ['primary'],
+      source: 'same-dashboard-only',
+      dashboards: [{ dashboardUid: 'primary', dashboardTitle: 'Primary', queryablePanels: 1, checked: 1 }],
+    });
+    expect(productParsed.candidateBasis).toEqual({ kind: 'listed-dashboards' });
+    expect(productParsed.productScopeIncomplete).toBeUndefined();
     expect(productParsed.candidatesChecked).toBe(1);
     expect(productParsed.correlated.map((c: { dashboardUid: string }) => c.dashboardUid)).toEqual(['primary']);
     expect(productParsed.nextScope).toBe('connection');
@@ -150,6 +158,8 @@ describe('detect_correlated_anomalies scope tiering', () => {
     const connectionScope = (await call('detect_correlated_anomalies', { ...base, scope: 'connection' })) as { content: Array<{ text: string }> };
     const connectionParsed = JSON.parse(connectionScope.content[0]!.text);
     expect(connectionParsed.scope).toBe('connection');
+    expect(connectionParsed.candidateBasis).toEqual({ kind: 'metric-name', metrics: ['m1'] });
+    expect(connectionParsed.productScope.dashboards).toBeUndefined();
     // The connection tier has now been checked, so the containment flag is gone.
     expect(connectionParsed.containmentCheckIncomplete).toBeUndefined();
     expect(connectionParsed.candidatesChecked).toBe(1);
@@ -235,5 +245,103 @@ describe('detect_correlated_anomalies scope tiering', () => {
     expect(parsed.scope).toBeUndefined();
     expect(parsed.productScope).toBeUndefined();
     expect(parsed.candidatesChecked).toBe(1);
+  });
+});
+
+describe('product scope compares every listed dashboard (issue #310)', () => {
+  const window = { startsAtMs: Date.parse('2026-07-10T10:00:00Z'), endsAtMs: Date.parse('2026-07-10T11:00:00Z') };
+  const cpu = 'SELECT mean("v") FROM "cpu" WHERE $timeFilter';
+
+  function productClient(dashboards: FakeDashboard[], dependencyUids: string[]): GrafanaClient {
+    const deps = dependencyUids.map((uid) => `{"ref":"${uid}","url":"/d/${uid}"}`).join(',');
+    return makeClient(dashboards, {
+      knowledgeUid: 'kb1',
+      knowledgeContent: `\`\`\`json\n{"sli":{"data":{"dependencies":[${deps}]}}}\n\`\`\`\n`,
+      folderParents: { 'folder-sli': undefined },
+    });
+  }
+
+  async function run(client: GrafanaClient, args: Record<string, unknown>) {
+    const { server, call } = fakeServer();
+    registerDetectCorrelatedAnomalies(server, { registry: makeRegistry({ conn1: client }), config: config() });
+    const result = (await call('detect_correlated_anomalies', {
+      primaryDashboardUid: 'primary',
+      primaryPanelId: 1,
+      ...window,
+      connection: 'conn1',
+      limit: 10,
+      ...args,
+    })) as { content: Array<{ text: string }> };
+    return JSON.parse(result.content[0]!.text);
+  }
+
+  it('compares a dependency dashboard whose panels use a different metric than the primary', async () => {
+    const client = productClient(
+      [
+        { uid: 'primary', title: 'Primary', tags: ['manageddatabase'], panelIds: [1], folderUid: 'folder-sli' },
+        { uid: 'dep-compute', title: 'Compute', panelIds: [30, 31], folderUid: 'folder-other', query: cpu },
+      ],
+      ['dep-compute'],
+    );
+    const parsed = await run(client, { scope: 'product' });
+    // Before #310 this was 0: neither panel shares the primary's measurement, so
+    // the dependency was listed in productScope but never compared.
+    expect(parsed.candidatesChecked).toBe(2);
+    expect(parsed.correlated.map((c: { dashboardUid: string; panelId: number }) => `${c.dashboardUid}/${c.panelId}`).sort()).toEqual([
+      'dep-compute/30',
+      'dep-compute/31',
+    ]);
+    expect(parsed.candidateBasis).toEqual({ kind: 'listed-dashboards' });
+    expect(parsed.productScope.dashboards).toEqual([
+      { dashboardUid: 'primary', dashboardTitle: 'Primary', queryablePanels: 0, checked: 0 },
+      { dashboardUid: 'dep-compute', dashboardTitle: 'Compute', queryablePanels: 2, checked: 2 },
+    ]);
+    expect(parsed.productScopeIncomplete).toBeUndefined();
+  });
+
+  it('shares the cap across dashboards and reports what it left out', async () => {
+    const primaryPanels = Array.from({ length: 20 }, (_, i) => i + 1);
+    const client = productClient(
+      [
+        { uid: 'primary', title: 'Primary', tags: ['manageddatabase'], panelIds: primaryPanels, folderUid: 'folder-sli' },
+        { uid: 'dep-compute', title: 'Compute', panelIds: [30, 31, 32, 33, 34], folderUid: 'folder-other', query: cpu },
+      ],
+      ['dep-compute'],
+    );
+    // limit 1 -> a cap of 15 panels. Taking the primary dashboard's 19 other
+    // panels first would leave the dependency with none; round-robin gives it
+    // all 5 and the primary board the remaining 10.
+    const parsed = await run(client, { scope: 'product', limit: 1 });
+    expect(parsed.candidatesChecked).toBe(15);
+    const [primary, dep] = parsed.productScope.dashboards;
+    expect(dep).toEqual({ dashboardUid: 'dep-compute', dashboardTitle: 'Compute', queryablePanels: 5, checked: 5 });
+    expect(primary).toMatchObject({ dashboardUid: 'primary', queryablePanels: 19, checked: 10 });
+    expect(primary.uncheckedPanelIds).toEqual([12, 13, 14, 15, 16, 17, 18, 19, 20]);
+    expect(parsed.productScopeIncomplete).toBe(true);
+    expect(parsed.productScopeHint).toContain('"Primary": 9 of 19 panels not compared');
+    expect(parsed.productScopeHint).toContain('uncheckedPanelIds');
+  });
+
+  it('reports a listed dashboard that could not be read instead of treating it as checked', async () => {
+    const client = productClient(
+      [{ uid: 'primary', title: 'Primary', tags: ['manageddatabase'], panelIds: [1, 2], folderUid: 'folder-sli' }],
+      ['gone'],
+    );
+    const parsed = await run(client, { scope: 'product' });
+    expect(parsed.productScope.dashboardUids).toContain('gone');
+    expect(parsed.productScope.dashboards[1]).toEqual({ dashboardUid: 'gone', queryablePanels: 0, checked: 0, error: 'not found: gone' });
+    expect(parsed.productScopeIncomplete).toBe(true);
+    expect(parsed.productScopeHint).toContain('"gone" couldn\'t be read');
+  });
+
+  it('warns at connection scope when no metric could be read from the primary query', async () => {
+    const client = makeClient([
+      { uid: 'primary', title: 'Primary', panelIds: [1], folderUid: 'folder-sli', query: 'SHOW DATABASES' },
+      { uid: 'other', title: 'Other', panelIds: [10], folderUid: 'folder-other' },
+    ]);
+    const parsed = await run(client, { scope: 'connection' });
+    expect(parsed.candidateBasis).toEqual({ kind: 'metric-name', metrics: [] });
+    expect(parsed.candidatesChecked).toBe(0);
+    expect(parsed.candidateWarning).toContain('not evidence that nothing else moved');
   });
 });
