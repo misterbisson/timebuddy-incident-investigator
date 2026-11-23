@@ -3,22 +3,22 @@ import { filterDatasources } from '../src/tools/listDatasources.js';
 import type { DatasourceInfo } from '../src/grafana/types.js';
 
 const datasources: DatasourceInfo[] = [
-  { uid: 'prom1', id: 1, name: 'Griffin-Prometheus', type: 'prometheus', isDefault: true },
-  { uid: 'influx1', id: 2, name: 'Hermes Global Control Plane', type: 'influxdb' },
-  { uid: 'influx2', id: 3, name: 'Griffin-ELB', type: 'influxdb' },
+  { uid: 'prom1', id: 1, name: 'Metrics-Prometheus', type: 'prometheus', isDefault: true },
+  { uid: 'influx1', id: 2, name: 'Edge Global Control Plane', type: 'influxdb' },
+  { uid: 'influx2', id: 3, name: 'Metrics-ELB', type: 'influxdb' },
 ];
 
 describe('filterDatasources', () => {
   it('returns every datasource, summarized, when no query is given', () => {
     expect(filterDatasources(datasources)).toEqual([
-      { uid: 'prom1', name: 'Griffin-Prometheus', type: 'prometheus', isDefault: true },
-      { uid: 'influx1', name: 'Hermes Global Control Plane', type: 'influxdb', isDefault: undefined },
-      { uid: 'influx2', name: 'Griffin-ELB', type: 'influxdb', isDefault: undefined },
+      { uid: 'prom1', name: 'Metrics-Prometheus', type: 'prometheus', isDefault: true },
+      { uid: 'influx1', name: 'Edge Global Control Plane', type: 'influxdb', isDefault: undefined },
+      { uid: 'influx2', name: 'Metrics-ELB', type: 'influxdb', isDefault: undefined },
     ]);
   });
 
   it('filters by a case-insensitive substring match against the name', () => {
-    const results = filterDatasources(datasources, 'hermes');
+    const results = filterDatasources(datasources, 'edge');
     expect(results).toHaveLength(1);
     expect(results[0]?.uid).toBe('influx1');
   });

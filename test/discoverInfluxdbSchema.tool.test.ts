@@ -81,7 +81,7 @@ function fakeClient(opts: {
   } as unknown as GrafanaClient;
 }
 
-const oneInfluxDatasource: DatasourceInfo[] = [{ uid: 'influx1', id: 1, name: 'Griffin-NBS', type: 'influxdb' }];
+const oneInfluxDatasource: DatasourceInfo[] = [{ uid: 'influx1', id: 1, name: 'Metrics-Storage', type: 'influxdb' }];
 
 describe('discover_influxdb_schema tool', () => {
   it('returns only names, no schema, when searchTerm matches more than one measurement', async () => {
@@ -215,8 +215,8 @@ describe('discover_influxdb_schema tool', () => {
   it('errors and lists candidates when multiple InfluxDB datasources exist and datasourceUid is omitted', async () => {
     const client = fakeClient({
       datasources: [
-        { uid: 'influx1', id: 1, name: 'Griffin-NBS', type: 'influxdb' },
-        { uid: 'influx2', id: 2, name: 'Griffin-ELB', type: 'influxdb' },
+        { uid: 'influx1', id: 1, name: 'Metrics-Storage', type: 'influxdb' },
+        { uid: 'influx2', id: 2, name: 'Metrics-ELB', type: 'influxdb' },
       ],
       measurements: [],
     });
@@ -229,8 +229,8 @@ describe('discover_influxdb_schema tool', () => {
     };
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain('Griffin-NBS');
-    expect(result.content[0]!.text).toContain('Griffin-ELB');
+    expect(result.content[0]!.text).toContain('Metrics-Storage');
+    expect(result.content[0]!.text).toContain('Metrics-ELB');
   });
 
   it('errors when an explicit datasourceUid points at a non-InfluxDB datasource', async () => {
