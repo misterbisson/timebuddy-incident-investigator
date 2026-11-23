@@ -10,8 +10,15 @@ import { GrafanaClient } from './client.js';
  * the connection-manager GUI later has no effect until the whole MCP server
  * process is respawned, which isn't something restarting just the GUI
  * window actually does.
+ *
+ * The thunk may return a Promise, and the Electron one does: its credentials
+ * are decrypted through safeStorage's async API (the synchronous one is gone
+ * as of Electron 46), and an async decrypt can't hide behind a sync thunk.
+ * That's why list()/get() below are async, and every caller awaits them.
  */
-export type ConnectionsSource = GrafanaConnection[] | (() => GrafanaConnection[]);
+export type ConnectionsSource =
+  | GrafanaConnection[]
+  | (() => GrafanaConnection[] | Promise<GrafanaConnection[]>);
 
 /**
  * Lazily builds and caches one GrafanaClient per configured connection, so a
@@ -32,24 +39,38 @@ export class ConnectionRegistry {
     private readonly config: Config,
   ) {}
 
-  list(): GrafanaConnection[] {
-    return typeof this.source === 'function' ? this.source() : this.source;
+  async list(): Promise<GrafanaConnection[]> {
+    return typeof this.source === 'function' ? await this.source() : this.source;
   }
 
-  get(id: string): GrafanaClient {
-    const connection = this.list().find((c) => c.id === id);
+  /**
+   * The client for `id` together with the connection it was built from, both
+   * from one read of the source. A caller that also needs the connection's
+   * display fields (its url for a link, its name for the Activity log) takes
+   * them from here rather than from a second list(): with the Electron thunk,
+   * two reads can see two versions of connections.json, and a link built from
+   * one while the query ran against the other points at the wrong host.
+   */
+  async resolve(id: string): Promise<{ client: GrafanaClient; connection: GrafanaConnection }> {
+    // Everything after this await is synchronous, so two concurrent resolve()s
+    // can't interleave between the cache check and the cache write.
+    const connection = (await this.list()).find((c) => c.id === id);
     if (!connection) {
       throw new Error(`Unknown Grafana connection "${id}"`);
     }
     const cached = this.clients.get(id);
     const builtFrom = this.builtFrom.get(id);
     if (cached && builtFrom && JSON.stringify(builtFrom) === JSON.stringify(connection)) {
-      return cached;
+      return { client: cached, connection };
     }
     const client = new GrafanaClient(connection, this.config);
     this.clients.set(id, client);
     this.builtFrom.set(id, connection);
-    return client;
+    return { client, connection };
+  }
+
+  async get(id: string): Promise<GrafanaClient> {
+    return (await this.resolve(id)).client;
   }
 
   /**
@@ -85,16 +106,20 @@ export class ConnectionRegistry {
    * to register would turn a recoverable state into one needing a restart, for
    * no safety gain — an unmatched policy authorizes nothing either way.
    */
-  unmatchedAdhocHosts(): string[] {
-    const connections = this.list();
+  async unmatchedAdhocHosts(): Promise<string[]> {
+    const connections = await this.list();
     return (this.config.adhocQueries ?? [])
       .map((policy) => policy.host)
       .filter((host) => !connections.some((connection) => hostMatchesConnection(host, connection)));
   }
 
-  adhocDatasourceTypes(connectionId: string): string[] {
-    const connection = this.list().find((c) => c.id === connectionId);
-    if (!connection) return [];
+  /*
+   * Takes the connection itself, the one resolve() returned with the client
+   * about to run the query: authorizing against a second read could judge an
+   * edited connection (a changed url matching a different policy) while the
+   * cached client still points at the old host.
+   */
+  adhocDatasourceTypes(connection: GrafanaConnection): string[] {
     const types = new Set<string>();
     for (const policy of this.config.adhocQueries ?? []) {
       if (hostMatchesConnection(policy.host, connection)) {

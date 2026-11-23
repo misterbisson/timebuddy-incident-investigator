@@ -64,9 +64,11 @@ function fakeClient(datasources: DatasourceInfo[], response?: DsQueryResponse) {
 }
 
 /** A registry backed by the real class, so adhocDatasourceTypes' host matching is genuinely exercised. */
-function registryFor(cfg: Config, client: GrafanaClient): ConnectionRegistry {
-  const registry = new RealConnectionRegistry(connections, cfg);
-  vi.spyOn(registry, 'get').mockReturnValue(client);
+function registryFor(cfg: Config, client: GrafanaClient, list: GrafanaConnection[] = connections): ConnectionRegistry {
+  const registry = new RealConnectionRegistry(list, cfg);
+  const resolveReal = registry.resolve.bind(registry);
+  vi.spyOn(registry, 'resolve').mockImplementation(async (id) => ({ client, connection: (await resolveReal(id)).connection }));
+  vi.spyOn(registry, 'get').mockResolvedValue(client);
   return registry;
 }
 
@@ -96,39 +98,39 @@ afterEach(async () => {
 });
 
 describe('execute_adhoc_query registration', () => {
-  it('is not registered when no workspace authorized it', () => {
+  it('is not registered when no workspace authorized it', async () => {
     const { server, call } = fakeServer();
     const cfg = config([]);
     const { client } = fakeClient(INFLUX);
-    registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
+    await registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
     return expect(call('execute_adhoc_query', {})).rejects.toThrow('No tool registered');
   });
 
-  it('warns at startup when a policy host matches no connection', () => {
+  it('warns at startup when a policy host matches no connection', async () => {
     // The likeliest .mcp.json typo. Without this it surfaces only as a per-call
     // "not authorized" refusal, which reads like a broken feature.
     const cfg = config([{ host: 'typo.example.com', datasourceTypes: ['influxdb'] }]);
     const { client } = fakeClient(INFLUX);
     const registry = registryFor(cfg, client);
-    expect(registry.unmatchedAdhocHosts()).toEqual(['typo.example.com']);
+    expect(await registry.unmatchedAdhocHosts()).toEqual(['typo.example.com']);
 
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { server } = fakeServer();
-    registerAllTools(server, { registry, logRegistry: undefined as never, config: cfg });
+    await registerAllTools(server, { registry, logRegistry: undefined as never, config: cfg });
     expect(warn.mock.calls.flat().join(' ')).toContain('typo.example.com');
   });
 
-  it('does not warn when every policy host matches a connection', () => {
+  it('does not warn when every policy host matches a connection', async () => {
     const cfg = config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
     const { client } = fakeClient(INFLUX);
-    expect(registryFor(cfg, client).unmatchedAdhocHosts()).toEqual([]);
+    expect(await registryFor(cfg, client).unmatchedAdhocHosts()).toEqual([]);
   });
 
   it('is registered once some workspace authorized it', async () => {
     const { server, call } = fakeServer();
     const cfg = config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
     const { client } = fakeClient(INFLUX);
-    registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
+    await registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
     await expect(call('execute_adhoc_query', {})).resolves.toBeDefined();
   });
 });
@@ -159,8 +161,7 @@ describe('execute_adhoc_query authorization', () => {
     ];
     const cfg = { ...config([{ host: 'metrics-vpn.staging.example.com', datasourceTypes: ['influxdb'] }]), connections: aliased };
     const { client } = fakeClient(INFLUX);
-    const registry = new RealConnectionRegistry(aliased, cfg);
-    vi.spyOn(registry, 'get').mockReturnValue(client);
+    const registry = registryFor(cfg, client, aliased);
     const { server, call } = fakeServer();
     registerExecuteAdhocQuery(server, { registry, logRegistry: undefined as never, config: cfg });
     const result = (await call('execute_adhoc_query', {

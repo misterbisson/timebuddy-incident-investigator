@@ -6,18 +6,26 @@
 // previously stored one. Run with:
 //   electron test/connectionStore.test.js --user-data-dir=<dir>
 const assert = require('node:assert');
-const { app } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
+const { app, safeStorage } = require('electron');
 
 // Must match main.js's app.setName() call — safeStorage's encryption key is
 // scoped to the app identity, so a mismatch here would produce a secret this
 // same process can't decrypt back.
 app.setName('timebuddy-connection-manager');
 
-app.whenReady().then(() => {
+// Same Linux opt-in main.js makes (see its comment), so this harness can run
+// under --password-store=basic on a desktop with no secret store.
+if (process.platform === 'linux' && typeof safeStorage.setUsePlainTextEncryption === 'function') {
+  safeStorage.setUsePlainTextEncryption(true);
+}
+
+app.whenReady().then(async () => {
   try {
     const store = require('../src/connectionStore.js');
 
-    const grafana = store.upsertConnection({
+    const grafana = await store.upsertConnection({
       name: 'grafana-prod',
       kind: 'grafana',
       url: 'https://grafana.example.com',
@@ -27,7 +35,7 @@ app.whenReady().then(() => {
       tags: ['prod', 'us-east'],
     });
 
-    const graylog = store.upsertConnection({
+    const graylog = await store.upsertConnection({
       name: 'graylog-prod',
       kind: 'graylog',
       url: 'https://graylog.example.com',
@@ -38,7 +46,7 @@ app.whenReady().then(() => {
       tags: ['prod', 'us-east'],
     });
 
-    const displayed = store.listConnectionsForDisplay();
+    const displayed = await store.listConnectionsForDisplay();
     assert.strictEqual(displayed.length, 2, 'expected both connections in the display list');
     const displayedGrafana = displayed.find((c) => c.id === grafana.id);
     const displayedGraylog = displayed.find((c) => c.id === graylog.id);
@@ -49,14 +57,14 @@ app.whenReady().then(() => {
     assert.strictEqual(displayedGrafana.token, undefined, 'display list must never include a secret');
     assert.strictEqual(displayedGraylog.token, undefined, 'display list must never include a secret');
 
-    const grafanaConnections = store.getConnectionsForEngine();
+    const grafanaConnections = await store.getConnectionsForEngine();
     assert.strictEqual(grafanaConnections.length, 1, 'getConnectionsForEngine must exclude graylog connections');
     assert.strictEqual(grafanaConnections[0].id, grafana.id);
     assert.strictEqual(grafanaConnections[0].token, 'grafana-token-1');
     assert.deepStrictEqual(grafanaConnections[0].matchHosts, ['grafana-lb.internal']);
     assert.deepStrictEqual(grafanaConnections[0].tags, ['prod', 'us-east']);
 
-    const logConnections = store.getLogConnectionsForEngine();
+    const logConnections = await store.getLogConnectionsForEngine();
     assert.strictEqual(logConnections.length, 1, 'getLogConnectionsForEngine must exclude grafana connections');
     assert.strictEqual(logConnections[0].id, graylog.id);
     assert.strictEqual(logConnections[0].sourceType, 'graylog');
@@ -67,7 +75,7 @@ app.whenReady().then(() => {
 
     // Editing with a blank token keeps the previously stored secret (same
     // behavior as Grafana connections, see connectionStore.js's upsertConnection doc comment).
-    store.upsertConnection({
+    await store.upsertConnection({
       id: graylog.id,
       kind: 'graylog',
       name: 'graylog-prod-renamed',
@@ -77,16 +85,16 @@ app.whenReady().then(() => {
       streamId: 'stream-123',
       tags: ['prod', 'us-east'],
     });
-    const afterEdit = store.getLogConnectionsForEngine();
+    const afterEdit = await store.getLogConnectionsForEngine();
     assert.strictEqual(afterEdit[0].token, 'graylog-token-1', 'blank token on edit must keep the existing secret');
     assert.strictEqual(afterEdit[0].name, 'graylog-prod-renamed');
 
-    store.deleteConnection(grafana.id);
-    store.deleteConnection(graylog.id);
-    assert.strictEqual(store.listConnectionsForDisplay().length, 0, 'expected both connections deleted');
+    await store.deleteConnection(grafana.id);
+    await store.deleteConnection(graylog.id);
+    assert.strictEqual((await store.listConnectionsForDisplay()).length, 0, 'expected both connections deleted');
 
     // --- importConnections: metadata-only manifest + shared credential ---
-    const importSummary = store.importConnections(
+    const importSummary = await store.importConnections(
       {
         version: 1,
         connections: [
@@ -108,20 +116,20 @@ app.whenReady().then(() => {
       'the bearer connection still needs a token',
     );
 
-    const imported = store.listConnectionsForDisplay();
+    const imported = await store.listConnectionsForDisplay();
     assert.strictEqual(imported.length, 3, 'expected 3 connections after import');
     const impBasic = imported.find((c) => c.name === 'imp-basic');
     assert.strictEqual(impBasic.hasSecret, true);
     assert.strictEqual(impBasic.username, 'shared-user', 'shared username stored as metadata');
 
     // The shared credential really decrypts through the engine path.
-    const impGrafanaEngine = store.getConnectionsForEngine().find((c) => c.url === 'https://imp-g2.example.com');
+    const impGrafanaEngine = (await store.getConnectionsForEngine()).find((c) => c.url === 'https://imp-g2.example.com');
     assert.strictEqual(impGrafanaEngine.username, 'shared-user');
     assert.strictEqual(impGrafanaEngine.password, 'shared-pass');
 
     // Re-import (idempotent on url+kind): a rename with no shared password
     // updates metadata in place and keeps the existing secret, no duplicate row.
-    const reSummary = store.importConnections({
+    const reSummary = await store.importConnections({
       connections: [
         { kind: 'grafana', name: 'imp-basic-renamed', url: 'https://imp-g2.example.com/', authType: 'basic' },
       ],
@@ -129,19 +137,63 @@ app.whenReady().then(() => {
     assert.strictEqual(reSummary.updated, 1, 'matched existing on url+kind');
     assert.strictEqual(reSummary.created, 0, 'no duplicate created despite trailing slash');
     assert.strictEqual(reSummary.configured, 1, 'existing secret preserved on re-import');
-    const afterReimport = store.listConnectionsForDisplay();
+    const afterReimport = await store.listConnectionsForDisplay();
     assert.strictEqual(afterReimport.length, 3, 'still 3 connections, not 4');
     const renamed = afterReimport.find((c) => c.url === 'https://imp-g2.example.com');
     assert.strictEqual(renamed.name, 'imp-basic-renamed', 'metadata updated in place');
     assert.strictEqual(renamed.username, 'shared-user', 'username preserved when manifest omits it');
     assert.strictEqual(
-      store.getConnectionsForEngine().find((c) => c.url === 'https://imp-g2.example.com').password,
+      (await store.getConnectionsForEngine()).find((c) => c.url === 'https://imp-g2.example.com').password,
       'shared-pass',
       'password preserved across re-import',
     );
 
-    for (const c of afterReimport) store.deleteConnection(c.id);
-    assert.strictEqual(store.listConnectionsForDisplay().length, 0, 'cleaned up imported connections');
+    for (const c of afterReimport) await store.deleteConnection(c.id);
+    assert.strictEqual((await store.listConnectionsForDisplay()).length, 0, 'cleaned up imported connections');
+
+    // Existing installs: every secret already on disk was written by the
+    // synchronous safeStorage.encryptString this store used before Electron 45
+    // deprecated it. The async read path has to decrypt those unchanged, or
+    // upgrading the app silently signs every connection out. Write one the old
+    // way and read it back. encryptString exists (deprecated) on 45 and is gone
+    // on 46, where there's no sync writer left to test against, so the check is
+    // skipped there rather than failing the harness on the bump it guards.
+    if (typeof safeStorage.encryptString !== 'function') {
+      console.log('[connectionStore.test] safeStorage.encryptString is gone; skipping the legacy-secret check');
+    } else {
+      const legacy = await store.upsertConnection({
+        name: 'legacy-secret',
+        kind: 'grafana',
+        url: 'https://legacy.example.com',
+        authType: 'bearer',
+      });
+      const secretsPath = path.join(app.getPath('userData'), 'secrets.enc.json');
+      const secretsFile = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
+      secretsFile.secrets[legacy.id] = safeStorage
+        .encryptString(JSON.stringify({ authType: 'bearer', token: 'legacy-sync-token' }))
+        .toString('base64');
+      fs.writeFileSync(secretsPath, JSON.stringify(secretsFile));
+      const legacyEngine = (await store.getConnectionsForEngine()).find((c) => c.id === legacy.id);
+      assert.strictEqual(legacyEngine.token, 'legacy-sync-token', 'a secret written by the sync API decrypts via the async one');
+      const legacyDisplayed = (await store.listConnectionsForDisplay()).find((c) => c.id === legacy.id);
+      assert.strictEqual(legacyDisplayed.secretError, undefined, 'the display probe reads the legacy secret too');
+      await store.deleteConnection(legacy.id);
+    }
+
+    // Two saves in flight together must both land: the encrypt is awaited, so
+    // a save that read the store before that await would write back a stale
+    // copy and drop the other's change (see upsertConnection's doc comment).
+    await Promise.all([
+      store.upsertConnection({ name: 'race-a', kind: 'grafana', url: 'https://race-a.example.com', authType: 'bearer', token: 'ta' }),
+      store.upsertConnection({ name: 'race-b', kind: 'grafana', url: 'https://race-b.example.com', authType: 'bearer', token: 'tb' }),
+    ]);
+    const raced = await store.getConnectionsForEngine();
+    assert.deepStrictEqual(
+      raced.map((c) => [c.name, c.token]).sort(),
+      [['race-a', 'ta'], ['race-b', 'tb']],
+      'concurrent saves both persisted, each with its own secret',
+    );
+    for (const c of raced) await store.deleteConnection(c.id);
 
     console.log('ALL CHECKS PASSED');
     app.exit(0);

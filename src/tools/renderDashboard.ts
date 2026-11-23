@@ -27,6 +27,7 @@ import { materializeVariables } from './liveVariables.js';
 import { describeReplayStep, replayStepWarnings, type ReplayStepReport } from '../dashboards/panelStep.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import type { GrafanaConnection } from '../config.js';
 
 interface RenderedTarget {
   refId: string;
@@ -285,12 +286,12 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
       annotations: { readOnlyHint: true, title: 'Render dashboard' },
     },
     async ({ url, dashboardUid: inputDashboardUid, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, panelLimit, includePoints, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('render_dashboard', { url, dashboardUid: inputDashboardUid }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection, hintUrl: url });
-          resolvedConnectionId = connectionId;
+          const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection, hintUrl: url });
+          resolvedConnection = resolved;
 
           let dashboardUid = inputDashboardUid;
           let urlVars: Record<string, string[]> = {};
@@ -299,7 +300,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
           let urlTimezone: string | undefined;
 
           if (url) {
-            const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, url);
+            const resolvedUrl = await resolveGotoUrl(client, resolved, url);
             const parsed = parseGrafanaUrl(resolvedUrl);
             if (parsed.type === 'dashboard') {
               dashboardUid = parsed.uid;
@@ -382,8 +383,8 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
             toExecute.map(async (panel): Promise<RenderedPanel> => {
               const { step, targets } = await resolvePanelReplay(client, panel, window, variables, resolvedOverrides, config.maxDataPoints);
               const result = await executeQueryWindow(client, targets, { label: 'render', fromMs, toMs }, config);
-              const url = dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides });
-              recordActivity(registry, activityLog, {
+              const url = dashboardUrlFor(resolved, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides });
+              recordActivity(activityLog, resolved, {
                 toolName: 'render_dashboard',
                 connectionId,
                 dashboardUid: dashboardUid!,
@@ -421,7 +422,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
               title: panel.title,
               type: panel.type,
               hasTargets: true,
-              url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides }),
+              url: dashboardUrlFor(resolved, dashboardUid!, { panelId: panel.panelId, fromMs, toMs, variables: overrides }),
               executionError: r.reason instanceof Error ? r.reason.message : String(r.reason),
             };
           });
@@ -440,7 +441,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
               type: p.type,
               hasTargets: true,
               skipped: true,
-              url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: p.panelId, fromMs, toMs, variables: overrides }),
+              url: dashboardUrlFor(resolved, dashboardUid!, { panelId: p.panelId, fromMs, toMs, variables: overrides }),
             }));
 
           const mirrorRenderedPanels: RenderedPanel[] = mirrorPanels.map((p) => ({
@@ -449,7 +450,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
             type: p.type,
             hasTargets: true,
             mirrorsPanelIds: p.mirrorsPanelIds,
-            url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: p.panelId, fromMs, toMs, variables: overrides }),
+            url: dashboardUrlFor(resolved, dashboardUid!, { panelId: p.panelId, fromMs, toMs, variables: overrides }),
           }));
 
           // Same reasoning as skippedPanels above: check each Panel's own
@@ -464,7 +465,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
               title: p.title,
               type: p.type,
               hasTargets: false,
-              url: dashboardUrlFor(registry, connectionId, dashboardUid!, { panelId: p.id }),
+              url: dashboardUrlFor(resolved, dashboardUid!, { panelId: p.id }),
             }));
 
           const stepWarnings = replayStepWarnings(
@@ -475,7 +476,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
           );
 
           const result = {
-            url: dashboardUrlFor(registry, connectionId, dashboardUid, { fromMs, toMs, variables: overrides }),
+            url: dashboardUrlFor(resolved, dashboardUid, { fromMs, toMs, variables: overrides }),
             dashboardUid,
             title: dashboard.title,
             window: reportedWindow,
@@ -489,7 +490,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
+        const errorUrl = resolvedConnection && resolvedDashboardUid ? dashboardUrlFor(resolvedConnection, resolvedDashboardUid) : undefined;
         return toolErrorResult(err, config, errorUrl);
       }
     },

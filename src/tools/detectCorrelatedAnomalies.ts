@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { GrafanaConnection } from '../config.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { computeWindows } from '../query/windows.js';
@@ -109,15 +110,15 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
       annotations: { readOnlyHint: true, title: 'Detect correlated anomalies' },
     },
     async ({ primaryDashboardUid, primaryPanelId, primaryPanelTitle, startsAtMs, endsAtMs, primaryLabels, candidates, scope, variableOverrides, limit, connection }) => {
-      let primaryConnectionId: string | undefined;
+      let primaryConnection: GrafanaConnection | undefined;
       try {
         return await withAudit(
           'detect_correlated_anomalies',
           { primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs },
           config,
           async () => {
-            const { client: primaryClient, connectionId } = resolveToolClient(registry, { connection });
-            primaryConnectionId = connectionId;
+            const { client: primaryClient, connectionId, connection: resolvedPrimary } = await resolveToolClient(registry, { connection });
+            primaryConnection = resolvedPrimary;
             const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets: [] });
             // Fail fast, before running a single Grafana query, rather than
             // executing an accidentally-huge window across every candidate —
@@ -174,12 +175,12 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               .filter((t): t is number => t !== undefined);
             const primaryOnsetMs = primaryOnsets.length ? Math.min(...primaryOnsets) : undefined;
 
-            const primaryUrl = dashboardUrlFor(registry, connectionId, primaryDashboardUid, {
+            const primaryUrl = dashboardUrlFor(resolvedPrimary, primaryDashboardUid, {
               panelId: primaryPanelId,
               fromMs: windowSet.incident.fromMs,
               toMs: windowSet.incident.toMs,
             });
-            recordActivity(registry, activityLog, {
+            recordActivity(activityLog, resolvedPrimary, {
               toolName: 'detect_correlated_anomalies',
               connectionId,
               dashboardUid: primaryDashboardUid,
@@ -254,14 +255,14 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               // cache is missing/stale (confirmed in practice: ~13 minutes across 7
               // connections/600-860 dashboards each). Building all of them up front made every
               // narrow-scope call pay that cost regardless of what was actually asked for.
-              const otherConnections = registry.list().filter((c) => c.id !== connectionId);
+              const otherConnections = (await registry.list()).filter((c) => c.id !== connectionId);
               const indexByConnection = new Map<string, MetricIndex>();
-              indexByConnection.set(connectionId, await getOrBuildIndex(registry.get(connectionId), config, connectionId, {}));
+              indexByConnection.set(connectionId, await getOrBuildIndex(await registry.get(connectionId), config, connectionId, {}));
 
               let haveAllOtherConnections = true;
               if (requestedScope === 'all-connections') {
                 const rest = await Promise.allSettled(
-                  otherConnections.map(async (conn) => ({ connectionId: conn.id, index: await getOrBuildIndex(registry.get(conn.id), config, conn.id, {}) })),
+                  otherConnections.map(async (conn) => ({ connectionId: conn.id, index: await getOrBuildIndex(await registry.get(conn.id), config, conn.id, {}) })),
                 );
                 for (const outcome of rest) {
                   if (outcome.status === 'fulfilled') indexByConnection.set(outcome.value.connectionId, outcome.value.index);
@@ -396,26 +397,30 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             const candidateInputs: (CorrelationCandidateInput & { connectionId: string })[] = [];
             const settled = await Promise.allSettled(
               candidateRefs.map(async (ref) => {
-                const client = registry.get(ref.connectionId);
+                // The candidate's url/name for its link and Activity entry come
+                // from the same read as the client that queried it.
+                const { client, connection: candidateConnection } = await registry.resolve(ref.connectionId);
                 const incidentResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.incident, config.maxDataPoints, ref.panelTitle);
                 const incidentResult = await executeQueryWindow(client, incidentResolved.targets, windowSet.incident, config);
                 const preResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.preWindow, config.maxDataPoints, ref.panelTitle);
                 const preResult = await executeQueryWindow(client, preResolved.targets, windowSet.preWindow, config);
-                return { ref, dashboard: incidentResolved.dashboard, panel: incidentResolved.panel, incidentResult, preResult };
+                return { ref, candidateConnection, dashboard: incidentResolved.dashboard, panel: incidentResolved.panel, incidentResult, preResult };
               }),
             );
 
+            const queriedConnections = new Map<string, GrafanaConnection>();
             for (const outcome of settled) {
               if (outcome.status !== 'fulfilled') continue;
-              const { ref, dashboard, panel, incidentResult, preResult } = outcome.value;
-              recordActivity(registry, activityLog, {
+              const { ref, candidateConnection, dashboard, panel, incidentResult, preResult } = outcome.value;
+              queriedConnections.set(ref.connectionId, candidateConnection);
+              recordActivity(activityLog, candidateConnection, {
                 toolName: 'detect_correlated_anomalies',
                 connectionId: ref.connectionId,
                 dashboardUid: ref.dashboardUid,
                 dashboardTitle: dashboard.title,
                 panelId: ref.panelId,
                 panelTitle: panel.title,
-                url: dashboardUrlFor(registry, ref.connectionId, ref.dashboardUid, {
+                url: dashboardUrlFor(candidateConnection, ref.dashboardUid, {
                   panelId: ref.panelId,
                   fromMs: windowSet.incident.fromMs,
                   toMs: windowSet.incident.toMs,
@@ -468,7 +473,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             const ranked = rankCorrelatedAnomalies(candidateInputs, effectiveLabels, primaryOnsetMs).map((r) => ({
               ...r,
               url: r.connectionId
-                ? dashboardUrlFor(registry, r.connectionId, r.dashboardUid, {
+                ? dashboardUrlFor(queriedConnections.get(r.connectionId), r.dashboardUid, {
                     panelId: r.panelId,
                     fromMs: windowSet.incident.fromMs,
                     toMs: windowSet.incident.toMs,
@@ -492,9 +497,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
           },
         );
       } catch (err) {
-        const url = primaryConnectionId
-          ? dashboardUrlFor(registry, primaryConnectionId, primaryDashboardUid, { panelId: primaryPanelId })
-          : undefined;
+        const url = dashboardUrlFor(primaryConnection, primaryDashboardUid, { panelId: primaryPanelId });
         return toolErrorResult(err, config, url);
       }
     },

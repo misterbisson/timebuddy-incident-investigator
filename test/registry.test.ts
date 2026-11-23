@@ -26,53 +26,95 @@ const conn = (overrides: Partial<GrafanaConnection>): GrafanaConnection => ({
 });
 
 describe('ConnectionRegistry', () => {
-  it('list() returns the same static array reference every call, when given a plain array', () => {
+  it('list() returns the same static array reference every call, when given a plain array', async () => {
     const connections = [conn({})];
     const registry = new ConnectionRegistry(connections, config);
-    expect(registry.list()).toBe(connections);
-    expect(registry.list()).toBe(connections);
+    expect(await registry.list()).toBe(connections);
+    expect(await registry.list()).toBe(connections);
   });
 
-  it('list() re-invokes a thunk source on every call, reflecting connections added after construction', () => {
+  it('list() re-invokes a thunk source on every call, reflecting connections added after construction', async () => {
     let connections = [conn({ id: 'a' })];
     const registry = new ConnectionRegistry(() => connections, config);
-    expect(registry.list().map((c) => c.id)).toEqual(['a']);
+    expect((await registry.list()).map((c) => c.id)).toEqual(['a']);
 
     connections = [...connections, conn({ id: 'b' })];
-    expect(registry.list().map((c) => c.id)).toEqual(['a', 'b']);
+    expect((await registry.list()).map((c) => c.id)).toEqual(['a', 'b']);
   });
 
-  it('get() picks up a connection added after the registry was constructed, with no restart', () => {
+  it('accepts a thunk that returns a Promise, as the Electron store does now that safeStorage decrypts asynchronously', async () => {
+    let connections = [conn({ id: 'a' })];
+    const registry = new ConnectionRegistry(async () => connections, config);
+    expect((await registry.list()).map((c) => c.id)).toEqual(['a']);
+    await expect(registry.get('a')).resolves.toBeDefined();
+
+    connections = [conn({ id: 'b' })];
+    await expect(registry.get('a')).rejects.toThrow(/Unknown Grafana connection/);
+    await expect(registry.get('b')).resolves.toBeDefined();
+  });
+
+  it('resolve() pairs each client with the connection it was built from, even when reads finish out of order', async () => {
+    // The review's case: call A reads the store before a GUI edit and call B
+    // after it, and B's read finishes first. Each must get back the connection
+    // its own read saw, since that's what its links and Activity entry show.
+    const pending: Array<(list: ReturnType<typeof conn>[]) => void> = [];
+    const registry = new ConnectionRegistry(() => new Promise((resolve) => pending.push(resolve)), config);
+
+    const callA = registry.resolve('a');
+    const callB = registry.resolve('a');
+    pending[1]!([conn({ id: 'a', url: 'https://new.example.com' })]);
+    const b = await callB;
+    pending[0]!([conn({ id: 'a', url: 'https://old.example.com' })]);
+    const a = await callA;
+
+    expect(b.connection.url).toBe('https://new.example.com');
+    expect(a.connection.url).toBe('https://old.example.com');
+    expect(a.client).not.toBe(b.client);
+    // And a later call sees the store as it is now, not as the slowest read left it.
+    const later = registry.resolve('a');
+    pending[2]!([conn({ id: 'a', url: 'https://new.example.com' })]);
+    expect((await later).connection.url).toBe('https://new.example.com');
+  });
+
+  it('get() picks up a connection added after the registry was constructed, with no restart', async () => {
     let connections: GrafanaConnection[] = [];
     const registry = new ConnectionRegistry(() => connections, config);
-    expect(() => registry.get('a')).toThrow(/Unknown Grafana connection/);
+    await expect(registry.get('a')).rejects.toThrow(/Unknown Grafana connection/);
 
     connections = [conn({ id: 'a' })];
-    expect(() => registry.get('a')).not.toThrow();
+    await expect(registry.get('a')).resolves.toBeDefined();
   });
 
-  it('get() returns the same cached client when the connection config is unchanged', () => {
+  it('get() returns the same cached client when the connection config is unchanged', async () => {
     const connections = [conn({ id: 'a' })];
     const registry = new ConnectionRegistry(() => connections, config);
-    expect(registry.get('a')).toBe(registry.get('a'));
+    expect(await registry.get('a')).toBe(await registry.get('a'));
   });
 
-  it('get() rebuilds the client when the connection config changes (e.g. a rotated token)', () => {
+  it('concurrent get() calls for an already-cached connection all return that one client', async () => {
+    const connections = [conn({ id: 'a' })];
+    const registry = new ConnectionRegistry(async () => connections, config);
+    const first = await registry.get('a');
+    const all = await Promise.all([registry.get('a'), registry.get('a'), registry.get('a')]);
+    for (const client of all) expect(client).toBe(first);
+  });
+
+  it('get() rebuilds the client when the connection config changes (e.g. a rotated token)', async () => {
     let connections = [conn({ id: 'a', token: 'old-token' })];
     const registry = new ConnectionRegistry(() => connections, config);
-    const first = registry.get('a');
+    const first = await registry.get('a');
 
     connections = [conn({ id: 'a', token: 'new-token' })];
-    const second = registry.get('a');
+    const second = await registry.get('a');
     expect(second).not.toBe(first);
   });
 
-  it('get() throws for an id no longer present in the current list', () => {
+  it('get() throws for an id no longer present in the current list', async () => {
     let connections = [conn({ id: 'a' })];
     const registry = new ConnectionRegistry(() => connections, config);
-    registry.get('a');
+    await registry.get('a');
 
     connections = [];
-    expect(() => registry.get('a')).toThrow(/Unknown Grafana connection/);
+    await expect(registry.get('a')).rejects.toThrow(/Unknown Grafana connection/);
   });
 });

@@ -20,10 +20,11 @@ const Module = require('node:module') as { _load: (...args: unknown[]) => unknow
 
 let dir: string;
 let store: {
-  listConnectionsForDisplay: () => Array<Record<string, unknown>>;
-  upsertConnection: (draft: Record<string, unknown>) => Record<string, unknown>;
-  deleteConnection: (id: string) => void;
-  getConnectionsForEngine: () => Array<Record<string, unknown>>;
+  listConnectionsForDisplay: () => Promise<Array<Record<string, unknown>>>;
+  upsertConnection: (draft: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  deleteConnection: (id: string) => Promise<void>;
+  importConnections: (manifest: unknown, shared?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  getConnectionsForEngine: () => Promise<Array<Record<string, unknown>>>;
 };
 let originalLoad: (...args: unknown[]) => unknown;
 /** Ciphertexts the fake keychain should refuse, simulating a stale entry. */
@@ -35,17 +36,20 @@ beforeEach(() => {
 
   const fakeElectron = {
     app: { getPath: (name: string) => (name === 'userData' ? dir : dir) },
+    // Async methods only, deliberately: Electron 46 removes the sync ones, so
+    // a leftover encryptString/decryptString call fails here as a TypeError
+    // rather than passing against a fake that still offers it.
     safeStorage: {
-      isEncryptionAvailable: () => true,
+      isAsyncEncryptionAvailable: async () => true,
       // A reversible stand-in for the OS keychain: enough to round-trip, and
       // to fail on demand the way safeStorage does after a keychain reset.
-      encryptString: (s: string) => Buffer.from(`enc:${s}`, 'utf8'),
-      decryptString: (buf: Buffer) => {
+      encryptStringAsync: async (s: string) => Buffer.from(`enc:${s}`, 'utf8'),
+      decryptStringAsync: async (buf: Buffer) => {
         const raw = buf.toString('utf8');
         if (undecryptable.has(raw)) {
           throw new Error('Error while decrypting the ciphertext provided to safeStorage');
         }
-        return raw.replace(/^enc:/, '');
+        return { shouldReEncrypt: false, result: raw.replace(/^enc:/, '') };
       },
     },
   };
@@ -73,54 +77,54 @@ const readStore = (file: string) => JSON.parse(readFileSync(join(dir, file), 'ut
 const cipherFor = (id: string) => Buffer.from(readStore('secrets.enc.json').secrets[id], 'base64').toString('utf8');
 
 describe('connectionStore round trip', () => {
-  it('stores a connection and returns it to the engine with its secret', () => {
-    const saved = store.upsertConnection(bearer('prod'));
-    const engine = store.getConnectionsForEngine();
+  it('stores a connection and returns it to the engine with its secret', async () => {
+    const saved = await store.upsertConnection(bearer('prod'));
+    const engine = await store.getConnectionsForEngine();
     expect(engine).toHaveLength(1);
     expect(engine[0]).toMatchObject({ id: saved.id, name: 'prod', token: 'tok-prod' });
   });
 
-  it('strips a trailing slash from the url and reports hasSecret', () => {
-    const saved = store.upsertConnection({ ...bearer('prod'), url: 'https://g.example.com///' });
+  it('strips a trailing slash from the url and reports hasSecret', async () => {
+    const saved = await store.upsertConnection({ ...bearer('prod'), url: 'https://g.example.com///' });
     expect(saved).toMatchObject({ url: 'https://g.example.com', hasSecret: true });
   });
 
-  it('keeps the existing secret when an edit leaves the token blank', () => {
-    const saved = store.upsertConnection(bearer('prod'));
-    store.upsertConnection({ id: saved.id, name: 'prod renamed', url: 'https://g.example.com', authType: 'bearer', token: '' });
-    const engine = store.getConnectionsForEngine();
+  it('keeps the existing secret when an edit leaves the token blank', async () => {
+    const saved = await store.upsertConnection(bearer('prod'));
+    await store.upsertConnection({ id: saved.id, name: 'prod renamed', url: 'https://g.example.com', authType: 'bearer', token: '' });
+    const engine = await store.getConnectionsForEngine();
     expect(engine[0]).toMatchObject({ name: 'prod renamed', token: 'tok-prod' });
   });
 
-  it('removes a connection and its secret on delete', () => {
-    const saved = store.upsertConnection(bearer('prod'));
-    store.deleteConnection(saved.id as string);
-    expect(store.getConnectionsForEngine()).toEqual([]);
+  it('removes a connection and its secret on delete', async () => {
+    const saved = await store.upsertConnection(bearer('prod'));
+    await store.deleteConnection(saved.id as string);
+    expect(await store.getConnectionsForEngine()).toEqual([]);
     expect(readStore('secrets.enc.json').secrets).toEqual({});
   });
 });
 
 describe('one undecryptable secret does not break the other connections', () => {
-  it('returns every connection, with only the broken one missing its credential', () => {
-    const a = store.upsertConnection(bearer('a'));
-    const b = store.upsertConnection(bearer('b'));
-    const c = store.upsertConnection(bearer('c'));
+  it('returns every connection, with only the broken one missing its credential', async () => {
+    const a = await store.upsertConnection(bearer('a'));
+    const b = await store.upsertConnection(bearer('b'));
+    const c = await store.upsertConnection(bearer('c'));
     undecryptable.add(cipherFor(b.id as string));
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const engine = store.getConnectionsForEngine();
+    const engine = await store.getConnectionsForEngine();
     expect(engine.map((e) => e.id)).toEqual([a.id, b.id, c.id]);
     expect(engine[0].token).toBe('tok-a');
     expect(engine[2].token).toBe('tok-c');
     expect(engine[1].token).toBeUndefined();
   });
 
-  it('logs the cause to stderr, naming the connection', () => {
-    const b = store.upsertConnection(bearer('b'));
+  it('logs the cause to stderr, naming the connection', async () => {
+    const b = await store.upsertConnection(bearer('b'));
     undecryptable.add(cipherFor(b.id as string));
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    store.getConnectionsForEngine();
+    await store.getConnectionsForEngine();
     expect(spy).toHaveBeenCalledOnce();
     const message = String(spy.mock.calls[0]![0]);
     expect(message).toContain('"b"');
@@ -128,12 +132,12 @@ describe('one undecryptable secret does not break the other connections', () => 
     expect(message).toContain('Other connections are unaffected');
   });
 
-  it('distinguishes "cannot decrypt" from "no secret saved" in the UI list', () => {
-    const withSecret = store.upsertConnection(bearer('has'));
-    store.upsertConnection({ name: 'none', url: 'https://g.example.com', authType: 'bearer', token: '' });
+  it('distinguishes "cannot decrypt" from "no secret saved" in the UI list', async () => {
+    const withSecret = await store.upsertConnection(bearer('has'));
+    await store.upsertConnection({ name: 'none', url: 'https://g.example.com', authType: 'bearer', token: '' });
     undecryptable.add(cipherFor(withSecret.id as string));
 
-    const rows = store.listConnectionsForDisplay();
+    const rows = await store.listConnectionsForDisplay();
     const broken = rows.find((r) => r.name === 'has')!;
     const never = rows.find((r) => r.name === 'none')!;
 
@@ -144,32 +148,104 @@ describe('one undecryptable secret does not break the other connections', () => 
   });
 });
 
+describe('concurrent saves', () => {
+  // The encrypt is awaited now (safeStorage's async API). If a save read the
+  // store files before that await, two saves in flight together would each
+  // write back the copy they read, and the second would drop the first's
+  // change — a lost connection with no error anywhere.
+  it('keeps both connections, each with its own secret, when two upserts overlap', async () => {
+    await Promise.all([store.upsertConnection(bearer('a')), store.upsertConnection(bearer('b'))]);
+    const engine = await store.getConnectionsForEngine();
+    expect(engine.map((e) => [e.name, e.token]).sort()).toEqual([
+      ['a', 'tok-a'],
+      ['b', 'tok-b'],
+    ]);
+  });
+
+  it('keeps an edit and a new connection that overlap', async () => {
+    const existing = await store.upsertConnection(bearer('old'));
+    await Promise.all([
+      store.upsertConnection({ id: existing.id, name: 'renamed', url: 'https://g.example.com', authType: 'bearer', token: 'tok-new' }),
+      store.upsertConnection(bearer('added')),
+    ]);
+    const engine = await store.getConnectionsForEngine();
+    expect(engine.map((e) => [e.name, e.token]).sort()).toEqual([
+      ['added', 'tok-added'],
+      ['renamed', 'tok-new'],
+    ]);
+  });
+});
+
+describe('mutations apply in the order they were made', () => {
+  // A save awaits the encrypt partway through. Without one queue for every
+  // mutation, one the user made later could land first and be overwritten.
+  it('deletes a connection whose delete arrived while an edit of it was still encrypting', async () => {
+    const existing = await store.upsertConnection(bearer('doomed'));
+    await Promise.all([
+      store.upsertConnection({ id: existing.id, name: 'edited', url: 'https://g.example.com', authType: 'bearer', token: 'tok-edit' }),
+      store.deleteConnection(existing.id as string),
+    ]);
+    expect(await store.listConnectionsForDisplay()).toEqual([]);
+    expect(readStore('secrets.enc.json').secrets).toEqual({});
+  });
+
+  it('does not bring back a connection deleted while an import that matches it was encrypting', async () => {
+    const existing = await store.upsertConnection({ ...bearer('matched'), url: 'https://imp.example.com' });
+    await Promise.all([
+      store.importConnections(
+        { version: 1, connections: [{ kind: 'grafana', name: 'matched', url: 'https://imp.example.com', authType: 'basic' }] },
+        { username: 'u', password: 'p' },
+      ),
+      store.deleteConnection(existing.id as string),
+    ]);
+    expect(await store.listConnectionsForDisplay()).toEqual([]);
+  });
+
+  it('updates, rather than duplicates, a connection a GUI save created just before the import', async () => {
+    await Promise.all([
+      store.upsertConnection({ ...bearer('from-gui'), url: 'https://imp.example.com' }),
+      store.importConnections({ version: 1, connections: [{ kind: 'grafana', name: 'from-import', url: 'https://imp.example.com', authType: 'bearer' }] }),
+    ]);
+    const listed = await store.listConnectionsForDisplay();
+    expect(listed.map((c) => c.name)).toEqual(['from-import']);
+    // The GUI save's token survives: an import never carries a bearer secret.
+    expect((await store.getConnectionsForEngine())[0]!.token).toBe('tok-from-gui');
+  });
+
+  it('keeps going after a mutation fails', async () => {
+    writeFileSync(join(dir, 'connections.json'), '{"version":1,"connections":[{"id"');
+    await expect(store.upsertConnection(bearer('first'))).rejects.toThrow(/not valid JSON/);
+    rmSync(join(dir, 'connections.json'));
+    await expect(store.upsertConnection(bearer('second'))).resolves.toMatchObject({ name: 'second' });
+  });
+});
+
 describe('store files survive an interrupted write', () => {
   // The old code threw here too — a SyntaxError has no `.code`, so it fell
   // past the ENOENT check. What's new is a message that names the file and
   // says what to do, since this is the error a user hits when the app has
   // stopped working entirely.
-  it('reports a truncated connections.json with a repairable error, not a bare SyntaxError', () => {
-    store.upsertConnection(bearer('prod'));
+  it('reports a truncated connections.json with a repairable error, not a bare SyntaxError', async () => {
+    await store.upsertConnection(bearer('prod'));
     writeFileSync(join(dir, 'connections.json'), '{"version":1,"connections":[{"id"');
-    expect(() => store.getConnectionsForEngine()).toThrow(/not valid JSON/);
-    expect(() => store.getConnectionsForEngine()).toThrow(/connections\.json/);
+    await expect(store.getConnectionsForEngine()).rejects.toThrow(/not valid JSON/);
+    await expect(store.getConnectionsForEngine()).rejects.toThrow(/connections\.json/);
   });
 
   // Passes against the old code too, and is here as a regression guard rather
   // than as evidence of a fix: it pins the choice *not* to adopt the engine
   // caches' swallow-and-rebuild behavior, which would make this upsert
   // overwrite the damaged file with an empty one.
-  it('does not overwrite a corrupt connections.json with a fresh empty one', () => {
-    store.upsertConnection(bearer('prod'));
+  it('does not overwrite a corrupt connections.json with a fresh empty one', async () => {
+    await store.upsertConnection(bearer('prod'));
     const corrupt = '{"version":1,"connections":[{"id"';
     writeFileSync(join(dir, 'connections.json'), corrupt);
-    expect(() => store.upsertConnection(bearer('new'))).toThrow();
+    await expect(store.upsertConnection(bearer('new'))).rejects.toThrow();
     expect(readFileSync(join(dir, 'connections.json'), 'utf8')).toBe(corrupt);
   });
 
-  it('leaves no temp files behind after a normal write', () => {
-    store.upsertConnection(bearer('prod'));
+  it('leaves no temp files behind after a normal write', async () => {
+    await store.upsertConnection(bearer('prod'));
     const { readdirSync } = require('node:fs');
     expect(readdirSync(dir).sort()).toEqual(['connections.json', 'secrets.enc.json']);
   });
@@ -179,7 +255,7 @@ describe('write ordering keeps the two files skewed in the harmless direction', 
   // A crash between the two writes must never leave a connection listed
   // whose secret hasn't landed — that's the "exists but won't authenticate"
   // state this change is about eliminating. An orphaned secret is invisible.
-  it('writes secrets before connections on upsert', () => {
+  it('writes secrets before connections on upsert', async () => {
     const order: string[] = [];
     const fs = require('node:fs');
     const realRename = fs.renameSync;
@@ -188,15 +264,15 @@ describe('write ordering keeps the two files skewed in the harmless direction', 
       return realRename(from, to);
     };
     try {
-      store.upsertConnection(bearer('prod'));
+      await store.upsertConnection(bearer('prod'));
     } finally {
       fs.renameSync = realRename;
     }
     expect(order).toEqual(['secrets.enc.json', 'connections.json']);
   });
 
-  it('writes connections before secrets on delete, for the same reason', () => {
-    const saved = store.upsertConnection(bearer('prod'));
+  it('writes connections before secrets on delete, for the same reason', async () => {
+    const saved = await store.upsertConnection(bearer('prod'));
     const order: string[] = [];
     const fs = require('node:fs');
     const realRename = fs.renameSync;
@@ -205,7 +281,7 @@ describe('write ordering keeps the two files skewed in the harmless direction', 
       return realRename(from, to);
     };
     try {
-      store.deleteConnection(saved.id as string);
+      await store.deleteConnection(saved.id as string);
     } finally {
       fs.renameSync = realRename;
     }
@@ -216,9 +292,9 @@ describe('write ordering keeps the two files skewed in the harmless direction', 
 describe('timestamps', () => {
   // Was `?? new Date(0)`, and the renderer's readDraft never sets updatedAt,
   // so every connection was stamped 1970-01-01 in practice.
-  it('stamps createdAt/updatedAt with the current time, not the Unix epoch', () => {
+  it('stamps createdAt/updatedAt with the current time, not the Unix epoch', async () => {
     const before = Date.now();
-    store.upsertConnection(bearer('prod'));
+    await store.upsertConnection(bearer('prod'));
     const [meta] = readStore('connections.json').connections;
 
     expect(meta.createdAt).not.toBe('1970-01-01T00:00:00.000Z');
@@ -227,10 +303,10 @@ describe('timestamps', () => {
   });
 
   it('preserves createdAt across an edit while moving updatedAt forward', async () => {
-    const saved = store.upsertConnection(bearer('prod'));
+    const saved = await store.upsertConnection(bearer('prod'));
     const created = readStore('connections.json').connections[0].createdAt;
     await new Promise((r) => setTimeout(r, 5));
-    store.upsertConnection({ id: saved.id, name: 'renamed', url: 'https://g.example.com', authType: 'bearer' });
+    await store.upsertConnection({ id: saved.id, name: 'renamed', url: 'https://g.example.com', authType: 'bearer' });
 
     const [meta] = readStore('connections.json').connections;
     expect(meta.createdAt).toBe(created);
@@ -251,23 +327,23 @@ describe('a decrypted credential never escapes into logs or the GUI', () => {
   // unexpected payload therefore published live credential material to
   // console.error (captured to the MCP client's on-disk logs) and to the
   // connection row's tooltip.
-  it('keeps the plaintext out of the stderr warning', () => {
-    const saved = store.upsertConnection(bearer('prod'));
+  it('keeps the plaintext out of the stderr warning', async () => {
+    const saved = await store.upsertConnection(bearer('prod'));
     seedNonJsonPayload(saved.id as string);
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    store.getConnectionsForEngine();
+    await store.getConnectionsForEngine();
     const message = String(spy.mock.calls[0]![0]);
     expect(message).not.toContain('glsa');
     expect(message).not.toContain('SUPERSECRET');
     expect(message).toContain('not in the expected format');
   });
 
-  it('keeps the plaintext out of the GUI secretError', () => {
-    const saved = store.upsertConnection(bearer('prod'));
+  it('keeps the plaintext out of the GUI secretError', async () => {
+    const saved = await store.upsertConnection(bearer('prod'));
     seedNonJsonPayload(saved.id as string);
 
-    const [row] = store.listConnectionsForDisplay();
+    const [row] = await store.listConnectionsForDisplay();
     expect(row.secretError).not.toContain('glsa');
     expect(row.secretError).not.toContain('SUPERSECRET');
   });
@@ -275,18 +351,18 @@ describe('a decrypted credential never escapes into logs or the GUI', () => {
   // Not just redaction: the two failures need different advice. Only the
   // keychain case is fixed by re-entering the credential, which is what the
   // GUI status and README both tell the user to do.
-  it('does not misreport a malformed payload as a broken keychain', () => {
-    const saved = store.upsertConnection(bearer('prod'));
+  it('does not misreport a malformed payload as a broken keychain', async () => {
+    const saved = await store.upsertConnection(bearer('prod'));
     seedNonJsonPayload(saved.id as string);
 
-    const [row] = store.listConnectionsForDisplay();
+    const [row] = await store.listConnectionsForDisplay();
     expect(row.secretError).not.toContain('keychain');
   });
 });
 
 describe('store files are written owner-only', () => {
-  it.skipIf(process.platform === 'win32')('leaves both files at 0600 after an upsert', () => {
-    store.upsertConnection(bearer('prod'));
+  it.skipIf(process.platform === 'win32')('leaves both files at 0600 after an upsert', async () => {
+    await store.upsertConnection(bearer('prod'));
     const { statSync } = require('node:fs');
     for (const file of ['connections.json', 'secrets.enc.json']) {
       expect((statSync(join(dir, file)).mode & 0o777).toString(8)).toBe('600');

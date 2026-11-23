@@ -95,10 +95,10 @@ function lokiSource(connection: GrafanaConnection, datasource: { uid: string; na
 export async function listLokiSources(
   registry: ConnectionRegistry | undefined,
 ): Promise<{ sources: LokiLogSource[]; problems: LokiDiscoveryProblem[] }> {
-  const connections = registry?.list() ?? [];
+  const connections = (await registry?.list()) ?? [];
   const settled = await Promise.allSettled(
     connections.map(async (connection) => {
-      const datasources = await registry!.get(connection.id).listDatasources();
+      const datasources = await (await registry!.get(connection.id)).listDatasources();
       return datasources.filter((d) => d.type.toLowerCase() === 'loki').map((d) => lokiSource(connection, d));
     }),
   );
@@ -118,13 +118,13 @@ export async function listLogSources(
   logRegistry: LogConnectionRegistry | undefined,
   registry: ConnectionRegistry | undefined,
 ): Promise<{ sources: LogSource[]; problems: LokiDiscoveryProblem[] }> {
-  const graylog = (logRegistry?.list() ?? []).map(graylogSource);
+  const graylog = ((await logRegistry?.list()) ?? []).map(graylogSource);
   const loki = await listLokiSources(registry);
   return { sources: markAmbiguous([...graylog, ...loki.sources]), problems: loki.problems };
 }
 
 export type ResolvedLogSource =
-  | { sourceType: 'graylog'; source: GraylogLogSource; client: GraylogClient }
+  | { sourceType: 'graylog'; source: GraylogLogSource; client: GraylogClient; connection: LogConnection }
   | { sourceType: 'loki'; source: LokiLogSource; client: GrafanaClient; grafanaUrl: string; grafanaName: string };
 
 /** How a refusal or `ambiguousWith` names one reading of an id. */
@@ -155,8 +155,8 @@ interface LokiIdSplit {
 }
 
 /** Every Grafana connection whose id, followed by `/`, begins `id` — see lokiSourceId for why not a split on `/`. */
-function lokiIdSplits(registry: ConnectionRegistry | undefined, id: string): LokiIdSplit[] {
-  return (registry?.list() ?? [])
+async function lokiIdSplits(registry: ConnectionRegistry | undefined, id: string): Promise<LokiIdSplit[]> {
+  return ((await registry?.list()) ?? [])
     .filter((c) => id.length > c.id.length + 1 && id.startsWith(`${c.id}/`))
     .map((c) => ({ grafana: c, uid: id.slice(c.id.length + 1) }));
 }
@@ -173,13 +173,22 @@ interface LokiProbe extends LokiIdSplit {
 async function probeLokiSplit(registry: ConnectionRegistry, split: LokiIdSplit): Promise<LokiProbe> {
   let datasources;
   try {
-    datasources = await registry.get(split.grafana.id).listDatasources();
+    datasources = await (await registry.get(split.grafana.id)).listDatasources();
   } catch (err) {
     return { ...split, outcome: 'unreadable', error: err instanceof Error ? err.message : String(err), cause: err };
   }
   const found = datasources.find((d) => d.uid === split.uid);
   if (!found) return { ...split, outcome: 'missing' };
   return { ...split, outcome: found.type.toLowerCase() === 'loki' ? 'loki' : 'not-loki', datasource: found, type: found.type };
+}
+
+/**
+ * A Graylog source whose client, listing, and `connection` (the display fields
+ * its search URL and Activity entry use) all come from one read of the store.
+ */
+async function resolvedGraylog(logRegistry: LogConnectionRegistry, id: string): Promise<ResolvedLogSource> {
+  const { client, connection } = await logRegistry.resolve(id);
+  return { sourceType: 'graylog', source: graylogSource(connection), client, connection };
 }
 
 /**
@@ -205,13 +214,13 @@ export async function resolveLogSource(
   registry: ConnectionRegistry | undefined,
   explicitId: string | undefined,
 ): Promise<ResolvedLogSource> {
-  const graylogConnections = logRegistry?.list() ?? [];
+  const graylogConnections = (await logRegistry?.list()) ?? [];
 
   if (explicitId) {
     const graylog = graylogConnections.find((c) => c.id === explicitId);
-    const splits = lokiIdSplits(registry, explicitId);
+    const splits = await lokiIdSplits(registry, explicitId);
     if (graylog && splits.length === 0) {
-      return { sourceType: 'graylog', source: graylogSource(graylog), client: logRegistry!.get(graylog.id) };
+      return resolvedGraylog(logRegistry!, graylog.id);
     }
 
     const probes = await Promise.all(splits.map((split) => probeLokiSplit(registry!, split)));
@@ -240,16 +249,19 @@ export async function resolveLogSource(
       );
     }
     if (graylog) {
-      return { sourceType: 'graylog', source: graylogSource(graylog), client: logRegistry!.get(graylog.id) };
+      return resolvedGraylog(logRegistry!, graylog.id);
     }
     if (matches.length === 1) {
       const { grafana, datasource } = matches[0]!;
+      // The display fields come from the read that built the client, not from
+      // the probe's earlier one, so a link can't name a host the search skipped.
+      const { client, connection } = await registry!.resolve(grafana.id);
       return {
         sourceType: 'loki',
-        source: lokiSource(grafana, datasource),
-        client: registry!.get(grafana.id),
-        grafanaUrl: grafana.url,
-        grafanaName: grafana.name,
+        source: lokiSource(connection, datasource),
+        client,
+        grafanaUrl: connection.url,
+        grafanaName: connection.name,
       };
     }
     // Nothing matched. With one candidate split, say exactly why it didn't.

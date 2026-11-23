@@ -134,7 +134,7 @@ export function registerDiscoverLabelValues(server: McpServer, { registry, confi
     async ({ metric, label, datasourceUid, limit, startsAtMs, endsAtMs, connection }) => {
       try {
         return await withAudit('discover_label_values', { metric, label, datasourceUid, startsAtMs, endsAtMs, connection }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = await resolveToolClient(registry, { connection });
           const { uid, type } = await resolveLabelDatasource(client, datasourceUid);
           let lokiWindow: { window: { fromMs: number; toMs: number }; report: LabelWindowReport } | undefined;
           if (type === 'loki') {

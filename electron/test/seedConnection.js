@@ -9,7 +9,7 @@ const { app, safeStorage } = require('electron');
 // produce a secret main.js's --mcp-server mode can't decrypt.
 app.setName('timebuddy-connection-manager');
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Linux-only (these methods don't exist at all on macOS/Windows): selecting
   // the basic_text backend (--password-store=basic) alone does NOT make
   // isEncryptionAvailable() true. Electron's native IsEncryptionAvailable()
@@ -19,13 +19,13 @@ app.whenReady().then(() => {
   // (added in Electron 25.5.0), acknowledging the weaker guarantee. main.js
   // makes the same call for the real --mcp-server process, which otherwise
   // can't decrypt a secret this script just encrypted.
-  if (process.platform === 'linux') {
+  if (process.platform === 'linux' && typeof safeStorage.setUsePlainTextEncryption === 'function') {
     safeStorage.setUsePlainTextEncryption(true);
   }
-  console.log('[seed] whenReady() resolved, isEncryptionAvailable() =', safeStorage.isEncryptionAvailable());
+  console.log('[seed] whenReady() resolved, isAsyncEncryptionAvailable() =', await safeStorage.isAsyncEncryptionAvailable());
   const store = require('../src/connectionStore.js');
   console.log('[seed] connectionStore required, upserting grafana connection');
-  store.upsertConnection({
+  await store.upsertConnection({
     name: 'test-connection',
     kind: 'grafana',
     url: 'https://grafana.example.com',
@@ -33,7 +33,7 @@ app.whenReady().then(() => {
     token: 'test-token-12345',
   });
   console.log('[seed] grafana connection upserted, upserting graylog connection');
-  store.upsertConnection({
+  await store.upsertConnection({
     name: 'test-log-connection',
     kind: 'graylog',
     url: 'https://graylog.example.com',

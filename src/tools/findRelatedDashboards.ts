@@ -1,10 +1,10 @@
 import { z } from 'zod';
+import type { GrafanaConnection } from '../config.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { getOrBuildIndex } from '../index-builder/metricIndex.js';
 import type { MetricIndex, MetricIndexEntry } from '../index-builder/store.js';
 import { dashboardUrlFor, resolveToolClient, toolErrorResult } from './shared.js';
-import type { ConnectionRegistry } from '../grafana/registry.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 import { listKnowledgeDashboards } from '../knowledge/lookup.js';
@@ -121,12 +121,15 @@ export function collectAlertRuleAccessErrors(results: Array<{ connectionId: stri
   );
 }
 
-/** Attaches a clickable dashboard/panel URL to a bounded result list — called after slicing to `limit`, not before, so it never builds URLs for entries that get discarded anyway. */
+/**
+ * Attaches a clickable dashboard/panel URL to a bounded result list — called after slicing to `limit`, not before, so it never builds URLs for entries that get discarded anyway.
+ * `connections` maps each id to the connection its index was read through, so a link names the host that was searched.
+ */
 function withUrls<T extends { dashboardUid: string; panelId: number; connectionId: string }>(
-  registry: ConnectionRegistry,
+  connections: ReadonlyMap<string, GrafanaConnection>,
   items: T[],
 ): Array<T & { url: string | undefined }> {
-  return items.map((item) => ({ ...item, url: dashboardUrlFor(registry, item.connectionId, item.dashboardUid, { panelId: item.panelId }) }));
+  return items.map((item) => ({ ...item, url: dashboardUrlFor(connections.get(item.connectionId), item.dashboardUid, { panelId: item.panelId }) }));
 }
 
 export function registerFindRelatedDashboards(server: McpServer, { registry, config }: ToolContext): void {
@@ -179,15 +182,16 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
       try {
         return await withAudit('find_related_dashboards', { metricName, labels, query }, config, async () => {
           const connections = connection
-            ? [resolveToolClient(registry, { connection }).connectionId]
-            : registry.list().map((c) => c.id);
+            ? [(await resolveToolClient(registry, { connection })).connectionId]
+            : (await registry.list()).map((c) => c.id);
 
           const perConnection = await Promise.allSettled(
             connections.map(async (connectionId) => {
-              const client = registry.get(connectionId);
+              const { client, connection: searched } = await registry.resolve(connectionId);
               const index = await getOrBuildIndex(client, config, connectionId, { force: forceRefresh });
               return {
                 connectionId,
+                searched,
                 index,
                 candidates: searchIndex(index, connectionId, { metricName, labels, query, excludeDashboardUid }),
               };
@@ -195,22 +199,29 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           );
 
           const fulfilled = perConnection.filter(
-            (r): r is PromiseFulfilledResult<{ connectionId: string; index: MetricIndex; candidates: Candidate[] }> =>
+            (r): r is PromiseFulfilledResult<{ connectionId: string; searched: GrafanaConnection; index: MetricIndex; candidates: Candidate[] }> =>
               r.status === 'fulfilled',
           );
+          const searchedConnections = new Map(fulfilled.map((r) => [r.value.connectionId, r.value.searched]));
 
           // Independent of the metric index (a cheap tag search, not a full
           // crawl) and fetched separately so a knowledge-search failure on one
           // connection can never take down that connection's index/matches too.
           const knowledgePerConnection = await Promise.allSettled(
-            connections.map(async (connectionId) => ({
-              connectionId,
-              dashboards: await listKnowledgeDashboards(registry.get(connectionId), config, connectionId),
-            })),
+            connections.map(async (connectionId) => {
+              const { client, connection: searched } = await registry.resolve(connectionId);
+              return { connectionId, searched, dashboards: await listKnowledgeDashboards(client, config, connectionId) };
+            }),
           );
           const allKnowledgeDashboards = knowledgePerConnection
-            .filter((r): r is PromiseFulfilledResult<{ connectionId: string; dashboards: Awaited<ReturnType<typeof listKnowledgeDashboards>> }> => r.status === 'fulfilled')
+            .filter(
+              (r): r is PromiseFulfilledResult<{ connectionId: string; searched: GrafanaConnection; dashboards: Awaited<ReturnType<typeof listKnowledgeDashboards>> }> =>
+                r.status === 'fulfilled',
+            )
             .flatMap((r) => r.value.dashboards.map((d) => ({ ...d, connectionId: r.value.connectionId })));
+          const knowledgeConnections = new Map(
+            knowledgePerConnection.flatMap((r) => (r.status === 'fulfilled' ? [[r.value.connectionId, r.value.searched] as const] : [])),
+          );
 
           // The alert's own dashboard lives in exactly one of these connections'
           // indexes (or none, if it's not itself indexed yet) - whichever one
@@ -243,15 +254,15 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           const result = {
             indexBuiltAt: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.builtAt])),
             dashboardsScanned: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.index.dashboardsScanned])),
-            matches: withUrls(registry, allCandidates.slice(0, limit)),
+            matches: withUrls(searchedConnections, allCandidates.slice(0, limit)),
             matchesTotal: allCandidates.length,
-            alertBackedDashboards: withUrls(registry, allAlertBacked.slice(0, limit)),
+            alertBackedDashboards: withUrls(searchedConnections, allAlertBacked.slice(0, limit)),
             alertBackedTotal: allAlertBacked.length,
             // Only present for connections where the alert-rule crawl itself
             // failed — lets a zero/low alertBackedTotal be told apart from
             // "we tried and there genuinely are none" vs. "we couldn't ask."
             alertRuleAccessErrors,
-            brokenDatasources: withUrls(registry, allBroken.slice(0, limit)),
+            brokenDatasources: withUrls(searchedConnections, allBroken.slice(0, limit)),
             brokenDatasourcesTotal: allBroken.length,
             // brokenDatasourcesTotal counts panel references, which wildly
             // overstates the problem when a handful of retired datasources
@@ -268,7 +279,7 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
             // survey say "here's what's been published" instead of nothing.
             knowledgeDashboards: allKnowledgeDashboards.map((d) => ({
               ...d,
-              url: dashboardUrlFor(registry, d.connectionId, d.dashboardUid),
+              url: dashboardUrlFor(knowledgeConnections.get(d.connectionId), d.dashboardUid),
             })),
             knowledgeDashboardsTotal: allKnowledgeDashboards.length,
           };

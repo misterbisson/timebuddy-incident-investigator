@@ -59,11 +59,18 @@ function writeStoreFiles(connectionsFile, secretsFile, order) {
   }
 }
 
-function encryptSecret(payload) {
-  if (!safeStorage.isEncryptionAvailable()) {
+// safeStorage's async methods, not the sync ones: Electron 45 deprecated
+// isEncryptionAvailable/encryptString/decryptString and Electron 46 removes
+// them, along with the synchronous OSCrypt backend they sat on. The async
+// methods use the same per-platform key store, and decryptStringAsync reads
+// ciphertext the old encryptString wrote, so existing secrets.enc.json files
+// carry over unchanged. Both need the app to be `ready`, which every caller
+// here already is (main.js's whenReady, or an IPC handler behind a window).
+async function encryptSecret(payload) {
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) {
     throw new Error('OS keychain encryption is not available on this machine; cannot store credentials securely.');
   }
-  return safeStorage.encryptString(JSON.stringify(payload)).toString('base64');
+  return (await safeStorage.encryptStringAsync(JSON.stringify(payload))).toString('base64');
 }
 
 /**
@@ -72,11 +79,18 @@ function encryptSecret(payload) {
  * carry decrypted credential material into logs and the GUI. See
  * describeSecretFailure in connectionStoreCore.js. Neither branch re-throws
  * the original error, only a typed one with no payload attached.
+ *
+ * decryptStringAsync also reports `shouldReEncrypt` (the key rotated since this
+ * was written). It's deliberately not acted on here: this runs on every tool
+ * call, from however many --mcp-server processes are alive, and a read path
+ * that rewrites secrets.enc.json would race them and the GUI. `result` is the
+ * correct plaintext either way; the next save of that connection re-encrypts
+ * it under the current key.
  */
-function decryptSecret(encoded) {
+async function decryptSecret(encoded) {
   let plaintext;
   try {
-    plaintext = safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+    ({ result: plaintext } = await safeStorage.decryptStringAsync(Buffer.from(encoded, 'base64')));
   } catch {
     throw new SecretDecryptError('keychain could not decrypt the stored credential');
   }
@@ -116,11 +130,11 @@ function reportSecretFailures(failures) {
  * call, so one undecryptable secret must not fail every tool call, including
  * ones that never touch it.
  */
-function getConnectionsForEngine() {
+async function getConnectionsForEngine() {
   const { connections } = readConnectionsFile();
   const { secrets } = readSecretsFile();
   const grafanaConnections = connections.filter((meta) => (meta.kind ?? 'grafana') === 'grafana');
-  const { connections: built, failures } = buildEngineConnections(grafanaConnections, secrets, decryptSecret);
+  const { connections: built, failures } = await buildEngineConnections(grafanaConnections, secrets, decryptSecret);
   reportSecretFailures(failures);
   return built;
 }
@@ -137,11 +151,11 @@ function getConnectionsForEngine() {
  * a real username/password login (e.g. an LDAP-backed account), same as
  * Grafana's 'basic'.
  */
-function getLogConnectionsForEngine() {
+async function getLogConnectionsForEngine() {
   const { connections } = readConnectionsFile();
   const { secrets } = readSecretsFile();
   const logConnections = connections.filter((meta) => meta.kind === 'graylog');
-  const { connections: built, failures } = buildLogEngineConnections(logConnections, secrets, decryptSecret);
+  const { connections: built, failures } = await buildLogEngineConnections(logConnections, secrets, decryptSecret);
   reportSecretFailures(failures);
   return built;
 }
@@ -160,47 +174,87 @@ function getLogConnectionsForEngine() {
  * credential material can reach the renderer even though this function
  * decrypts. That distinction is what keeps the doc comment above true.
  */
-function listConnectionsForDisplay() {
+async function listConnectionsForDisplay() {
   const { connections } = readConnectionsFile();
   const { secrets } = readSecretsFile();
-  return connections.map((c) => {
-    const encoded = secrets[c.id];
-    let secretError;
-    if (encoded) {
-      try {
-        decryptSecret(encoded);
-      } catch (err) {
-        secretError = describeSecretFailure(err);
+  return Promise.all(
+    connections.map(async (c) => {
+      const encoded = secrets[c.id];
+      let secretError;
+      if (encoded) {
+        try {
+          await decryptSecret(encoded);
+        } catch (err) {
+          secretError = describeSecretFailure(err);
+        }
       }
-    }
-    return {
-      ...c,
-      kind: c.kind ?? 'grafana',
-      hasSecret: Boolean(encoded),
-      ...(secretError ? { secretError } : {}),
-    };
-  });
+      return {
+        ...c,
+        kind: c.kind ?? 'grafana',
+        hasSecret: Boolean(encoded),
+        ...(secretError ? { secretError } : {}),
+      };
+    }),
+  );
 }
 
 /**
- * Creates or updates a connection. Leaving `password`/`token` blank on an
- * edit keeps the existing stored secret (same behavior as Time Buddy's
- * connection form) — only a non-empty value overwrites it. `kind` is fixed
- * at creation (the renderer doesn't offer to change it on edit/duplicate);
- * defaults to 'grafana' so existing callers/tests that never set it keep
- * working unchanged.
+ * Runs `mutate` once every store mutation started before it has finished.
+ *
+ * Every write to the store goes through here: upsertConnection,
+ * importConnections, deleteConnection. A save awaits safeStorage's async
+ * encrypt partway through, so without one queue a mutation the user made
+ * *later* could finish *first*. A delete issued while an edit is still
+ * encrypting would run, then the edit would write the connection back, and the
+ * deleted connection would reappear. Likewise an import could plan against a
+ * store a GUI save is about to change. The queue keeps mutations in the order
+ * the user made them, which is what the synchronous API gave for free.
+ *
+ * It covers this process only. The connection store has one writer in
+ * practice, the GUI process; --mcp-server processes only read.
  */
-function upsertConnection(draft) {
-  const connectionsFile = readConnectionsFile();
-  const secretsFile = readSecretsFile();
+let mutationQueue = Promise.resolve();
+function serialized(mutate) {
+  const run = mutationQueue.then(mutate);
+  // A failed mutation reports its own error to its caller; it mustn't wedge
+  // every mutation queued after it.
+  mutationQueue = run.catch(() => {});
+  return run;
+}
 
+/** A draft's connection kind: fixed at creation, so an existing connection's kind always wins. */
+function kindFor(draft, existing) {
+  return existing?.kind ?? draft.kind ?? 'grafana';
+}
+
+/**
+ * Encrypts the draft's new credential, or returns undefined when the draft
+ * carries none (a blank password/token on an edit keeps the stored secret —
+ * see upsertConnection). Kept apart from applyUpsert so the only await in a
+ * save happens *before* the store files are read: see upsertConnection.
+ */
+async function encryptDraftSecret(draft, kind) {
+  const hasNewSecret = draft.authType === 'basic' ? Boolean(draft.password) : Boolean(draft.token);
+  if (!hasNewSecret) return undefined;
+  const payload =
+    draft.authType === 'basic'
+      ? { authType: 'basic', username: draft.username, password: draft.password }
+      : { authType: kind === 'graylog' ? 'token' : 'bearer', token: draft.token };
+  return encryptSecret(payload);
+}
+
+/**
+ * Applies one draft to the in-memory store files, synchronously. `encodedSecret`
+ * is encryptDraftSecret's result for this draft (undefined keeps any stored one).
+ */
+function applyUpsert(connectionsFile, secretsFile, draft, encodedSecret) {
   // The renderer's readDraft() never sets updatedAt, so the `?? new Date(0)`
   // this replaces meant every connection was stamped 1970-01-01 in practice.
   const now = draft.updatedAt ?? new Date().toISOString();
   const existingIndex = draft.id ? connectionsFile.connections.findIndex((c) => c.id === draft.id) : -1;
   const id = draft.id ?? crypto.randomUUID();
   const existing = existingIndex >= 0 ? connectionsFile.connections[existingIndex] : undefined;
-  const kind = existing?.kind ?? draft.kind ?? 'grafana';
+  const kind = kindFor(draft, existing);
 
   const meta =
     kind === 'graylog'
@@ -237,20 +291,37 @@ function upsertConnection(draft) {
   } else {
     connectionsFile.connections.push(meta);
   }
-
-  const hasNewSecret =
-    draft.authType === 'basic' ? Boolean(draft.password) : Boolean(draft.token);
-  if (hasNewSecret) {
-    const payload =
-      draft.authType === 'basic'
-        ? { authType: 'basic', username: draft.username, password: draft.password }
-        : { authType: kind === 'graylog' ? 'token' : 'bearer', token: draft.token };
-    secretsFile.secrets[id] = encryptSecret(payload);
+  if (encodedSecret) {
+    secretsFile.secrets[id] = encodedSecret;
   }
-
-  writeStoreFiles(connectionsFile, secretsFile, 'secrets-first');
-
   return { ...meta, hasSecret: Boolean(secretsFile.secrets[id]) };
+}
+
+/**
+ * Creates or updates a connection. Leaving `password`/`token` blank on an
+ * edit keeps the existing stored secret (same behavior as Time Buddy's
+ * connection form) — only a non-empty value overwrites it. `kind` is fixed
+ * at creation (the renderer doesn't offer to change it on edit/duplicate);
+ * defaults to 'grafana' so existing callers/tests that never set it keep
+ * working unchanged.
+ *
+ * Queued behind every earlier mutation (see serialized()), so nothing else in
+ * this process changes the store while it runs. It still encrypts first and
+ * then reads, modifies, and writes both files with no await in between: that
+ * keeps the read-to-write window as narrow as the synchronous API had it, for
+ * anything outside this process's queue.
+ */
+function upsertConnection(draft) {
+  return serialized(async () => {
+    const existing = draft.id ? readConnectionsFile().connections.find((c) => c.id === draft.id) : undefined;
+    const encodedSecret = await encryptDraftSecret(draft, kindFor(draft, existing));
+
+    const connectionsFile = readConnectionsFile();
+    const secretsFile = readSecretsFile();
+    const saved = applyUpsert(connectionsFile, secretsFile, draft, encodedSecret);
+    writeStoreFiles(connectionsFile, secretsFile, 'secrets-first');
+    return saved;
+  });
 }
 
 /**
@@ -297,8 +368,14 @@ function draftFromImportEntry(entry, existingId, shared, prior) {
  * Idempotent on url+kind: an entry matching an existing connection updates it in
  * place; anything else is created. Upsert-only — a connection absent from the
  * manifest is never touched, let alone deleted. Each entry goes through the same
- * upsertConnection path as the GUI, so it inherits the atomic writes, the
- * secrets-first ordering, and the blank-secret-keeps-existing behavior for free.
+ * applyUpsert as the GUI's upsertConnection, so it inherits the secrets-first
+ * ordering and the blank-secret-keeps-existing behavior for free.
+ *
+ * Queued like every other mutation (see serialized()), which is what keeps the
+ * plan honest: it's computed before the encrypts are awaited, and the queue
+ * means no GUI save or delete can change the store between that plan and the
+ * write that applies it. Then, as in upsertConnection, the whole import is
+ * applied and written in one synchronous pass.
  *
  * `sharedCredential` ({ username?, password? }) is optional and applies to
  * basic-auth entries only. Token/bearer entries, and basic entries with no
@@ -307,33 +384,51 @@ function draftFromImportEntry(entry, existingId, shared, prior) {
  * counts connections that have a stored secret afterward (freshly set or
  * preserved from a prior import/edit).
  */
-function importConnections(manifest, sharedCredential = {}) {
+async function importConnections(manifest, sharedCredential = {}) {
+  // Validated before queueing, so a bad manifest is refused without waiting
+  // behind other saves.
   const { connections: entries } = validateImportManifest(manifest);
+  return serialized(() => applyImport(entries, sharedCredential));
+}
+
+async function applyImport(entries, sharedCredential) {
   const { connections: existing } = readConnectionsFile();
   const { plan } = planImport(entries, existing);
   const existingById = new Map(existing.map((c) => [c.id, c]));
 
+  const prepared = await Promise.all(
+    plan.map(async (item) => {
+      const prior = item.existingId ? existingById.get(item.existingId) : undefined;
+      const draft = draftFromImportEntry(item.entry, item.existingId, sharedCredential, prior);
+      return { item, draft, encodedSecret: await encryptDraftSecret(draft, kindFor(draft, prior)) };
+    }),
+  );
+
+  const connectionsFile = readConnectionsFile();
+  const secretsFile = readSecretsFile();
   const summary = { total: plan.length, created: 0, updated: 0, configured: 0, needSecret: [] };
-  for (const item of plan) {
-    const prior = item.existingId ? existingById.get(item.existingId) : undefined;
-    const draft = draftFromImportEntry(item.entry, item.existingId, sharedCredential, prior);
-    const saved = upsertConnection(draft);
+  for (const { item, draft, encodedSecret } of prepared) {
+    const saved = applyUpsert(connectionsFile, secretsFile, draft, encodedSecret);
     if (item.action === 'update') summary.updated += 1;
     else summary.created += 1;
     if (saved.hasSecret) summary.configured += 1;
     else summary.needSecret.push({ name: item.entry.name, kind: item.entry.kind, authType: item.entry.authType });
   }
+  if (prepared.length > 0) writeStoreFiles(connectionsFile, secretsFile, 'secrets-first');
   return summary;
 }
 
+/** Removes a connection and its secret, queued behind any save still in flight (see serialized()). */
 function deleteConnection(id) {
-  const connectionsFile = readConnectionsFile();
-  const secretsFile = readSecretsFile();
+  return serialized(() => {
+    const connectionsFile = readConnectionsFile();
+    const secretsFile = readSecretsFile();
 
-  connectionsFile.connections = connectionsFile.connections.filter((c) => c.id !== id);
-  delete secretsFile.secrets[id];
+    connectionsFile.connections = connectionsFile.connections.filter((c) => c.id !== id);
+    delete secretsFile.secrets[id];
 
-  writeStoreFiles(connectionsFile, secretsFile, 'connections-first');
+    writeStoreFiles(connectionsFile, secretsFile, 'connections-first');
+  });
 }
 
 module.exports = {
