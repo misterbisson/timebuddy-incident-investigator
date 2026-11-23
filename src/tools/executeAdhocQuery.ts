@@ -383,8 +383,8 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
           auditArgs,
           config,
           async () => {
-            const { client, connectionId } = resolveToolClient(registry, { connection });
-            const authorizedTypes = registry.adhocDatasourceTypes(connectionId);
+            const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection });
+            const authorizedTypes = registry.adhocDatasourceTypes(resolved);
             const datasource = await resolveAuthorizedDatasource(client, datasourceUid, authorizedTypes);
             const dialect = GUARDABLE_TYPES[datasource.type]!;
 
@@ -412,7 +412,7 @@ export function registerExecuteAdhocQuery(server: McpServer, { registry, config 
             //   disagrees with the numbers returned. So the successful path
             //   rebuilds with those extras; a query whose step was never valid
             //   keeps the plain link, which is the honest shape for it.
-            const baseUrl = registry.list().find((c) => c.id === connectionId)?.url;
+            const baseUrl = resolved.url;
             const recordExploreUrl = (extras: { instant?: boolean; stepSeconds?: number }) => {
               if (!baseUrl) return;
               exploreUrl = buildExploreUrl(baseUrl, {

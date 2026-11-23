@@ -167,7 +167,7 @@ export function registerCorrelateLogs(server: McpServer, { registry, logRegistry
 
           const url =
             resolved.sourceType === 'graylog'
-              ? logSearchUrlFor(logRegistry, connectionId, {
+              ? logSearchUrlFor(resolved.connection, {
                   query,
                   fromMs: startsAtMs,
                   toMs: resolvedEndsAtMs,
@@ -186,7 +186,7 @@ export function registerCorrelateLogs(server: McpServer, { registry, logRegistry
             ...(warning ? { warning } : {}),
           };
           if (resolved.sourceType === 'graylog') {
-            recordLogActivity(logRegistry, activityLog, {
+            recordLogActivity(activityLog, resolved.connection, {
               toolName: 'correlate_logs',
               connectionId,
               query,

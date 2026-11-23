@@ -36,7 +36,13 @@ export interface ToolContext {
   activityLog?: ActivityLog;
 }
 
-export function registerAllTools(server: McpServer, ctx: ToolContext): void {
+/**
+ * Async only because the unmatched-ad-hoc-host warning below reads the
+ * connection source, which may be async (see ConnectionsSource). Every tool is
+ * registered before this resolves, so callers must await it before connecting
+ * a transport.
+ */
+export async function registerAllTools(server: McpServer, ctx: ToolContext): Promise<void> {
   registerGetAlertContext(server, ctx);
   registerListFiringAlerts(server, ctx);
   registerGetProductContext(server, ctx);
@@ -74,7 +80,7 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
     // "wrong hostname in .mcp.json" case surfaces here rather than as a
     // confusing per-call refusal later. stderr, never stdout: stdout is the MCP
     // JSON-RPC channel once the transport connects.
-    const unmatched = ctx.registry.unmatchedAdhocHosts();
+    const unmatched = await ctx.registry.unmatchedAdhocHosts();
     if (unmatched.length > 0) {
       console.error(
         `Warning: --allow-adhoc-queries names ${unmatched.length} host(s) matching no configured Grafana ` +

@@ -86,12 +86,12 @@ export function registerListFiringAlerts(server: McpServer, { registry, config }
       try {
         return await withAudit('list_firing_alerts', { connection, hasLabelFilters: Boolean(labelFilters) }, config, async () => {
           const connections = connection
-            ? [resolveToolClient(registry, { connection }).connectionId]
-            : registry.list().map((c) => c.id);
+            ? [(await resolveToolClient(registry, { connection })).connectionId]
+            : (await registry.list()).map((c) => c.id);
 
           const perConnection = await Promise.allSettled(
             connections.map(async (connectionId) => {
-              const client = registry.get(connectionId);
+              const client = await registry.get(connectionId);
               const alerts = await client.getFiringAlerts();
               return { connectionId, alerts: filterFiringAlerts(alerts, { labelFilters, limit }) };
             }),

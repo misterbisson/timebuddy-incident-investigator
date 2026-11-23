@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
-import type { Config } from '../config.js';
+import type { Config, GrafanaConnection } from '../config.js';
 import { dashboardUrlFor, recordActivity, toolErrorResult } from './shared.js';
 import {
   FORMULA_NEUTRALIZATION_NOTE,
@@ -121,7 +121,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
       annotations: { readOnlyHint: true, title: 'Export panel CSV' },
     },
     async ({ url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, renderWidth, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('export_panel_csv', { url, dashboardUid: inputDashboardUid, panelId: inputPanelId }, config, async () => {
@@ -134,7 +134,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
               verb: 'export',
               windowLabel: 'export',
               onContext: (c) => {
-                if (c.connectionId) resolvedConnectionId = c.connectionId;
+                if (c.connection) resolvedConnection = c.connection;
                 if (c.dashboardUid) resolvedDashboardUid = c.dashboardUid;
               },
             },
@@ -154,8 +154,8 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
             });
           }
 
-          const resultUrl = dashboardUrlFor(registry, inv.connectionId, inv.dashboardUid, { panelId: inv.panelId, fromMs: inv.fromMs, toMs: inv.toMs, variables: inv.overrides });
-          recordActivity(registry, activityLog, {
+          const resultUrl = dashboardUrlFor(inv.rawConnection, inv.dashboardUid, { panelId: inv.panelId, fromMs: inv.fromMs, toMs: inv.toMs, variables: inv.overrides });
+          recordActivity(activityLog, inv.rawConnection, {
             toolName: 'export_panel_csv',
             connectionId: inv.connectionId,
             dashboardUid: inv.dashboardUid,
@@ -191,7 +191,7 @@ export function registerExportPanelCsv(server: McpServer, { registry, config, sc
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(resultOut, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
+        const errorUrl = resolvedConnection && resolvedDashboardUid ? dashboardUrlFor(resolvedConnection, resolvedDashboardUid) : undefined;
         return toolErrorResult(err, config, errorUrl);
       }
     },

@@ -6,6 +6,7 @@ import { flattenPanels, resolvePanelDataLinks } from '../dashboards/panelQueries
 import { dashboardUrlFor, resolveGotoUrl, resolveToolClient, toolErrorResult } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import type { GrafanaConnection } from '../config.js';
 
 export function registerFetchDashboard(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
@@ -33,16 +34,16 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
       annotations: { readOnlyHint: true, title: 'Fetch dashboard' },
     },
     async ({ url, dashboardUid: inputDashboardUid, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('fetch_dashboard', { url, dashboardUid: inputDashboardUid }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection, hintUrl: url });
-          resolvedConnectionId = connectionId;
+          const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection, hintUrl: url });
+          resolvedConnection = resolved;
 
           let dashboardUid = inputDashboardUid;
           if (url) {
-            const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, url);
+            const resolvedUrl = await resolveGotoUrl(client, resolved, url);
             const parsed = parseGrafanaUrl(resolvedUrl);
             if (parsed.type === 'dashboard') {
               dashboardUid = parsed.uid;
@@ -77,7 +78,7 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
             type: p.type,
             hasTargets: Boolean(p.targets?.length),
             hasDataLinks: resolvePanelDataLinks(p).length > 0,
-            url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: p.id }),
+            url: dashboardUrlFor(resolved, dashboardUid, { panelId: p.id }),
           }));
           const result = redact(
             {
@@ -85,7 +86,7 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
               title: dashboard.title,
               tags: dashboard.tags,
               folderTitle: meta.folderTitle,
-              url: dashboardUrlFor(registry, connectionId, dashboardUid),
+              url: dashboardUrlFor(resolved, dashboardUid),
               panels,
               variables: (dashboard.templating?.list ?? []).map((v) => ({
                 name: v.name,
@@ -99,7 +100,7 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
           return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
         });
       } catch (err) {
-        const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
+        const errorUrl = resolvedConnection && resolvedDashboardUid ? dashboardUrlFor(resolvedConnection, resolvedDashboardUid) : undefined;
         return toolErrorResult(err, config, errorUrl);
       }
     },

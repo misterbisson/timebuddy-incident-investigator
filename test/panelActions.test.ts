@@ -78,7 +78,7 @@ describe('createPanelActions.screenshot', () => {
       width: req.width,
       height: req.height,
     }));
-    const actions = createPanelActions(connections, {}, { capturePanel, exportPanelCsv: vi.fn(async () => ({})) });
+    const actions = await createPanelActions(connections, {}, { capturePanel, exportPanelCsv: vi.fn(async () => ({})) });
 
     const res = await actions.screenshot({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
 
@@ -105,7 +105,7 @@ describe('createPanelActions.screenshot', () => {
       },
       meta: {},
     };
-    const actions = createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(async (req: Parameters<Screenshotter['capturePanel']>[0]) => ({ png: Buffer.from('PNG'), width: req.width, height: req.height })), exportPanelCsv: vi.fn() });
+    const actions = await createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(async (req: Parameters<Screenshotter['capturePanel']>[0]) => ({ png: Buffer.from('PNG'), width: req.width, height: req.height })), exportPanelCsv: vi.fn() });
 
     const res = await actions.screenshot({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
 
@@ -119,7 +119,7 @@ describe('createPanelActions.exportCsv', () => {
   it('falls back to the direct export when the panel has no transformations, neutralizing and naming the file', async () => {
     state.dashboard = timeseriesDashboard();
     state.queryDs = timeseriesQueryDsResponse;
-    const actions = createPanelActions(connections, {}, noScreenshotter());
+    const actions = await createPanelActions(connections, {}, noScreenshotter());
 
     const res = await actions.exportCsv({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
 
@@ -140,7 +140,7 @@ describe('createPanelActions.exportCsv', () => {
       expect(req.headers.Authorization).toBe('Bearer x');
       return { csv: Buffer.from('Field,Formula\r\nweb1,=1+1\r\n') };
     });
-    const actions = createPanelActions(connections, {}, { capturePanel: vi.fn(), exportPanelCsv });
+    const actions = await createPanelActions(connections, {}, { capturePanel: vi.fn(), exportPanelCsv });
 
     const res = await actions.exportCsv({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
 
@@ -155,7 +155,7 @@ describe('createPanelActions.exportCsv', () => {
   it('redacts configured patterns from both the file content and the metadata', async () => {
     state.dashboard = timeseriesDashboard();
     const exportPanelCsv = vi.fn(async () => ({ csv: Buffer.from('Field,Val\r\nSECRET-123,1\r\n') }));
-    const actions = createPanelActions(connections, { redactionPatterns: [/SECRET-\d+/g, /Requests/g] }, { capturePanel: vi.fn(), exportPanelCsv });
+    const actions = await createPanelActions(connections, { redactionPatterns: [/SECRET-\d+/g, /Requests/g] }, { capturePanel: vi.fn(), exportPanelCsv });
 
     const res = await actions.exportCsv({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
 
@@ -180,7 +180,7 @@ describe('createPanelActions.exportCsv', () => {
       meta: {},
     };
     const exportPanelCsv = vi.fn(async () => ({ csv: Buffer.from('host,ACME-customer\r\nweb1,42\r\n') }));
-    const actions = createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(), exportPanelCsv });
+    const actions = await createPanelActions(connections, { redactionPatterns: [/ACME/gi] }, { capturePanel: vi.fn(), exportPanelCsv });
 
     const res = await actions.exportCsv({ connection: 'test', dashboardUid: 'reqs', panelId: 2, ...WINDOW });
 
@@ -198,7 +198,7 @@ describe('createPanelActions.exportCsv', () => {
       meta: {},
     };
     state.queryDs = timeseriesQueryDsResponse;
-    const actions = createPanelActions(connections, {}, noScreenshotter());
+    const actions = await createPanelActions(connections, {}, noScreenshotter());
 
     const res = await actions.exportCsv({ connection: 'test', dashboardUid: 'x', panelId: 7, ...WINDOW });
 
@@ -208,7 +208,7 @@ describe('createPanelActions.exportCsv', () => {
   it('resolves the panel and window from a round-trippable dashboard/panel URL, as the Activity window passes it', async () => {
     state.dashboard = timeseriesDashboard();
     state.queryDs = timeseriesQueryDsResponse;
-    const actions = createPanelActions(connections, {}, noScreenshotter());
+    const actions = await createPanelActions(connections, {}, noScreenshotter());
 
     const res = await actions.exportCsv({
       connection: 'test',
@@ -221,7 +221,7 @@ describe('createPanelActions.exportCsv', () => {
 
   it('rejects with the underlying error when the panel does not exist', async () => {
     state.dashboard = timeseriesDashboard();
-    const actions = createPanelActions(connections, {}, noScreenshotter());
+    const actions = await createPanelActions(connections, {}, noScreenshotter());
 
     await expect(actions.exportCsv({ connection: 'test', dashboardUid: 'reqs', panelId: 999, ...WINDOW })).rejects.toThrow(/Panel 999 not found/);
   });

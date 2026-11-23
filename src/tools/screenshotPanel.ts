@@ -14,7 +14,7 @@ import {
 } from './panelInvocation.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
-import type { Config } from '../config.js';
+import type { Config, GrafanaConnection } from '../config.js';
 
 const DEFAULT_WIDTH = DEFAULT_SCREENSHOT_WIDTH;
 const DEFAULT_HEIGHT = DEFAULT_SCREENSHOT_HEIGHT;
@@ -90,7 +90,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
       annotations: { readOnlyHint: true, title: 'Screenshot panel' },
     },
     async ({ url, dashboardUid: inputDashboardUid, panelId: inputPanelId, panelTitle, fromMs: inputFromMs, toMs: inputToMs, variableOverrides, width: inputWidth, height: inputHeight, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('screenshot_panel', { url, dashboardUid: inputDashboardUid, panelId: inputPanelId }, config, async () => {
@@ -103,7 +103,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
               verb: 'capture',
               windowLabel: 'screenshot',
               onContext: (c) => {
-                if (c.connectionId) resolvedConnectionId = c.connectionId;
+                if (c.connection) resolvedConnection = c.connection;
                 if (c.dashboardUid) resolvedDashboardUid = c.dashboardUid;
               },
             },
@@ -116,8 +116,8 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
           const { png, width, height, warnings } = await generatePanelPng(screenshotter, config, inv, { width: inputWidth, height: inputHeight });
           const savedTo = await saveScreenshot(png, inv.dashboardUid, inv.panelId, config);
 
-          const resultUrl = dashboardUrlFor(registry, inv.connectionId, inv.dashboardUid, { panelId: inv.panelId, fromMs: inv.fromMs, toMs: inv.toMs, variables: inv.overrides });
-          recordActivity(registry, activityLog, {
+          const resultUrl = dashboardUrlFor(inv.rawConnection, inv.dashboardUid, { panelId: inv.panelId, fromMs: inv.fromMs, toMs: inv.toMs, variables: inv.overrides });
+          recordActivity(activityLog, inv.rawConnection, {
             toolName: 'screenshot_panel',
             connectionId: inv.connectionId,
             dashboardUid: inv.dashboardUid,
@@ -152,7 +152,7 @@ export function registerScreenshotPanel(server: McpServer, ctx: ToolContext & { 
           };
         });
       } catch (err) {
-        const errorUrl = resolvedConnectionId && resolvedDashboardUid ? dashboardUrlFor(registry, resolvedConnectionId, resolvedDashboardUid) : undefined;
+        const errorUrl = resolvedConnection && resolvedDashboardUid ? dashboardUrlFor(resolvedConnection, resolvedDashboardUid) : undefined;
         return toolErrorResult(err, config, errorUrl);
       }
     },

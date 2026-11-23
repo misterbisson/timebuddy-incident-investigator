@@ -26,21 +26,21 @@ import { guardStdioPipe } from './stdioPipe.js';
  * guard, only something resolveConnection reports if a log tool is actually
  * called with none configured.
  */
-export function createServer(
+export async function createServer(
   source: ConnectionsSource,
   configOverrides: Partial<Config> = {},
   screenshotter?: Screenshotter,
   activityLog?: ActivityLog,
   logSource: LogConnectionsSource = [],
-): McpServer {
-  const startupSnapshot = typeof source === 'function' ? source() : source;
+): Promise<McpServer> {
+  const startupSnapshot = typeof source === 'function' ? await source() : source;
   if (startupSnapshot.length === 0) {
     throw new Error(
       'No Grafana connections configured. Set GRAFANA_URL/GRAFANA_TOKEN, or add connections in the ' +
         'connection manager app (see README).',
     );
   }
-  const logStartupSnapshot = typeof logSource === 'function' ? logSource() : logSource;
+  const logStartupSnapshot = typeof logSource === 'function' ? await logSource() : logSource;
 
   const config: Config = {
     ...loadConfig(),
@@ -62,7 +62,7 @@ export function createServer(
     version: '0.13.3', // x-release-please-version
   });
 
-  registerAllTools(server, { registry, logRegistry, config, screenshotter, activityLog });
+  await registerAllTools(server, { registry, logRegistry, config, screenshotter, activityLog });
   return server;
 }
 
@@ -95,7 +95,7 @@ export async function startMcpServer(
     reason: ShutdownReason;
   }) => boolean | void | Promise<boolean | void>,
 ): Promise<McpServer> {
-  const server = createServer(source, configOverrides, screenshotter, activityLog, logSource);
+  const server = await createServer(source, configOverrides, screenshotter, activityLog, logSource);
 
   // Bound the local data dir's disk footprint once per process start. Kept off
   // the createServer() construction path (which unit tests exercise heavily and

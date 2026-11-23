@@ -178,8 +178,9 @@ function writeJsonFileAtomic(filePath, value) {
  * Assembles the engine's GrafanaConnection[] from stored metadata plus
  * decrypted secrets, isolating each connection's decrypt.
  *
- * safeStorage.decryptString throws whenever the keychain entry no longer
- * matches the ciphertext — an OS reinstall, a keychain reset, a machine
+ * The decrypt (safeStorage.decryptStringAsync, behind connectionStore.js's
+ * decryptSecret) rejects whenever the keychain entry no longer matches the
+ * ciphertext — an OS reinstall, a keychain reset, a machine
  * migration, or an app.setName change (the risk main.js's own header comment
  * calls out). Because this runs on *every* tool call via the ConnectionsSource
  * thunk, letting one such throw escape meant a single stale connection made
@@ -194,18 +195,10 @@ function writeJsonFileAtomic(filePath, value) {
  * list stays honest about what's configured. Dropping it instead would make
  * the connection appear to have never existed.
  */
-function buildEngineConnections(connections, secrets, decrypt) {
-  const failures = [];
-  const built = connections.map((meta) => {
-    let secret;
-    const encoded = secrets[meta.id];
-    if (encoded) {
-      try {
-        secret = decrypt(encoded);
-      } catch (err) {
-        failures.push({ id: meta.id, name: meta.name, reason: describeSecretFailure(err) });
-      }
-    }
+async function buildEngineConnections(connections, secrets, decrypt) {
+  const { secrets: decrypted, failures } = await decryptEach(connections, secrets, decrypt);
+  const built = connections.map((meta, i) => {
+    const secret = decrypted[i];
     return {
       id: meta.id,
       name: meta.name,
@@ -223,6 +216,31 @@ function buildEngineConnections(connections, secrets, decrypt) {
 }
 
 /**
+ * Decrypts every connection's stored secret concurrently, each in its own
+ * try/catch (the isolation buildEngineConnections's doc comment explains).
+ * `secrets[i]` is connection i's decrypted payload, or undefined when it has
+ * none or it wouldn't decrypt; `failures` keeps connection order regardless of
+ * which decrypt settles first, so the report is stable from call to call.
+ */
+async function decryptEach(connections, secrets, decrypt) {
+  const outcomes = await Promise.all(
+    connections.map(async (meta) => {
+      const encoded = secrets[meta.id];
+      if (!encoded) return {};
+      try {
+        return { secret: await decrypt(encoded) };
+      } catch (err) {
+        return { failure: { id: meta.id, name: meta.name, reason: describeSecretFailure(err) } };
+      }
+    }),
+  );
+  return {
+    secrets: outcomes.map((o) => o.secret),
+    failures: outcomes.filter((o) => o.failure).map((o) => o.failure),
+  };
+}
+
+/**
  * Log-connection counterpart to buildEngineConnections() — same
  * isolate-each-decrypt contract (see that function's doc comment for why),
  * mapped to Graylog's LogConnection shape instead of GrafanaConnection's.
@@ -233,18 +251,10 @@ function buildEngineConnections(connections, secrets, decrypt) {
  * the username and the literal string "token" as the password. 'basic' here
  * is a real username/password login, same as Grafana's 'basic'.
  */
-function buildLogEngineConnections(connections, secrets, decrypt) {
-  const failures = [];
-  const built = connections.map((meta) => {
-    let secret;
-    const encoded = secrets[meta.id];
-    if (encoded) {
-      try {
-        secret = decrypt(encoded);
-      } catch (err) {
-        failures.push({ id: meta.id, name: meta.name, reason: describeSecretFailure(err) });
-      }
-    }
+async function buildLogEngineConnections(connections, secrets, decrypt) {
+  const { secrets: decrypted, failures } = await decryptEach(connections, secrets, decrypt);
+  const built = connections.map((meta, i) => {
+    const secret = decrypted[i];
     return {
       id: meta.id,
       name: meta.name,
