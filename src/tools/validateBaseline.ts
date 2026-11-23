@@ -9,6 +9,7 @@ import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, 
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import type { GrafanaConnection } from '../config.js';
 
 function seriesKey(series: QuerySeries): string {
   const labelStr = Object.entries(series.labels).sort().map(([k, v]) => `${k}=${v}`).join(',');
@@ -62,11 +63,11 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
       annotations: { readOnlyHint: true, title: 'Validate baseline' },
     },
     async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, variableOverrides, zThreshold, controlOffsets, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       try {
         return await withAudit('validate_baseline', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
-          const { client, connectionId } = await resolveToolClient(registry, { connection });
-          resolvedConnectionId = connectionId;
+          const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection });
+          resolvedConnection = resolved;
           const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets });
           // Fail fast, before running a single Grafana query, rather than
           // executing an accidentally-huge window — see execute_query_window
@@ -148,12 +149,12 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
             };
           });
 
-          const url = dashboardUrlFor(registry, connectionId, dashboardUid, {
+          const url = dashboardUrlFor(resolved, dashboardUid, {
             panelId,
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
           });
-          recordActivity(registry, activityLog, {
+          recordActivity(activityLog, resolved, {
             toolName: 'validate_baseline',
             connectionId,
             dashboardUid,
@@ -185,7 +186,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
+        const url = resolvedConnection ? dashboardUrlFor(resolvedConnection, dashboardUid, { panelId }) : undefined;
         return toolErrorResult(err, config, url);
       }
     },

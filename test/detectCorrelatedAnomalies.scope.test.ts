@@ -121,7 +121,7 @@ function makeRegistry(clientsByConnection: Record<string, GrafanaClient>): Conne
   return {
     list: async () => connections,
     get: async (id: string) => clientsByConnection[id]!,
-    lastListed: () => connections,
+    resolve: async (id: string) => ({ client: clientsByConnection[id]!, connection: connections.find((c) => c.id === id)! }),
   } as unknown as ConnectionRegistry;
 }
 

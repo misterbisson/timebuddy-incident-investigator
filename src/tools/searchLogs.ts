@@ -124,7 +124,7 @@ export function registerSearchLogs(server: McpServer, { registry, logRegistry, c
             limit: clampedLimit,
           });
 
-          const url = logSearchUrlFor(logRegistry, connectionId, {
+          const url = logSearchUrlFor(resolved.connection, {
             query,
             fromMs: startsAtMs,
             toMs: resolvedEndsAtMs,
@@ -139,7 +139,7 @@ export function registerSearchLogs(server: McpServer, { registry, logRegistry, c
             url,
             ...(warning ? { warning } : {}),
           };
-          recordLogActivity(logRegistry, activityLog, {
+          recordLogActivity(activityLog, resolved.connection, {
             toolName: 'search_logs',
             connectionId,
             query,

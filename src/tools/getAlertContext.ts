@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { GrafanaConnection } from '../config.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from './registerAll.js';
 import { resolveAlertContext } from '../alerts/ingest.js';
@@ -81,10 +82,13 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
           // path; resolve a connection lazily so webhook/pasted-JSON input
           // never requires one up front.
           let resolvedConnectionId: string | undefined;
+          let resolvedConnection: GrafanaConnection | undefined;
           const getClient = async (hintUrl?: string) => {
-            const resolved = resolveConnection({ explicitId: args.connection, hintUrl }, await registry.list());
-            resolvedConnectionId = resolved.connection.id;
-            return await registry.get(resolved.connection.id);
+            const chosen = resolveConnection({ explicitId: args.connection, hintUrl }, await registry.list());
+            const { client, connection } = await registry.resolve(chosen.connection.id);
+            resolvedConnectionId = connection.id;
+            resolvedConnection = connection;
+            return client;
           };
 
           const alertContext = await resolveAlertContext(
@@ -99,6 +103,7 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
                 await registry.list(),
               );
               resolvedConnectionId = resolved.connection.id;
+              resolvedConnection = resolved.connection;
             } catch (err) {
               alertContext.warnings.push(
                 `Could not resolve a Grafana connection: ${err instanceof Error ? err.message : String(err)}`,
@@ -117,8 +122,8 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
             return Number.isFinite(parsed) ? parsed : undefined;
           };
           const dashboardUrl =
-            resolvedConnectionId && alertContext.dashboardUid
-              ? dashboardUrlFor(registry, resolvedConnectionId, alertContext.dashboardUid, {
+            alertContext.dashboardUid
+              ? dashboardUrlFor(resolvedConnection, alertContext.dashboardUid, {
                   panelId: alertContext.panelId,
                   fromMs: parseMsOrUndefined(alertContext.startsAt),
                   toMs: parseMsOrUndefined(alertContext.endsAt),

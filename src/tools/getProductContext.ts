@@ -29,7 +29,7 @@ export function registerGetProductContext(server: McpServer, { registry, config 
     async ({ productKey, dashboardUid, connection }) => {
       try {
         return await withAudit('get_product_context', { productKey, dashboardUid }, config, async () => {
-          const { client, connectionId } = await resolveToolClient(registry, { connection });
+          const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection });
 
           if (dashboardUid) {
             const { meta } = await client.getDashboard(dashboardUid);
@@ -38,14 +38,14 @@ export function registerGetProductContext(server: McpServer, { registry, config 
               candidateKeys: [productKey],
             });
             const matches = found
-              ? [{ ...found, url: dashboardUrlFor(registry, connectionId, found.dashboardUid, { panelId: found.panelId }) }]
+              ? [{ ...found, url: dashboardUrlFor(resolved, found.dashboardUid, { panelId: found.panelId }) }]
               : [];
             const result = { productKey, connection: connectionId, matches };
             return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
           }
 
           const found = await findProductContextAcrossConnection(client, config, connectionId, productKey);
-          const matches = found.map((m) => ({ ...m, url: dashboardUrlFor(registry, connectionId, m.dashboardUid, { panelId: m.panelId }) }));
+          const matches = found.map((m) => ({ ...m, url: dashboardUrlFor(resolved, m.dashboardUid, { panelId: m.panelId }) }));
           const result = { productKey, connection: connectionId, matches };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });

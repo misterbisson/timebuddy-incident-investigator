@@ -198,6 +198,30 @@ async function listConnectionsForDisplay() {
   );
 }
 
+/**
+ * Runs `mutate` once every store mutation started before it has finished.
+ *
+ * Every write to the store goes through here: upsertConnection,
+ * importConnections, deleteConnection. A save awaits safeStorage's async
+ * encrypt partway through, so without one queue a mutation the user made
+ * *later* could finish *first*. A delete issued while an edit is still
+ * encrypting would run, then the edit would write the connection back, and the
+ * deleted connection would reappear. Likewise an import could plan against a
+ * store a GUI save is about to change. The queue keeps mutations in the order
+ * the user made them, which is what the synchronous API gave for free.
+ *
+ * It covers this process only. The connection store has one writer in
+ * practice, the GUI process; --mcp-server processes only read.
+ */
+let mutationQueue = Promise.resolve();
+function serialized(mutate) {
+  const run = mutationQueue.then(mutate);
+  // A failed mutation reports its own error to its caller; it mustn't wedge
+  // every mutation queued after it.
+  mutationQueue = run.catch(() => {});
+  return run;
+}
+
 /** A draft's connection kind: fixed at creation, so an existing connection's kind always wins. */
 function kindFor(draft, existing) {
   return existing?.kind ?? draft.kind ?? 'grafana';
@@ -281,22 +305,23 @@ function applyUpsert(connectionsFile, secretsFile, draft, encodedSecret) {
  * defaults to 'grafana' so existing callers/tests that never set it keep
  * working unchanged.
  *
- * Encrypts first, then reads, modifies, and writes both store files with no
- * await in between. That ordering is the point: with the encrypt awaited
- * between the read and the write, two saves in flight together would each
- * write back the copy they read, and the second would silently drop the
- * first's change. The early read below only learns the kind (which can't
- * change once a connection exists), so it can't go stale in a way that matters.
+ * Queued behind every earlier mutation (see serialized()), so nothing else in
+ * this process changes the store while it runs. It still encrypts first and
+ * then reads, modifies, and writes both files with no await in between: that
+ * keeps the read-to-write window as narrow as the synchronous API had it, for
+ * anything outside this process's queue.
  */
-async function upsertConnection(draft) {
-  const existing = draft.id ? readConnectionsFile().connections.find((c) => c.id === draft.id) : undefined;
-  const encodedSecret = await encryptDraftSecret(draft, kindFor(draft, existing));
+function upsertConnection(draft) {
+  return serialized(async () => {
+    const existing = draft.id ? readConnectionsFile().connections.find((c) => c.id === draft.id) : undefined;
+    const encodedSecret = await encryptDraftSecret(draft, kindFor(draft, existing));
 
-  const connectionsFile = readConnectionsFile();
-  const secretsFile = readSecretsFile();
-  const saved = applyUpsert(connectionsFile, secretsFile, draft, encodedSecret);
-  writeStoreFiles(connectionsFile, secretsFile, 'secrets-first');
-  return saved;
+    const connectionsFile = readConnectionsFile();
+    const secretsFile = readSecretsFile();
+    const saved = applyUpsert(connectionsFile, secretsFile, draft, encodedSecret);
+    writeStoreFiles(connectionsFile, secretsFile, 'secrets-first');
+    return saved;
+  });
 }
 
 /**
@@ -346,9 +371,11 @@ function draftFromImportEntry(entry, existingId, shared, prior) {
  * applyUpsert as the GUI's upsertConnection, so it inherits the secrets-first
  * ordering and the blank-secret-keeps-existing behavior for free.
  *
- * Same encrypt-then-write shape as upsertConnection, for the same reason: every
- * entry's credential is encrypted up front, and then the whole import is applied
- * and written in one synchronous pass, so a GUI save can't interleave with it.
+ * Queued like every other mutation (see serialized()), which is what keeps the
+ * plan honest: it's computed before the encrypts are awaited, and the queue
+ * means no GUI save or delete can change the store between that plan and the
+ * write that applies it. Then, as in upsertConnection, the whole import is
+ * applied and written in one synchronous pass.
  *
  * `sharedCredential` ({ username?, password? }) is optional and applies to
  * basic-auth entries only. Token/bearer entries, and basic entries with no
@@ -358,7 +385,13 @@ function draftFromImportEntry(entry, existingId, shared, prior) {
  * preserved from a prior import/edit).
  */
 async function importConnections(manifest, sharedCredential = {}) {
+  // Validated before queueing, so a bad manifest is refused without waiting
+  // behind other saves.
   const { connections: entries } = validateImportManifest(manifest);
+  return serialized(() => applyImport(entries, sharedCredential));
+}
+
+async function applyImport(entries, sharedCredential) {
   const { connections: existing } = readConnectionsFile();
   const { plan } = planImport(entries, existing);
   const existingById = new Map(existing.map((c) => [c.id, c]));
@@ -385,14 +418,17 @@ async function importConnections(manifest, sharedCredential = {}) {
   return summary;
 }
 
+/** Removes a connection and its secret, queued behind any save still in flight (see serialized()). */
 function deleteConnection(id) {
-  const connectionsFile = readConnectionsFile();
-  const secretsFile = readSecretsFile();
+  return serialized(() => {
+    const connectionsFile = readConnectionsFile();
+    const secretsFile = readSecretsFile();
 
-  connectionsFile.connections = connectionsFile.connections.filter((c) => c.id !== id);
-  delete secretsFile.secrets[id];
+    connectionsFile.connections = connectionsFile.connections.filter((c) => c.id !== id);
+    delete secretsFile.secrets[id];
 
-  writeStoreFiles(connectionsFile, secretsFile, 'connections-first');
+    writeStoreFiles(connectionsFile, secretsFile, 'connections-first');
+  });
 }
 
 module.exports = {

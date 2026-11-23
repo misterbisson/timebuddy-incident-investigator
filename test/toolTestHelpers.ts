@@ -39,13 +39,20 @@ export function fakeServer(): {
   };
 }
 
-// list()/get() resolve asynchronously, like the real registries, so a call
-// site that forgets to await them fails here rather than passing by accident.
+/** The listed connection with this id, or the error the real registries throw for an unknown one. */
+function connectionById<T extends { id: string }>(connections: T[], id: string): T {
+  const connection = connections.find((c) => c.id === id);
+  if (!connection) throw new Error(`Unknown connection "${id}"`);
+  return connection;
+}
+
+// list()/get()/resolve() resolve asynchronously, like the real registries, so a
+// call site that forgets to await them fails here rather than passing by accident.
 export function fakeRegistry(connections: GrafanaConnection[], client: GrafanaClient): ConnectionRegistry {
   return {
     list: async () => connections,
     get: async () => client,
-    lastListed: () => connections,
+    resolve: async (id: string) => ({ client, connection: connectionById(connections, id) }),
   } as unknown as ConnectionRegistry;
 }
 
@@ -53,7 +60,7 @@ export function fakeLogRegistry(connections: LogConnection[], client: GraylogCli
   return {
     list: async () => connections,
     get: async () => client,
-    lastListed: () => connections,
+    resolve: async (id: string) => ({ client, connection: connectionById(connections, id) }),
   } as unknown as LogConnectionRegistry;
 }
 

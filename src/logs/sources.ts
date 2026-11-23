@@ -124,7 +124,7 @@ export async function listLogSources(
 }
 
 export type ResolvedLogSource =
-  | { sourceType: 'graylog'; source: GraylogLogSource; client: GraylogClient }
+  | { sourceType: 'graylog'; source: GraylogLogSource; client: GraylogClient; connection: LogConnection }
   | { sourceType: 'loki'; source: LokiLogSource; client: GrafanaClient; grafanaUrl: string; grafanaName: string };
 
 /** How a refusal or `ambiguousWith` names one reading of an id. */
@@ -183,6 +183,15 @@ async function probeLokiSplit(registry: ConnectionRegistry, split: LokiIdSplit):
 }
 
 /**
+ * A Graylog source whose client, listing, and `connection` (the display fields
+ * its search URL and Activity entry use) all come from one read of the store.
+ */
+async function resolvedGraylog(logRegistry: LogConnectionRegistry, id: string): Promise<ResolvedLogSource> {
+  const { client, connection } = await logRegistry.resolve(id);
+  return { sourceType: 'graylog', source: graylogSource(connection), client, connection };
+}
+
+/**
  * Picks the log source a search_logs / correlate_logs call runs against.
  *
  * Same rules as connections/resolve.ts's resolveConnection — an explicit id
@@ -211,7 +220,7 @@ export async function resolveLogSource(
     const graylog = graylogConnections.find((c) => c.id === explicitId);
     const splits = await lokiIdSplits(registry, explicitId);
     if (graylog && splits.length === 0) {
-      return { sourceType: 'graylog', source: graylogSource(graylog), client: await logRegistry!.get(graylog.id) };
+      return resolvedGraylog(logRegistry!, graylog.id);
     }
 
     const probes = await Promise.all(splits.map((split) => probeLokiSplit(registry!, split)));
@@ -240,16 +249,19 @@ export async function resolveLogSource(
       );
     }
     if (graylog) {
-      return { sourceType: 'graylog', source: graylogSource(graylog), client: await logRegistry!.get(graylog.id) };
+      return resolvedGraylog(logRegistry!, graylog.id);
     }
     if (matches.length === 1) {
       const { grafana, datasource } = matches[0]!;
+      // The display fields come from the read that built the client, not from
+      // the probe's earlier one, so a link can't name a host the search skipped.
+      const { client, connection } = await registry!.resolve(grafana.id);
       return {
         sourceType: 'loki',
-        source: lokiSource(grafana, datasource),
-        client: await registry!.get(grafana.id),
-        grafanaUrl: grafana.url,
-        grafanaName: grafana.name,
+        source: lokiSource(connection, datasource),
+        client,
+        grafanaUrl: connection.url,
+        grafanaName: connection.name,
       };
     }
     // Nothing matched. With one candidate split, say exactly why it didn't.

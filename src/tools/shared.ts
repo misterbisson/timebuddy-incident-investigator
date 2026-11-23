@@ -13,7 +13,7 @@ import { buildGraylogSearchUrl } from '../graylog/urlBuilder.js';
 import type { GraylogClient } from '../graylog/client.js';
 import type { LogConnectionRegistry } from '../graylog/registry.js';
 import type { ActivityLog } from '../activity/activityLog.js';
-import type { Config } from '../config.js';
+import type { Config, GrafanaConnection, LogConnection } from '../config.js';
 import { redact } from '../security/redact.js';
 import { enforceWindowLimit } from '../security/limits.js';
 
@@ -49,41 +49,45 @@ export const epochMsSchema = z.union([z.number(), z.string()]).transform((value,
 export async function resolveToolClient(
   registry: ConnectionRegistry,
   input: { connection?: string; hintUrl?: string },
-): Promise<{ client: GrafanaClient; connectionId: string }> {
-  const { connection } = resolveConnection(
+): Promise<{ client: GrafanaClient; connectionId: string; connection: GrafanaConnection }> {
+  const { connection: chosen } = resolveConnection(
     { explicitId: input.connection, hintUrl: input.hintUrl },
     await registry.list(),
   );
-  return { client: await registry.get(connection.id), connectionId: connection.id };
+  const { client, connection } = await registry.resolve(chosen.id);
+  return { client, connectionId: connection.id, connection };
 }
 
 /**
  * Builds a clickable dashboard/panel URL for a connection a tool already
  * resolved — so a human reading a result can jump straight to it in Grafana
  * instead of manually reconstructing a link from a bare dashboardUid/panelId.
- * Returns undefined (never throws) if the connection can't be found, since
+ * Returns undefined (never throws) when no connection was resolved yet, since
  * this is always a nice-to-have addition to a result, not something worth
  * failing a whole tool call over.
+ *
+ * Takes the connection itself, not an id to look up, and that's deliberate:
+ * pass the one resolveToolClient()/registry.resolve() returned alongside the
+ * client. A fresh lookup would re-read the connection store, and with the
+ * Electron thunk that read can see a different connections.json than the one
+ * the query ran against (an edited URL, say), so the link would point at a
+ * host this call never queried.
  */
 export function dashboardUrlFor(
-  registry: ConnectionRegistry,
-  connectionId: string,
+  connection: Pick<GrafanaConnection, 'url'> | undefined,
   dashboardUid: string,
   opts?: DashboardUrlOptions,
 ): string | undefined {
-  const connection = registry.lastListed().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildDashboardUrl(connection.url, dashboardUid, opts);
 }
 
 /** Folder counterpart to dashboardUrlFor — builds a clickable folder-browse URL for a connection a tool already resolved. */
 export function folderUrlFor(
-  registry: ConnectionRegistry,
-  connectionId: string,
+  connection: Pick<GrafanaConnection, 'url'> | undefined,
   folderUid: string,
   slug?: string,
 ): string | undefined {
-  const connection = registry.lastListed().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildFolderUrl(connection.url, folderUid, slug);
 }
@@ -101,15 +105,12 @@ export function folderUrlFor(
  * this were skipped and the raw `/goto/...` path fell through to it.
  */
 export async function resolveGotoUrl(
-  registry: ConnectionRegistry,
   client: GrafanaClient,
-  connectionId: string,
+  connection: Pick<GrafanaConnection, 'url'>,
   rawUrl: string,
 ): Promise<string> {
   const shortId = parseGotoShortId(rawUrl);
   if (!shortId) return rawUrl;
-  const connection = (await registry.list()).find((c) => c.id === connectionId);
-  if (!connection) return rawUrl; // unreachable in practice: connectionId was just resolved from this same registry
   try {
     const { path } = await client.resolveShortUrl(shortId);
     return `${connection.url.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
@@ -133,18 +134,17 @@ export async function resolveGotoUrl(
 export async function resolveLogToolClient(
   registry: LogConnectionRegistry,
   input: { connection?: string },
-): Promise<{ client: GraylogClient; connectionId: string }> {
-  const { connection } = resolveConnection({ explicitId: input.connection }, await registry.list(), 'Graylog');
-  return { client: await registry.get(connection.id), connectionId: connection.id };
+): Promise<{ client: GraylogClient; connectionId: string; connection: LogConnection }> {
+  const { connection: chosen } = resolveConnection({ explicitId: input.connection }, await registry.list(), 'Graylog');
+  const { client, connection } = await registry.resolve(chosen.id);
+  return { client, connectionId: connection.id, connection };
 }
 
 /** Log-connection counterpart to dashboardUrlFor — builds a clickable Graylog search URL for a connection a log tool already resolved. */
 export function logSearchUrlFor(
-  registry: LogConnectionRegistry,
-  connectionId: string,
+  connection: Pick<LogConnection, 'url' | 'streamId'> | undefined,
   params: { query: string; fromMs: number; toMs: number; streamId?: string },
 ): string | undefined {
-  const connection = registry.lastListed().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildGraylogSearchUrl(connection.url, { ...params, streamId: params.streamId ?? connection.streamId });
 }
@@ -157,10 +157,13 @@ export function logSearchUrlFor(
  * (fetch_dashboard's panel listing, an error-path link, a skipped/
  * non-queryable panel) — those never actually reached Grafana for data, so
  * logging them as "inspected" would be misleading.
+ *
+ * `connection` is the one the query ran against (from resolveToolClient()/
+ * registry.resolve()), for the same reason dashboardUrlFor takes it directly.
  */
 export function recordActivity(
-  registry: ConnectionRegistry,
   activityLog: ActivityLog | undefined,
+  connection: Pick<GrafanaConnection, 'name'> | undefined,
   entry: {
     toolName: string;
     connectionId: string;
@@ -173,20 +176,18 @@ export function recordActivity(
   },
 ): void {
   if (!activityLog) return;
-  const connectionName = registry.lastListed().find((c) => c.id === entry.connectionId)?.name;
-  activityLog.record({ kind: 'panel', ...entry, connectionName });
+  activityLog.record({ kind: 'panel', ...entry, connectionName: connection?.name });
 }
 
 /**
  * Log-tool counterpart to recordActivity — records a search_logs/correlate_logs
  * call in the Activity log so a log-heavy investigation shows up in the Electron
- * window alongside the Grafana panels it queried. Resolves the display name (and
- * default stream name) from the *log* registry, since a log connection lives in
- * LogConnectionRegistry, not the Grafana one recordActivity reads.
+ * window alongside the Grafana panels it queried. Takes the display name (and
+ * default stream name) from the log connection the search ran against.
  */
 export function recordLogActivity(
-  logRegistry: LogConnectionRegistry,
   activityLog: ActivityLog | undefined,
+  connection: Pick<LogConnection, 'name' | 'streamId' | 'streamName'> | undefined,
   entry: {
     toolName: string;
     connectionId: string;
@@ -197,7 +198,6 @@ export function recordLogActivity(
   },
 ): void {
   if (!activityLog) return;
-  const connection = logRegistry.lastListed().find((c) => c.id === entry.connectionId);
   // Only attach a stream *name* when the effective stream is the connection's
   // configured default — that's the only stream we have a name for. An explicit
   // streamId that isn't the default has no name on this side, so leave it to the

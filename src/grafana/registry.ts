@@ -34,40 +34,25 @@ export class ConnectionRegistry {
   private readonly clients = new Map<string, GrafanaClient>();
   private readonly builtFrom = new Map<string, GrafanaConnection>();
 
-  private snapshot: GrafanaConnection[];
-
   constructor(
     private readonly source: ConnectionsSource,
     private readonly config: Config,
-  ) {
-    this.snapshot = typeof source === 'function' ? [] : source;
-  }
+  ) {}
 
   async list(): Promise<GrafanaConnection[]> {
-    const connections = typeof this.source === 'function' ? await this.source() : this.source;
-    this.snapshot = connections;
-    return connections;
+    return typeof this.source === 'function' ? await this.source() : this.source;
   }
 
   /**
-   * The result of the most recent list() — synchronously, without re-reading
-   * the source. Only for non-secret display metadata (url, name, stream) of a
-   * connection the current tool call has already resolved through list() or
-   * get(): the URL builders and Activity-log helpers in tools/shared.ts, which
-   * run inside .map() callbacks and catch blocks where an await would mean
-   * restructuring every result builder around Promise.all.
-   *
-   * Never use it to *choose* a connection or build a client — that must go
-   * through list()/get(), which re-read the source so a GUI edit takes effect
-   * on the next tool call. Empty until the first list() for a thunk source;
-   * callers already treat a missing connection as "no URL", never an error.
+   * The client for `id` together with the connection it was built from, both
+   * from one read of the source. A caller that also needs the connection's
+   * display fields (its url for a link, its name for the Activity log) takes
+   * them from here rather than from a second list(): with the Electron thunk,
+   * two reads can see two versions of connections.json, and a link built from
+   * one while the query ran against the other points at the wrong host.
    */
-  lastListed(): GrafanaConnection[] {
-    return this.snapshot;
-  }
-
-  async get(id: string): Promise<GrafanaClient> {
-    // Everything after this await is synchronous, so two concurrent get()s
+  async resolve(id: string): Promise<{ client: GrafanaClient; connection: GrafanaConnection }> {
+    // Everything after this await is synchronous, so two concurrent resolve()s
     // can't interleave between the cache check and the cache write.
     const connection = (await this.list()).find((c) => c.id === id);
     if (!connection) {
@@ -76,12 +61,16 @@ export class ConnectionRegistry {
     const cached = this.clients.get(id);
     const builtFrom = this.builtFrom.get(id);
     if (cached && builtFrom && JSON.stringify(builtFrom) === JSON.stringify(connection)) {
-      return cached;
+      return { client: cached, connection };
     }
     const client = new GrafanaClient(connection, this.config);
     this.clients.set(id, client);
     this.builtFrom.set(id, connection);
-    return client;
+    return { client, connection };
+  }
+
+  async get(id: string): Promise<GrafanaClient> {
+    return (await this.resolve(id)).client;
   }
 
   /**
@@ -124,9 +113,13 @@ export class ConnectionRegistry {
       .filter((host) => !connections.some((connection) => hostMatchesConnection(host, connection)));
   }
 
-  async adhocDatasourceTypes(connectionId: string): Promise<string[]> {
-    const connection = (await this.list()).find((c) => c.id === connectionId);
-    if (!connection) return [];
+  /*
+   * Takes the connection itself, the one resolve() returned with the client
+   * about to run the query: authorizing against a second read could judge an
+   * edited connection (a changed url matching a different policy) while the
+   * cached client still points at the old host.
+   */
+  adhocDatasourceTypes(connection: GrafanaConnection): string[] {
     const types = new Set<string>();
     for (const policy of this.config.adhocQueries ?? []) {
       if (hostMatchesConnection(policy.host, connection)) {

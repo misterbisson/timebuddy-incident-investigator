@@ -15,6 +15,12 @@ const { app, safeStorage } = require('electron');
 // same process can't decrypt back.
 app.setName('timebuddy-connection-manager');
 
+// Same Linux opt-in main.js makes (see its comment), so this harness can run
+// under --password-store=basic on a desktop with no secret store.
+if (process.platform === 'linux' && typeof safeStorage.setUsePlainTextEncryption === 'function') {
+  safeStorage.setUsePlainTextEncryption(true);
+}
+
 app.whenReady().then(async () => {
   try {
     const store = require('../src/connectionStore.js');
@@ -83,8 +89,8 @@ app.whenReady().then(async () => {
     assert.strictEqual(afterEdit[0].token, 'graylog-token-1', 'blank token on edit must keep the existing secret');
     assert.strictEqual(afterEdit[0].name, 'graylog-prod-renamed');
 
-    store.deleteConnection(grafana.id);
-    store.deleteConnection(graylog.id);
+    await store.deleteConnection(grafana.id);
+    await store.deleteConnection(graylog.id);
     assert.strictEqual((await store.listConnectionsForDisplay()).length, 0, 'expected both connections deleted');
 
     // --- importConnections: metadata-only manifest + shared credential ---
@@ -142,31 +148,37 @@ app.whenReady().then(async () => {
       'password preserved across re-import',
     );
 
-    for (const c of afterReimport) store.deleteConnection(c.id);
+    for (const c of afterReimport) await store.deleteConnection(c.id);
     assert.strictEqual((await store.listConnectionsForDisplay()).length, 0, 'cleaned up imported connections');
 
     // Existing installs: every secret already on disk was written by the
     // synchronous safeStorage.encryptString this store used before Electron 45
     // deprecated it. The async read path has to decrypt those unchanged, or
     // upgrading the app silently signs every connection out. Write one the old
-    // way (encryptString still exists, deprecated, on 45) and read it back.
-    const legacy = await store.upsertConnection({
-      name: 'legacy-secret',
-      kind: 'grafana',
-      url: 'https://legacy.example.com',
-      authType: 'bearer',
-    });
-    const secretsPath = path.join(app.getPath('userData'), 'secrets.enc.json');
-    const secretsFile = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
-    secretsFile.secrets[legacy.id] = safeStorage
-      .encryptString(JSON.stringify({ authType: 'bearer', token: 'legacy-sync-token' }))
-      .toString('base64');
-    fs.writeFileSync(secretsPath, JSON.stringify(secretsFile));
-    const legacyEngine = (await store.getConnectionsForEngine()).find((c) => c.id === legacy.id);
-    assert.strictEqual(legacyEngine.token, 'legacy-sync-token', 'a secret written by the sync API decrypts via the async one');
-    const legacyDisplayed = (await store.listConnectionsForDisplay()).find((c) => c.id === legacy.id);
-    assert.strictEqual(legacyDisplayed.secretError, undefined, 'the display probe reads the legacy secret too');
-    store.deleteConnection(legacy.id);
+    // way and read it back. encryptString exists (deprecated) on 45 and is gone
+    // on 46, where there's no sync writer left to test against, so the check is
+    // skipped there rather than failing the harness on the bump it guards.
+    if (typeof safeStorage.encryptString !== 'function') {
+      console.log('[connectionStore.test] safeStorage.encryptString is gone; skipping the legacy-secret check');
+    } else {
+      const legacy = await store.upsertConnection({
+        name: 'legacy-secret',
+        kind: 'grafana',
+        url: 'https://legacy.example.com',
+        authType: 'bearer',
+      });
+      const secretsPath = path.join(app.getPath('userData'), 'secrets.enc.json');
+      const secretsFile = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
+      secretsFile.secrets[legacy.id] = safeStorage
+        .encryptString(JSON.stringify({ authType: 'bearer', token: 'legacy-sync-token' }))
+        .toString('base64');
+      fs.writeFileSync(secretsPath, JSON.stringify(secretsFile));
+      const legacyEngine = (await store.getConnectionsForEngine()).find((c) => c.id === legacy.id);
+      assert.strictEqual(legacyEngine.token, 'legacy-sync-token', 'a secret written by the sync API decrypts via the async one');
+      const legacyDisplayed = (await store.listConnectionsForDisplay()).find((c) => c.id === legacy.id);
+      assert.strictEqual(legacyDisplayed.secretError, undefined, 'the display probe reads the legacy secret too');
+      await store.deleteConnection(legacy.id);
+    }
 
     // Two saves in flight together must both land: the encrypt is awaited, so
     // a save that read the store before that await would write back a stale
@@ -181,7 +193,7 @@ app.whenReady().then(async () => {
       [['race-a', 'ta'], ['race-b', 'tb']],
       'concurrent saves both persisted, each with its own secret',
     );
-    for (const c of raced) store.deleteConnection(c.id);
+    for (const c of raced) await store.deleteConnection(c.id);
 
     console.log('ALL CHECKS PASSED');
     app.exit(0);

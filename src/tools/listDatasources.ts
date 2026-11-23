@@ -59,22 +59,21 @@ export function registerListDatasources(server: McpServer, { registry, config }:
 
           const perConnection = await Promise.allSettled(
             connections.map(async (connectionId) => {
-              const client = await registry.get(connectionId);
+              const { client, connection: listed } = await registry.resolve(connectionId);
               const datasources = await client.listDatasources();
-              return { connectionId, datasources: filterDatasources(datasources, query) };
+              return { connectionId, tags: listed.tags ?? [], datasources: filterDatasources(datasources, query) };
             }),
           );
 
           const fulfilled = perConnection.filter(
-            (r): r is PromiseFulfilledResult<{ connectionId: string; datasources: DatasourceSummary[] }> =>
+            (r): r is PromiseFulfilledResult<{ connectionId: string; tags: string[]; datasources: DatasourceSummary[] }> =>
               r.status === 'fulfilled',
           );
 
-          const known = await registry.list();
           const result = {
             datasourcesByConnection: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.datasources])),
             connectionTags: Object.fromEntries(
-              fulfilled.map((r) => [r.value.connectionId, known.find((c) => c.id === r.value.connectionId)?.tags ?? []]),
+              fulfilled.map((r) => [r.value.connectionId, r.value.tags]),
             ),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };

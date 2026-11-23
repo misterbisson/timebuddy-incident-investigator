@@ -11,17 +11,12 @@ import {
 } from '../src/tools/shared.js';
 import type { Config } from '../src/config.js';
 import { GrafanaApiError, type GrafanaClient } from '../src/grafana/client.js';
-import type { ConnectionRegistry } from '../src/grafana/registry.js';
 import type { GrafanaConnection } from '../src/config.js';
 import type { TemplateVariable } from '../src/grafana/types.js';
 
 function fakeClient(datasources: Array<{ uid: string; name: string }>): { client: GrafanaClient; listDatasources: ReturnType<typeof vi.fn> } {
   const listDatasources = vi.fn(async () => datasources.map((d) => ({ ...d, id: 1, type: 'prometheus' })));
   return { client: { listDatasources } as unknown as GrafanaClient, listDatasources };
-}
-
-function fakeRegistry(connections: GrafanaConnection[]): ConnectionRegistry {
-  return { list: async () => connections, lastListed: () => connections } as unknown as ConnectionRegistry;
 }
 
 describe('resolveTargetDatasource', () => {
@@ -129,12 +124,12 @@ describe('dashboardUrlFor', () => {
   const connection: GrafanaConnection = { id: 'eu-prd', name: 'eu-prd', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' };
 
   it('builds a URL using the resolved connection\'s base url', () => {
-    const url = dashboardUrlFor(fakeRegistry([connection]), 'eu-prd', 'abc123', { panelId: 7 });
+    const url = dashboardUrlFor(connection, 'abc123', { panelId: 7 });
     expect(url).toBe('https://grafana.example.com/d/abc123?viewPanel=7');
   });
 
-  it('returns undefined when the connection id is not found, rather than throwing', () => {
-    expect(dashboardUrlFor(fakeRegistry([connection]), 'missing', 'abc123')).toBeUndefined();
+  it('returns undefined when no connection was resolved, rather than throwing', () => {
+    expect(dashboardUrlFor(undefined, 'abc123')).toBeUndefined();
   });
 });
 
@@ -142,24 +137,23 @@ describe('folderUrlFor', () => {
   const connection: GrafanaConnection = { id: 'eu-prd', name: 'eu-prd', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' };
 
   it('builds a folder-browse URL using the resolved connection\'s base url', () => {
-    const url = folderUrlFor(fakeRegistry([connection]), 'eu-prd', 'infra-status', 'infra-status');
+    const url = folderUrlFor(connection, 'infra-status', 'infra-status');
     expect(url).toBe('https://grafana.example.com/dashboards/f/infra-status/infra-status');
   });
 
-  it('returns undefined when the connection id is not found, rather than throwing', () => {
-    expect(folderUrlFor(fakeRegistry([connection]), 'missing', 'infra-status')).toBeUndefined();
+  it('returns undefined when no connection was resolved, rather than throwing', () => {
+    expect(folderUrlFor(undefined, 'infra-status')).toBeUndefined();
   });
 });
 
 describe('resolveGotoUrl', () => {
   const connection: GrafanaConnection = { id: 'eu-prd', name: 'eu-prd', url: 'https://grafana.example.com', authType: 'bearer', token: 'x' };
-  const registry = fakeRegistry([connection]);
 
   it('passes through a non-goto URL unchanged, without calling resolveShortUrl', async () => {
     const resolveShortUrl = vi.fn();
     const client = { resolveShortUrl } as unknown as GrafanaClient;
     const url = 'https://grafana.example.com/d/abc123/my-dashboard?viewPanel=3';
-    expect(await resolveGotoUrl(registry, client, 'eu-prd', url)).toBe(url);
+    expect(await resolveGotoUrl(client, connection, url)).toBe(url);
     expect(resolveShortUrl).not.toHaveBeenCalled();
   });
 
@@ -169,7 +163,7 @@ describe('resolveGotoUrl', () => {
       return { uid, path: 'd/abc123/my-dashboard?orgId=1&viewPanel=3', lastSeenAt: 0 };
     });
     const client = { resolveShortUrl } as unknown as GrafanaClient;
-    const resolved = await resolveGotoUrl(registry, client, 'eu-prd', 'https://grafana.example.com/goto/AT76wBvGk?orgId=1');
+    const resolved = await resolveGotoUrl(client, connection, 'https://grafana.example.com/goto/AT76wBvGk?orgId=1');
     expect(resolved).toBe('https://grafana.example.com/d/abc123/my-dashboard?orgId=1&viewPanel=3');
   });
 
@@ -180,7 +174,7 @@ describe('resolveGotoUrl', () => {
       }),
     } as unknown as GrafanaClient;
     await expect(
-      resolveGotoUrl(registry, client, 'eu-prd', 'https://grafana.example.com/goto/dead123'),
+      resolveGotoUrl(client, connection, 'https://grafana.example.com/goto/dead123'),
     ).rejects.toThrow(/expired or was not found/);
   });
 
@@ -191,7 +185,7 @@ describe('resolveGotoUrl', () => {
       }),
     } as unknown as GrafanaClient;
     await expect(
-      resolveGotoUrl(registry, client, 'eu-prd', 'https://grafana.example.com/goto/x'),
+      resolveGotoUrl(client, connection, 'https://grafana.example.com/goto/x'),
     ).rejects.toThrow(/500/);
   });
 });

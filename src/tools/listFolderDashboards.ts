@@ -7,6 +7,7 @@ import { parseGrafanaUrl } from '../alerts/urlParser.js';
 import { dashboardUrlFor, folderUrlFor, resolveGotoUrl, resolveToolClient, toolErrorResult } from './shared.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import type { GrafanaConnection } from '../config.js';
 
 const DEFAULT_LIMIT = 200;
 
@@ -99,16 +100,16 @@ export function registerListFolderDashboards(server: McpServer, { registry, conf
       annotations: { readOnlyHint: true, title: 'List folder dashboards' },
     },
     async ({ url, folderUid: inputFolderUid, recursive, limit, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       let resolvedFolderUid: string | undefined;
       try {
         return await withAudit('list_folder_dashboards', { url, folderUid: inputFolderUid, recursive }, config, async () => {
-          const { client, connectionId } = await resolveToolClient(registry, { connection, hintUrl: url });
-          resolvedConnectionId = connectionId;
+          const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection, hintUrl: url });
+          resolvedConnection = resolved;
 
           let folderUid = inputFolderUid;
           if (url) {
-            const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, url);
+            const resolvedUrl = await resolveGotoUrl(client, resolved, url);
             const parsed = parseGrafanaUrl(resolvedUrl);
             if (parsed.type !== 'folder') {
               throw new Error(
@@ -132,18 +133,18 @@ export function registerListFolderDashboards(server: McpServer, { registry, conf
             folderUid: folder.uid,
             folderTitle: folder.title,
             parentUid: folder.parentUid,
-            url: folderUrlFor(registry, connectionId, folder.uid),
+            url: folderUrlFor(resolved, folder.uid),
             dashboards: contents.dashboards.slice(0, limit).map((d) => ({
               uid: d.uid,
               title: d.title,
               tags: d.tags,
-              url: dashboardUrlFor(registry, connectionId, d.uid),
+              url: dashboardUrlFor(resolved, d.uid),
             })),
             dashboardsTotal: contents.dashboards.length,
             subfolders: contents.subfolders.slice(0, limit).map((f) => ({
               uid: f.uid,
               title: f.title,
-              url: folderUrlFor(registry, connectionId, f.uid),
+              url: folderUrlFor(resolved, f.uid),
             })),
             subfoldersTotal: contents.subfolders.length,
             recursive,
@@ -152,7 +153,7 @@ export function registerListFolderDashboards(server: McpServer, { registry, conf
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        const errorUrl = resolvedConnectionId && resolvedFolderUid ? folderUrlFor(registry, resolvedConnectionId, resolvedFolderUid) : undefined;
+        const errorUrl = resolvedConnection && resolvedFolderUid ? folderUrlFor(resolvedConnection, resolvedFolderUid) : undefined;
         return toolErrorResult(err, config, errorUrl);
       }
     },

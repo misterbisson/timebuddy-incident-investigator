@@ -6,6 +6,7 @@ import { dashboardUrlFor, epochMsSchema, resolvePanelReplay, resolveToolClient, 
 import { materializeVariables } from './liveVariables.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
+import type { GrafanaConnection } from '../config.js';
 
 export function registerResolvePanelQueries(server: McpServer, { registry, config }: ToolContext): void {
   server.registerTool(
@@ -48,11 +49,11 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
       annotations: { readOnlyHint: true, title: 'Resolve panel queries' },
     },
     async ({ dashboardUid, panelId, panelTitle, variableOverrides, windowFromMs, windowToMs, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       try {
         return await withAudit('resolve_panel_queries', { dashboardUid, panelId }, config, async () => {
-          const { client, connectionId } = await resolveToolClient(registry, { connection });
-          resolvedConnectionId = connectionId;
+          const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection });
+          resolvedConnection = resolved;
           const { dashboard } = await client.getDashboard(dashboardUid);
           const variables = dashboard.templating?.list ?? [];
           const overrides = variableOverrides ?? {};
@@ -77,7 +78,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
                 panelId: panel.panelId,
                 title: panel.title,
                 type: panel.type,
-                url: dashboardUrlFor(registry, connectionId, dashboardUid, { panelId: panel.panelId, fromMs: window.fromMs, toMs: window.toMs }),
+                url: dashboardUrlFor(resolved, dashboardUid, { panelId: panel.panelId, fromMs: window.fromMs, toMs: window.toMs }),
                 ...(panel.mirrorsPanelIds ? { mirrorsPanelIds: panel.mirrorsPanelIds } : {}),
                 // Raw URL templates (Grafana "data links"), not resolved — see
                 // resolvePanelDataLinks' doc comment. Substitute
@@ -104,7 +105,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(response, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
+        const url = resolvedConnection ? dashboardUrlFor(resolvedConnection, dashboardUid, { panelId }) : undefined;
         return toolErrorResult(err, config, url);
       }
     },

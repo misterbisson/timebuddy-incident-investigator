@@ -6,7 +6,7 @@ import { executeQueryWindows, type WindowQueryResult } from '../query/executor.j
 import { findThresholdRuns } from '../analysis/runs.js';
 import { computeStats } from '../analysis/baseline.js';
 import { clampRunList, clampSeriesPoints } from '../security/limits.js';
-import type { Config } from '../config.js';
+import type { Config, GrafanaConnection } from '../config.js';
 import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, resolveToolClient, toolErrorResult, windowSizeWarning } from './shared.js';
 import { materializeVariables } from './liveVariables.js';
 import { applyTagBreakout } from '../dashboards/tagBreakout.js';
@@ -136,11 +136,11 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
       annotations: { readOnlyHint: true, title: 'Execute query window' },
     },
     async ({ dashboardUid, panelId, panelTitle, startsAtMs, endsAtMs, preWindowMs, variableOverrides, includeControls, threshold, thresholdDirection, includePoints, minIntervalMs, tagBreakout, connection }) => {
-      let resolvedConnectionId: string | undefined;
+      let resolvedConnection: GrafanaConnection | undefined;
       try {
         return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs, minIntervalMs, tagBreakout }, config, async () => {
-          const { client, connectionId } = await resolveToolClient(registry, { connection });
-          resolvedConnectionId = connectionId;
+          const { client, connectionId, connection: resolved } = await resolveToolClient(registry, { connection });
+          resolvedConnection = resolved;
           const windowSet = computeWindows({
             startsAtMs,
             endsAtMs,
@@ -211,12 +211,12 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           // flagged here (not excluded, unlike validate_baseline's pooling)
           // since this tool just returns data for the caller to read.
           const controls = rawControls.map((c) => ({ ...c, overlapsIncident: windowsOverlap(windowSet.incident, c.window) }));
-          const url = dashboardUrlFor(registry, connectionId, dashboardUid, {
+          const url = dashboardUrlFor(resolved, dashboardUid, {
             panelId,
             fromMs: windowSet.incident.fromMs,
             toMs: windowSet.incident.toMs,
           });
-          recordActivity(registry, activityLog, {
+          recordActivity(activityLog, resolved, {
             toolName: 'execute_query_window',
             connectionId,
             dashboardUid,
@@ -240,7 +240,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };
         });
       } catch (err) {
-        const url = resolvedConnectionId ? dashboardUrlFor(registry, resolvedConnectionId, dashboardUid, { panelId }) : undefined;
+        const url = resolvedConnection ? dashboardUrlFor(resolvedConnection, dashboardUid, { panelId }) : undefined;
         return toolErrorResult(err, config, url);
       }
     },

@@ -22,7 +22,8 @@ let dir: string;
 let store: {
   listConnectionsForDisplay: () => Promise<Array<Record<string, unknown>>>;
   upsertConnection: (draft: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  deleteConnection: (id: string) => void;
+  deleteConnection: (id: string) => Promise<void>;
+  importConnections: (manifest: unknown, shared?: Record<string, unknown>) => Promise<Record<string, unknown>>;
   getConnectionsForEngine: () => Promise<Array<Record<string, unknown>>>;
 };
 let originalLoad: (...args: unknown[]) => unknown;
@@ -97,7 +98,7 @@ describe('connectionStore round trip', () => {
 
   it('removes a connection and its secret on delete', async () => {
     const saved = await store.upsertConnection(bearer('prod'));
-    store.deleteConnection(saved.id as string);
+    await store.deleteConnection(saved.id as string);
     expect(await store.getConnectionsForEngine()).toEqual([]);
     expect(readStore('secrets.enc.json').secrets).toEqual({});
   });
@@ -175,6 +176,50 @@ describe('concurrent saves', () => {
   });
 });
 
+describe('mutations apply in the order they were made', () => {
+  // A save awaits the encrypt partway through. Without one queue for every
+  // mutation, one the user made later could land first and be overwritten.
+  it('deletes a connection whose delete arrived while an edit of it was still encrypting', async () => {
+    const existing = await store.upsertConnection(bearer('doomed'));
+    await Promise.all([
+      store.upsertConnection({ id: existing.id, name: 'edited', url: 'https://g.example.com', authType: 'bearer', token: 'tok-edit' }),
+      store.deleteConnection(existing.id as string),
+    ]);
+    expect(await store.listConnectionsForDisplay()).toEqual([]);
+    expect(readStore('secrets.enc.json').secrets).toEqual({});
+  });
+
+  it('does not bring back a connection deleted while an import that matches it was encrypting', async () => {
+    const existing = await store.upsertConnection({ ...bearer('matched'), url: 'https://imp.example.com' });
+    await Promise.all([
+      store.importConnections(
+        { version: 1, connections: [{ kind: 'grafana', name: 'matched', url: 'https://imp.example.com', authType: 'basic' }] },
+        { username: 'u', password: 'p' },
+      ),
+      store.deleteConnection(existing.id as string),
+    ]);
+    expect(await store.listConnectionsForDisplay()).toEqual([]);
+  });
+
+  it('updates, rather than duplicates, a connection a GUI save created just before the import', async () => {
+    await Promise.all([
+      store.upsertConnection({ ...bearer('from-gui'), url: 'https://imp.example.com' }),
+      store.importConnections({ version: 1, connections: [{ kind: 'grafana', name: 'from-import', url: 'https://imp.example.com', authType: 'bearer' }] }),
+    ]);
+    const listed = await store.listConnectionsForDisplay();
+    expect(listed.map((c) => c.name)).toEqual(['from-import']);
+    // The GUI save's token survives: an import never carries a bearer secret.
+    expect((await store.getConnectionsForEngine())[0]!.token).toBe('tok-from-gui');
+  });
+
+  it('keeps going after a mutation fails', async () => {
+    writeFileSync(join(dir, 'connections.json'), '{"version":1,"connections":[{"id"');
+    await expect(store.upsertConnection(bearer('first'))).rejects.toThrow(/not valid JSON/);
+    rmSync(join(dir, 'connections.json'));
+    await expect(store.upsertConnection(bearer('second'))).resolves.toMatchObject({ name: 'second' });
+  });
+});
+
 describe('store files survive an interrupted write', () => {
   // The old code threw here too — a SyntaxError has no `.code`, so it fell
   // past the ENOENT check. What's new is a message that names the file and
@@ -236,7 +281,7 @@ describe('write ordering keeps the two files skewed in the harmless direction', 
       return realRename(from, to);
     };
     try {
-      store.deleteConnection(saved.id as string);
+      await store.deleteConnection(saved.id as string);
     } finally {
       fs.renameSync = realRename;
     }

@@ -21,39 +21,21 @@ export class LogConnectionRegistry {
   private readonly clients = new Map<string, GraylogClient>();
   private readonly builtFrom = new Map<string, LogConnection>();
 
-  private snapshot: LogConnection[];
-
   constructor(
     private readonly source: LogConnectionsSource,
     private readonly config: Config,
-  ) {
-    this.snapshot = typeof source === 'function' ? [] : source;
-  }
+  ) {}
 
   async list(): Promise<LogConnection[]> {
-    const connections = typeof this.source === 'function' ? await this.source() : this.source;
-    this.snapshot = connections;
-    return connections;
+    return typeof this.source === 'function' ? await this.source() : this.source;
   }
 
   /**
-   * The result of the most recent list() — synchronously, without re-reading
-   * the source. Only for non-secret display metadata (url, name, stream) of a
-   * connection the current tool call has already resolved through list() or
-   * get(): the URL builders and Activity-log helpers in tools/shared.ts, which
-   * run inside .map() callbacks and catch blocks where an await would mean
-   * restructuring every result builder around Promise.all.
-   *
-   * Never use it to *choose* a connection or build a client — that must go
-   * through list()/get(), which re-read the source so a GUI edit takes effect
-   * on the next tool call. Empty until the first list() for a thunk source;
-   * callers already treat a missing connection as "no URL", never an error.
+   * The client for `id` together with the connection it was built from, from
+   * one read of the source — see grafana/registry.ts's resolve() for why
+   * display fields must come from the same read as the client.
    */
-  lastListed(): LogConnection[] {
-    return this.snapshot;
-  }
-
-  async get(id: string): Promise<GraylogClient> {
+  async resolve(id: string): Promise<{ client: GraylogClient; connection: LogConnection }> {
     const connection = (await this.list()).find((c) => c.id === id);
     if (!connection) {
       throw new Error(`Unknown log connection "${id}"`);
@@ -61,11 +43,15 @@ export class LogConnectionRegistry {
     const cached = this.clients.get(id);
     const builtFrom = this.builtFrom.get(id);
     if (cached && builtFrom && JSON.stringify(builtFrom) === JSON.stringify(connection)) {
-      return cached;
+      return { client: cached, connection };
     }
     const client = new GraylogClient(connection, this.config);
     this.clients.set(id, client);
     this.builtFrom.set(id, connection);
-    return client;
+    return { client, connection };
+  }
+
+  async get(id: string): Promise<GraylogClient> {
+    return (await this.resolve(id)).client;
   }
 }

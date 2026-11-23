@@ -41,7 +41,11 @@ app.setName('timebuddy-connection-manager');
 // for the synchronous API; connectionStore.js now uses only the async one
 // (the sync methods are gone in Electron 46), and CI's Linux
 // electron-mcp-server job exercises it under this same basic_text setup.
-if (process.platform === 'linux') {
+// The method itself survives the sync API's removal (46.0.0-alpha.12's
+// typings still declare it, undeprecated); the typeof guard is only so a
+// later removal costs Linux the basic_text fallback rather than a TypeError
+// at module load that would stop the app starting in either mode.
+if (process.platform === 'linux' && typeof safeStorage.setUsePlainTextEncryption === 'function') {
   safeStorage.setUsePlainTextEncryption(true);
 }
 

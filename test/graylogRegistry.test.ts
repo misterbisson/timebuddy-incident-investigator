@@ -55,22 +55,27 @@ describe('LogConnectionRegistry', () => {
     await expect(registry.get('b')).resolves.toBeDefined();
   });
 
-  it('lastListed() is the plain array for a static source, and empty for a thunk until the first list()', async () => {
-    const fixed = [conn({ id: 'a' })];
-    expect(new LogConnectionRegistry(fixed, config).lastListed()).toBe(fixed);
+  it('resolve() pairs each client with the connection it was built from, even when reads finish out of order', async () => {
+    // The review's case: call A reads the store before a GUI edit and call B
+    // after it, and B's read finishes first. Each must get back the connection
+    // its own read saw, since that's what its links and Activity entry show.
+    const pending: Array<(list: ReturnType<typeof conn>[]) => void> = [];
+    const registry = new LogConnectionRegistry(() => new Promise((resolve) => pending.push(resolve)), config);
 
-    let connections = [conn({ id: 'a' })];
-    const registry = new LogConnectionRegistry(async () => connections, config);
-    expect(registry.lastListed()).toEqual([]);
+    const callA = registry.resolve('a');
+    const callB = registry.resolve('a');
+    pending[1]!([conn({ id: 'a', url: 'https://new.example.com' })]);
+    const b = await callB;
+    pending[0]!([conn({ id: 'a', url: 'https://old.example.com' })]);
+    const a = await callA;
 
-    await registry.list();
-    expect(registry.lastListed().map((c) => c.id)).toEqual(['a']);
-
-    // It never re-reads the source on its own: that is list()'s job.
-    connections = [conn({ id: 'b' })];
-    expect(registry.lastListed().map((c) => c.id)).toEqual(['a']);
-    await registry.get('b');
-    expect(registry.lastListed().map((c) => c.id)).toEqual(['b']);
+    expect(b.connection.url).toBe('https://new.example.com');
+    expect(a.connection.url).toBe('https://old.example.com');
+    expect(a.client).not.toBe(b.client);
+    // And a later call sees the store as it is now, not as the slowest read left it.
+    const later = registry.resolve('a');
+    pending[2]!([conn({ id: 'a', url: 'https://new.example.com' })]);
+    expect((await later).connection.url).toBe('https://new.example.com');
   });
 
   it('get() picks up a connection added after the registry was constructed, with no restart', async () => {

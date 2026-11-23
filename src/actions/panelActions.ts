@@ -83,7 +83,7 @@ export async function createPanelActions(
   const registry = new ConnectionRegistry(source, config);
 
   const resultUrlFor = (inv: PanelInvocation): string | undefined =>
-    dashboardUrlFor(registry, inv.connectionId, inv.dashboardUid, {
+    dashboardUrlFor(inv.rawConnection, inv.dashboardUid, {
       panelId: inv.panelId,
       fromMs: inv.fromMs,
       toMs: inv.toMs,

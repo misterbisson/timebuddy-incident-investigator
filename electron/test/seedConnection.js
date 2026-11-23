@@ -19,7 +19,7 @@ app.whenReady().then(async () => {
   // (added in Electron 25.5.0), acknowledging the weaker guarantee. main.js
   // makes the same call for the real --mcp-server process, which otherwise
   // can't decrypt a secret this script just encrypted.
-  if (process.platform === 'linux') {
+  if (process.platform === 'linux' && typeof safeStorage.setUsePlainTextEncryption === 'function') {
     safeStorage.setUsePlainTextEncryption(true);
   }
   console.log('[seed] whenReady() resolved, isAsyncEncryptionAvailable() =', await safeStorage.isAsyncEncryptionAvailable());

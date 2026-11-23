@@ -64,9 +64,11 @@ function fakeClient(datasources: DatasourceInfo[], response?: DsQueryResponse) {
 }
 
 /** A registry backed by the real class, so adhocDatasourceTypes' host matching is genuinely exercised. */
-function registryFor(cfg: Config, client: GrafanaClient): ConnectionRegistry {
-  const registry = new RealConnectionRegistry(connections, cfg);
-  vi.spyOn(registry, 'get').mockReturnValue(client);
+function registryFor(cfg: Config, client: GrafanaClient, list: GrafanaConnection[] = connections): ConnectionRegistry {
+  const registry = new RealConnectionRegistry(list, cfg);
+  const resolveReal = registry.resolve.bind(registry);
+  vi.spyOn(registry, 'resolve').mockImplementation(async (id) => ({ client, connection: (await resolveReal(id)).connection }));
+  vi.spyOn(registry, 'get').mockResolvedValue(client);
   return registry;
 }
 
@@ -159,8 +161,7 @@ describe('execute_adhoc_query authorization', () => {
     ];
     const cfg = { ...config([{ host: 'metrics-vpn.staging.example.com', datasourceTypes: ['influxdb'] }]), connections: aliased };
     const { client } = fakeClient(INFLUX);
-    const registry = new RealConnectionRegistry(aliased, cfg);
-    vi.spyOn(registry, 'get').mockReturnValue(client);
+    const registry = registryFor(cfg, client, aliased);
     const { server, call } = fakeServer();
     registerExecuteAdhocQuery(server, { registry, logRegistry: undefined as never, config: cfg });
     const result = (await call('execute_adhoc_query', {

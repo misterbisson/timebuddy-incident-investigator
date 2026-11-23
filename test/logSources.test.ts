@@ -28,7 +28,7 @@ function grafanaRegistry(byConnection: Record<string, DatasourceInfo[] | Error>,
   return {
     list: async () => connections,
     get: async (id: string) => clients.get(id)!,
-    lastListed: () => connections,
+    resolve: async (id: string) => ({ client: clients.get(id)!, connection: connections.find((c) => c.id === id)! }),
   } as unknown as ConnectionRegistry;
 }
 

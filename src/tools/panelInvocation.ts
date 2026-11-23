@@ -105,7 +105,7 @@ export interface ResolvePanelOptions {
   toolName: string;
   verb: string;
   windowLabel: string;
-  onContext?: (ctx: { connectionId?: string; dashboardUid?: string }) => void;
+  onContext?: (ctx: { connection?: GrafanaConnection; dashboardUid?: string }) => void;
 }
 
 export async function resolvePanelInvocation(
@@ -114,8 +114,15 @@ export async function resolvePanelInvocation(
   input: PanelInvocationInput,
   { toolName, verb, windowLabel, onContext }: ResolvePanelOptions,
 ): Promise<PanelInvocation> {
-  const { client, connectionId } = await resolveToolClient(registry, { connection: input.connection, hintUrl: input.url });
-  onContext?.({ connectionId });
+  // rawConnection is the connection `client` was built from, in the same read:
+  // its url and credentials go into the screenshot's solo-panel URL and auth
+  // header, so a second lookup could pair this call's query with another
+  // version of the connection (an edited url or rotated token).
+  const { client, connectionId, connection: rawConnection } = await resolveToolClient(registry, {
+    connection: input.connection,
+    hintUrl: input.url,
+  });
+  onContext?.({ connection: rawConnection });
 
   let dashboardUid = input.dashboardUid;
   let panelId = input.panelId;
@@ -125,7 +132,7 @@ export async function resolvePanelInvocation(
   let urlTimezone: string | undefined;
 
   if (input.url) {
-    const resolvedUrl = await resolveGotoUrl(registry, client, connectionId, input.url);
+    const resolvedUrl = await resolveGotoUrl(client, rawConnection, input.url);
     const parsed = parseGrafanaUrl(resolvedUrl);
     if (parsed.type === 'dashboard') {
       dashboardUid = parsed.uid;
@@ -164,7 +171,7 @@ export async function resolvePanelInvocation(
   // Report the resolved dashboard before the panelId check so a caller's error
   // path (e.g. screenshot_panel's toolErrorResult) can still attach a clickable
   // dashboard link when only panelId is missing — matching pre-refactor behavior.
-  onContext?.({ connectionId, dashboardUid });
+  onContext?.({ connection: rawConnection, dashboardUid });
   if (panelId === undefined) {
     throw new Error('Must provide "panelId" (or a url that already carries one, e.g. a "viewPanel"/"panelId" link).');
   }
@@ -190,11 +197,6 @@ export async function resolvePanelInvocation(
     preferences: () => fetchConnectionPreferences(client),
   });
   enforceWindowLimit({ label: windowLabel, fromMs, toMs }, config);
-
-  const rawConnection = (await registry.list()).find((c) => c.id === connectionId);
-  if (!rawConnection) {
-    throw new Error(`Unknown Grafana connection "${connectionId}".`);
-  }
 
   return {
     client,
