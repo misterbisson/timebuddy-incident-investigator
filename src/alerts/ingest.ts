@@ -195,7 +195,7 @@ function describeThreshold(rule: RulerAlertRule): string | undefined {
  */
 export async function resolveAlertContext(
   input: { webhookPayload?: unknown; alertJson?: unknown; url?: string; fingerprint?: string },
-  getClient: (hintUrl?: string) => GrafanaClient,
+  getClient: (hintUrl?: string) => GrafanaClient | Promise<GrafanaClient>,
 ): Promise<AlertContext> {
   if (input.webhookPayload !== undefined) {
     if (!isWebhookPayload(input.webhookPayload)) {
@@ -254,7 +254,7 @@ export async function resolveAlertContext(
 
     // Alert-rule URL: fetch the rule to recover its dashboard/panel link,
     // labels, and query targets.
-    const client = getClient(input.url);
+    const client = await getClient(input.url);
     const rule = await client.getAlertRuleByUid(parsed.ruleUid);
     const warnings: string[] = [];
     const dashUid = rule.annotations?.__dashboardUid__;

@@ -39,12 +39,22 @@ export function fakeServer(): {
   };
 }
 
+// list()/get() resolve asynchronously, like the real registries, so a call
+// site that forgets to await them fails here rather than passing by accident.
 export function fakeRegistry(connections: GrafanaConnection[], client: GrafanaClient): ConnectionRegistry {
-  return { list: () => connections, get: () => client } as unknown as ConnectionRegistry;
+  return {
+    list: async () => connections,
+    get: async () => client,
+    lastListed: () => connections,
+  } as unknown as ConnectionRegistry;
 }
 
 export function fakeLogRegistry(connections: LogConnection[], client: GraylogClient): LogConnectionRegistry {
-  return { list: () => connections, get: () => client } as unknown as LogConnectionRegistry;
+  return {
+    list: async () => connections,
+    get: async () => client,
+    lastListed: () => connections,
+  } as unknown as LogConnectionRegistry;
 }
 
 export function tagValuesResponse(values: string[]): DsQueryResponse {

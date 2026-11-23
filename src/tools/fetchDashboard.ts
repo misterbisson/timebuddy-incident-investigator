@@ -37,7 +37,7 @@ export function registerFetchDashboard(server: McpServer, { registry, config }: 
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('fetch_dashboard', { url, dashboardUid: inputDashboardUid }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection, hintUrl: url });
+          const { client, connectionId } = await resolveToolClient(registry, { connection, hintUrl: url });
           resolvedConnectionId = connectionId;
 
           let dashboardUid = inputDashboardUid;

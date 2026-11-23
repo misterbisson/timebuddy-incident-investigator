@@ -103,7 +103,7 @@ export function registerListFolderDashboards(server: McpServer, { registry, conf
       let resolvedFolderUid: string | undefined;
       try {
         return await withAudit('list_folder_dashboards', { url, folderUid: inputFolderUid, recursive }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection, hintUrl: url });
+          const { client, connectionId } = await resolveToolClient(registry, { connection, hintUrl: url });
           resolvedConnectionId = connectionId;
 
           let folderUid = inputFolderUid;

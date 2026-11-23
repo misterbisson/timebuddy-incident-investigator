@@ -30,6 +30,11 @@ function originOf(url) {
  * headers `resolveHeaders(origin)` returns for that request's origin. Return
  * null/undefined from it to send the request unauthenticated.
  *
+ * `resolveHeaders` may return a Promise (main.js's live-view resolver does,
+ * since decrypting a stored credential is async); the request is held until it
+ * settles. A rejection is treated exactly like a throw: unauthenticated, not a
+ * dropped request. A synchronous resolver still answers synchronously.
+ *
  * Electron allows a single onBeforeSendHeaders listener per session, so this
  * takes over the session's header handling entirely — don't add another.
  */
@@ -40,6 +45,8 @@ function attachAuthHeaders(ses, resolveHeaders) {
       callback({});
       return;
     }
+    const finish = (headers) =>
+      callback(headers ? { requestHeaders: { ...details.requestHeaders, ...headers } } : {});
     let headers;
     try {
       headers = resolveHeaders(origin);
@@ -49,11 +56,11 @@ function attachAuthHeaders(ses, resolveHeaders) {
       callback({});
       return;
     }
-    if (!headers) {
-      callback({});
+    if (headers && typeof headers.then === 'function') {
+      headers.then(finish, () => callback({}));
       return;
     }
-    callback({ requestHeaders: { ...details.requestHeaders, ...headers } });
+    finish(headers);
   });
 }
 

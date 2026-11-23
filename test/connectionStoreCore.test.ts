@@ -18,6 +18,7 @@ const {
   readJsonFile,
   writeJsonFileAtomic,
   buildEngineConnections,
+  buildLogEngineConnections,
   normalizeUrlForKey,
   validateImportManifest,
   planImport,
@@ -43,8 +44,8 @@ describe('buildEngineConnections', () => {
   });
   const ok = () => ({ authType: 'bearer', token: 'secret-token' });
 
-  it('decrypts each connection and maps it to the engine shape', () => {
-    const { connections, failures } = buildEngineConnections([meta('a')], { a: 'enc-a' }, ok);
+  it('decrypts each connection and maps it to the engine shape', async () => {
+    const { connections, failures } = await buildEngineConnections([meta('a')], { a: 'enc-a' }, ok);
     expect(failures).toEqual([]);
     expect(connections[0]).toMatchObject({ id: 'a', url: 'https://a.example.com', token: 'secret-token' });
   });
@@ -52,12 +53,12 @@ describe('buildEngineConnections', () => {
   // The reported bug: getConnectionsForEngine is the ConnectionsSource thunk,
   // re-invoked on every tool call, so one throw here failed every tool call —
   // including ones that never touch the broken connection.
-  it('isolates a failing decrypt so the other connections still resolve', () => {
+  it('isolates a failing decrypt so the other connections still resolve', async () => {
     const decrypt = vi.fn((encoded: string) => {
       if (encoded === 'enc-b') throw new Error('Error while decrypting the ciphertext provided to safeStorage');
       return ok();
     });
-    const { connections, failures } = buildEngineConnections(
+    const { connections, failures } = await buildEngineConnections(
       [meta('a'), meta('b'), meta('c')],
       { a: 'enc-a', b: 'enc-b', c: 'enc-c' },
       decrypt,
@@ -78,37 +79,91 @@ describe('buildEngineConnections', () => {
   // Kept in the list rather than dropped, so buildAuthHeader raises
   // `Connection "b" is authType=bearer but missing token` at the point of use
   // and resolveConnection's "available connections" list stays honest.
-  it('keeps the broken connection listed, but without a credential', () => {
+  it('keeps the broken connection listed, but without a credential', async () => {
     const decrypt = () => {
       throw new Error('keychain mismatch');
     };
-    const { connections } = buildEngineConnections([meta('b')], { b: 'enc-b' }, decrypt);
+    const { connections } = await buildEngineConnections([meta('b')], { b: 'enc-b' }, decrypt);
     expect(connections).toHaveLength(1);
     expect(connections[0]).toMatchObject({ id: 'b', authType: 'bearer' });
     expect(connections[0].token).toBeUndefined();
   });
 
-  it('reports every failure, not just the first', () => {
+  it('reports every failure, not just the first', async () => {
     const decrypt = () => {
       throw new Error('nope');
     };
-    const { failures } = buildEngineConnections([meta('a'), meta('b')], { a: 'x', b: 'y' }, decrypt);
+    const { failures } = await buildEngineConnections([meta('a'), meta('b')], { a: 'x', b: 'y' }, decrypt);
     expect(failures.map((f: { id: string }) => f.id)).toEqual(['a', 'b']);
   });
 
-  it('does not call decrypt at all for a connection with no stored secret', () => {
+  it('does not call decrypt at all for a connection with no stored secret', async () => {
     const decrypt = vi.fn(ok);
-    const { connections, failures } = buildEngineConnections([meta('a', { username: 'u' })], {}, decrypt);
+    const { connections, failures } = await buildEngineConnections([meta('a', { username: 'u' })], {}, decrypt);
     expect(decrypt).not.toHaveBeenCalled();
     expect(failures).toEqual([]);
     expect(connections[0].username).toBe('u');
   });
 
-  it('maps a basic-auth secret to username/password', () => {
+  it('maps a basic-auth secret to username/password', async () => {
     const decrypt = () => ({ authType: 'basic', username: 'u', password: 'p' });
-    const { connections } = buildEngineConnections([meta('a', { authType: 'basic' })], { a: 'enc' }, decrypt);
+    const { connections } = await buildEngineConnections([meta('a', { authType: 'basic' })], { a: 'enc' }, decrypt);
     expect(connections[0]).toMatchObject({ username: 'u', password: 'p' });
     expect(connections[0].token).toBeUndefined();
+  });
+
+  // safeStorage.decryptStringAsync rejects rather than throws; the isolation
+  // has to hold for a rejected promise exactly as it did for a sync throw.
+  it('isolates a rejected async decrypt the same way as a thrown one', async () => {
+    const decrypt = async (encoded: string) => {
+      if (encoded === 'enc-b') throw new Error('Error while decrypting the ciphertext provided to safeStorage');
+      return ok();
+    };
+    const { connections, failures } = await buildEngineConnections(
+      [meta('a'), meta('b'), meta('c')],
+      { a: 'enc-a', b: 'enc-b', c: 'enc-c' },
+      decrypt,
+    );
+    expect(connections.map((c: { token?: string }) => c.token)).toEqual(['secret-token', undefined, 'secret-token']);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ id: 'b', name: 'conn-b' });
+    expect(failures[0].reason).not.toContain('safeStorage');
+  });
+
+  it('keeps connections and failures in connection order when decrypts settle out of order', async () => {
+    const delays: Record<string, number> = { 'enc-a': 30, 'enc-b': 0, 'enc-c': 15 };
+    const decrypt = (encoded: string) =>
+      new Promise((resolve, reject) =>
+        setTimeout(() => (encoded === 'enc-c' ? resolve(ok()) : reject(new Error('nope'))), delays[encoded]),
+      );
+    const { connections, failures } = await buildEngineConnections(
+      [meta('a'), meta('b'), meta('c')],
+      { a: 'enc-a', b: 'enc-b', c: 'enc-c' },
+      decrypt,
+    );
+    expect(connections.map((c: { id: string }) => c.id)).toEqual(['a', 'b', 'c']);
+    expect(connections[2].token).toBe('secret-token');
+    expect(failures.map((f: { id: string }) => f.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('buildLogEngineConnections', () => {
+  const meta = (id: string) => ({ id, name: `log-${id}`, url: `https://${id}.example.com`, authType: 'token' });
+
+  it('isolates a rejected async decrypt and maps the rest to the log shape', async () => {
+    const decrypt = async (encoded: string) => {
+      if (encoded === 'enc-b') throw new Error('keychain mismatch');
+      return { authType: 'token', token: 'graylog-token' };
+    };
+    const { connections, failures } = await buildLogEngineConnections(
+      [meta('a'), meta('b')],
+      { a: 'enc-a', b: 'enc-b' },
+      decrypt,
+    );
+    expect(connections[0]).toMatchObject({ id: 'a', sourceType: 'graylog', token: 'graylog-token' });
+    expect(connections[1]).toMatchObject({ id: 'b', sourceType: 'graylog' });
+    expect(connections[1].token).toBeUndefined();
+    expect(failures.map((f: { id: string }) => f.id)).toEqual(['b']);
   });
 });
 

@@ -81,10 +81,10 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
           // path; resolve a connection lazily so webhook/pasted-JSON input
           // never requires one up front.
           let resolvedConnectionId: string | undefined;
-          const getClient = (hintUrl?: string) => {
-            const resolved = resolveConnection({ explicitId: args.connection, hintUrl }, registry.list());
+          const getClient = async (hintUrl?: string) => {
+            const resolved = resolveConnection({ explicitId: args.connection, hintUrl }, await registry.list());
             resolvedConnectionId = resolved.connection.id;
-            return registry.get(resolved.connection.id);
+            return await registry.get(resolved.connection.id);
           };
 
           const alertContext = await resolveAlertContext(
@@ -96,7 +96,7 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
             try {
               const resolved = resolveConnection(
                 { explicitId: args.connection, hintUrl: alertContext.panelURL ?? alertContext.dashboardURL ?? alertContext.generatorURL },
-                registry.list(),
+                await registry.list(),
               );
               resolvedConnectionId = resolved.connection.id;
             } catch (err) {
@@ -129,7 +129,7 @@ export function registerGetAlertContext(server: McpServer, { registry, config }:
           let knowledge: ProductKnowledge | undefined;
           if (resolvedConnectionId && alertContext.dashboardUid) {
             try {
-              const client = registry.get(resolvedConnectionId);
+              const client = await registry.get(resolvedConnectionId);
               const { dashboard, meta } = await client.getDashboard(alertContext.dashboardUid);
               const candidateKeys = [...(dashboard.tags ?? []), ...Object.values(alertContext.labels ?? {})];
               knowledge = await resolveProductContext(client, config, resolvedConnectionId, {

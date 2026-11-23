@@ -37,7 +37,10 @@ app.setName('timebuddy-connection-manager');
 // `OSCrypt::IsEncryptionAvailable() || (usePlainTextEncryption && backend == "basic_text")`
 // — it only takes effect if Electron's own auto-detection already selected
 // "basic_text" (no secure backend found), which OSCrypt::IsEncryptionAvailable()
-// alone still reports as false unless this flag is also set.
+// alone still reports as false unless this flag is also set. That's the rule
+// for the synchronous API; connectionStore.js now uses only the async one
+// (the sync methods are gone in Electron 46), and CI's Linux
+// electron-mcp-server job exercises it under this same basic_text setup.
 if (process.platform === 'linux') {
   safeStorage.setUsePlainTextEncryption(true);
 }
@@ -301,8 +304,10 @@ function buildMenu() {
 // origin guarantee attachAuthHeaders exists to keep (see authGuard.js / #85).
 function setupLiveViewSession(buildAuthHeader, originMatchesConnection) {
   const ses = session.fromPartition('persist:activity-live-view', { cache: false });
-  attachAuthHeaders(ses, (origin) => {
-    const connection = store.getConnectionsForEngine().find((c) => originMatchesConnection(origin, c));
+  // Async because decrypting a connection's credential is (safeStorage's
+  // async API) — attachAuthHeaders holds the request until this settles.
+  attachAuthHeaders(ses, async (origin) => {
+    const connection = (await store.getConnectionsForEngine()).find((c) => originMatchesConnection(origin, c));
     return connection ? { Authorization: buildAuthHeader(connection) } : null;
   });
 }
@@ -374,7 +379,7 @@ function idleShutdownGuard({ idleMinutes, reason }) {
 }
 
 async function runMcpServer() {
-  const startupConnections = store.getConnectionsForEngine();
+  const startupConnections = await store.getConnectionsForEngine();
   // The engine package is ESM ("type": "module"); dynamic import works from
   // this CommonJS main process without converting the whole Electron app.
   const { startMcpServer, createActivityLog, buildAuthHeader, originMatchesConnection, createPanelActions, parseAdhocQueryFlags } =
@@ -418,7 +423,7 @@ async function runMcpServer() {
   // with — this same screenshotter both gates screenshot_panel's registration
   // and backs the Activity window's own export buttons via createPanelActions.
   const screenshotter = createScreenshotter();
-  panelActions = createPanelActions(connectionsSource, { dataDir }, screenshotter);
+  panelActions = await createPanelActions(connectionsSource, { dataDir }, screenshotter);
 
   // Pass a thunk, not the snapshot above, so the engine re-reads
   // connections.json/secrets.enc.json on every tool call — a connection
@@ -440,7 +445,7 @@ async function runMcpServer() {
   );
   // Deliberately console.error, not console.log — stdout is the MCP
   // JSON-RPC channel once the transport is connected.
-  const startupLogConnections = store.getLogConnectionsForEngine();
+  const startupLogConnections = await store.getLogConnectionsForEngine();
   console.error(
     `timebuddy-incident-investigator MCP server running on stdio (${startupConnections.length} Grafana connection(s): ${startupConnections.map((c) => c.id).join(', ')}` +
       `; ${startupLogConnections.length} log connection(s): ${startupLogConnections.map((c) => c.id).join(', ')})` +
@@ -527,7 +532,7 @@ ipcMain.handle('connections:import', async (event, { sharedUsername, sharedPassw
   }
 
   try {
-    const summary = store.importConnections(manifest, {
+    const summary = await store.importConnections(manifest, {
       username: sharedUsername || undefined,
       password: sharedPassword || undefined,
     });

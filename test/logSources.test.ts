@@ -25,7 +25,11 @@ function grafanaRegistry(byConnection: Record<string, DatasourceInfo[] | Error>,
       }),
     } as unknown as GrafanaClient);
   }
-  return { list: () => connections, get: (id: string) => clients.get(id)! } as unknown as ConnectionRegistry;
+  return {
+    list: async () => connections,
+    get: async (id: string) => clients.get(id)!,
+    lastListed: () => connections,
+  } as unknown as ConnectionRegistry;
 }
 
 const graylogRegistry = () => fakeLogRegistry([graylog], fakeGraylogClient({}).client);

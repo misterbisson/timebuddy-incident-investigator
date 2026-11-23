@@ -46,15 +46,15 @@ export const epochMsSchema = z.union([z.number(), z.string()]).transform((value,
  * from (a dashboard UID doesn't carry one), so hintUrl is only meaningful
  * from get_alert_context's alert-link resolution.
  */
-export function resolveToolClient(
+export async function resolveToolClient(
   registry: ConnectionRegistry,
   input: { connection?: string; hintUrl?: string },
-): { client: GrafanaClient; connectionId: string } {
+): Promise<{ client: GrafanaClient; connectionId: string }> {
   const { connection } = resolveConnection(
     { explicitId: input.connection, hintUrl: input.hintUrl },
-    registry.list(),
+    await registry.list(),
   );
-  return { client: registry.get(connection.id), connectionId: connection.id };
+  return { client: await registry.get(connection.id), connectionId: connection.id };
 }
 
 /**
@@ -71,7 +71,7 @@ export function dashboardUrlFor(
   dashboardUid: string,
   opts?: DashboardUrlOptions,
 ): string | undefined {
-  const connection = registry.list().find((c) => c.id === connectionId);
+  const connection = registry.lastListed().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildDashboardUrl(connection.url, dashboardUid, opts);
 }
@@ -83,7 +83,7 @@ export function folderUrlFor(
   folderUid: string,
   slug?: string,
 ): string | undefined {
-  const connection = registry.list().find((c) => c.id === connectionId);
+  const connection = registry.lastListed().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildFolderUrl(connection.url, folderUid, slug);
 }
@@ -108,7 +108,7 @@ export async function resolveGotoUrl(
 ): Promise<string> {
   const shortId = parseGotoShortId(rawUrl);
   if (!shortId) return rawUrl;
-  const connection = registry.list().find((c) => c.id === connectionId);
+  const connection = (await registry.list()).find((c) => c.id === connectionId);
   if (!connection) return rawUrl; // unreachable in practice: connectionId was just resolved from this same registry
   try {
     const { path } = await client.resolveShortUrl(shortId);
@@ -130,12 +130,12 @@ export async function resolveGotoUrl(
  * hintUrl: a log connection has no comparable inbound alert/dashboard link
  * to infer from, unlike a Grafana connection.
  */
-export function resolveLogToolClient(
+export async function resolveLogToolClient(
   registry: LogConnectionRegistry,
   input: { connection?: string },
-): { client: GraylogClient; connectionId: string } {
-  const { connection } = resolveConnection({ explicitId: input.connection }, registry.list(), 'Graylog');
-  return { client: registry.get(connection.id), connectionId: connection.id };
+): Promise<{ client: GraylogClient; connectionId: string }> {
+  const { connection } = resolveConnection({ explicitId: input.connection }, await registry.list(), 'Graylog');
+  return { client: await registry.get(connection.id), connectionId: connection.id };
 }
 
 /** Log-connection counterpart to dashboardUrlFor — builds a clickable Graylog search URL for a connection a log tool already resolved. */
@@ -144,7 +144,7 @@ export function logSearchUrlFor(
   connectionId: string,
   params: { query: string; fromMs: number; toMs: number; streamId?: string },
 ): string | undefined {
-  const connection = registry.list().find((c) => c.id === connectionId);
+  const connection = registry.lastListed().find((c) => c.id === connectionId);
   if (!connection) return undefined;
   return buildGraylogSearchUrl(connection.url, { ...params, streamId: params.streamId ?? connection.streamId });
 }
@@ -173,7 +173,7 @@ export function recordActivity(
   },
 ): void {
   if (!activityLog) return;
-  const connectionName = registry.list().find((c) => c.id === entry.connectionId)?.name;
+  const connectionName = registry.lastListed().find((c) => c.id === entry.connectionId)?.name;
   activityLog.record({ kind: 'panel', ...entry, connectionName });
 }
 
@@ -197,7 +197,7 @@ export function recordLogActivity(
   },
 ): void {
   if (!activityLog) return;
-  const connection = logRegistry.list().find((c) => c.id === entry.connectionId);
+  const connection = logRegistry.lastListed().find((c) => c.id === entry.connectionId);
   // Only attach a stream *name* when the effective stream is the connection's
   // configured default — that's the only stream we have a name for. An explicit
   // streamId that isn't the default has no name on this side, so leave it to the

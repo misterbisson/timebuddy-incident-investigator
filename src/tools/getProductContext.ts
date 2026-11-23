@@ -29,7 +29,7 @@ export function registerGetProductContext(server: McpServer, { registry, config 
     async ({ productKey, dashboardUid, connection }) => {
       try {
         return await withAudit('get_product_context', { productKey, dashboardUid }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = await resolveToolClient(registry, { connection });
 
           if (dashboardUid) {
             const { meta } = await client.getDashboard(dashboardUid);

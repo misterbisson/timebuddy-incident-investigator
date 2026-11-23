@@ -54,12 +54,12 @@ export function registerListDatasources(server: McpServer, { registry, config }:
       try {
         return await withAudit('list_datasources', { query }, config, async () => {
           const connections = connection
-            ? [resolveToolClient(registry, { connection }).connectionId]
-            : registry.list().map((c) => c.id);
+            ? [(await resolveToolClient(registry, { connection })).connectionId]
+            : (await registry.list()).map((c) => c.id);
 
           const perConnection = await Promise.allSettled(
             connections.map(async (connectionId) => {
-              const client = registry.get(connectionId);
+              const client = await registry.get(connectionId);
               const datasources = await client.listDatasources();
               return { connectionId, datasources: filterDatasources(datasources, query) };
             }),
@@ -70,10 +70,11 @@ export function registerListDatasources(server: McpServer, { registry, config }:
               r.status === 'fulfilled',
           );
 
+          const known = await registry.list();
           const result = {
             datasourcesByConnection: Object.fromEntries(fulfilled.map((r) => [r.value.connectionId, r.value.datasources])),
             connectionTags: Object.fromEntries(
-              fulfilled.map((r) => [r.value.connectionId, registry.list().find((c) => c.id === r.value.connectionId)?.tags ?? []]),
+              fulfilled.map((r) => [r.value.connectionId, known.find((c) => c.id === r.value.connectionId)?.tags ?? []]),
             ),
           };
           return { content: [{ type: 'text' as const, text: JSON.stringify(redact(result, config.redactionPatterns)) }] };

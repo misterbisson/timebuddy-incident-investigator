@@ -118,7 +118,11 @@ function makeClient(dashboards: FakeDashboard[], opts: { knowledgeUid?: string; 
 
 function makeRegistry(clientsByConnection: Record<string, GrafanaClient>): ConnectionRegistry {
   const connections: GrafanaConnection[] = Object.keys(clientsByConnection).map((id) => ({ id, name: id, url: `https://${id}.example.com`, authType: 'bearer', token: 'x' }));
-  return { list: () => connections, get: (id: string) => clientsByConnection[id]! } as unknown as ConnectionRegistry;
+  return {
+    list: async () => connections,
+    get: async (id: string) => clientsByConnection[id]!,
+    lastListed: () => connections,
+  } as unknown as ConnectionRegistry;
 }
 
 describe('detect_correlated_anomalies scope tiering', () => {

@@ -73,12 +73,12 @@ export interface PanelActions {
  * `source` thunk for the registry so a connection edited in the GUI is picked
  * up on the next call), then exposes the two panel actions against it.
  */
-export function createPanelActions(
+export async function createPanelActions(
   source: ConnectionsSource,
   configOverrides: Partial<Config> = {},
   screenshotter: Screenshotter,
-): PanelActions {
-  const startupSnapshot = typeof source === 'function' ? source() : source;
+): Promise<PanelActions> {
+  const startupSnapshot = typeof source === 'function' ? await source() : source;
   const config: Config = { ...loadConfig(), ...configOverrides, connections: startupSnapshot };
   const registry = new ConnectionRegistry(source, config);
 

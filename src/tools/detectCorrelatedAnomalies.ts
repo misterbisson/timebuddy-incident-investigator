@@ -101,7 +101,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
           { primaryDashboardUid, primaryPanelId, startsAtMs, endsAtMs },
           config,
           async () => {
-            const { client: primaryClient, connectionId } = resolveToolClient(registry, { connection });
+            const { client: primaryClient, connectionId } = await resolveToolClient(registry, { connection });
             primaryConnectionId = connectionId;
             const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets: [] });
             // Fail fast, before running a single Grafana query, rather than
@@ -231,14 +231,14 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               // cache is missing/stale (confirmed in practice: ~13 minutes across 7
               // connections/600-860 dashboards each). Building all of them up front made every
               // narrow-scope call pay that cost regardless of what was actually asked for.
-              const otherConnections = registry.list().filter((c) => c.id !== connectionId);
+              const otherConnections = (await registry.list()).filter((c) => c.id !== connectionId);
               const indexByConnection = new Map<string, MetricIndex>();
-              indexByConnection.set(connectionId, await getOrBuildIndex(registry.get(connectionId), config, connectionId, {}));
+              indexByConnection.set(connectionId, await getOrBuildIndex(await registry.get(connectionId), config, connectionId, {}));
 
               let haveAllOtherConnections = true;
               if (requestedScope === 'all-connections') {
                 const rest = await Promise.allSettled(
-                  otherConnections.map(async (conn) => ({ connectionId: conn.id, index: await getOrBuildIndex(registry.get(conn.id), config, conn.id, {}) })),
+                  otherConnections.map(async (conn) => ({ connectionId: conn.id, index: await getOrBuildIndex(await registry.get(conn.id), config, conn.id, {}) })),
                 );
                 for (const outcome of rest) {
                   if (outcome.status === 'fulfilled') indexByConnection.set(outcome.value.connectionId, outcome.value.index);
@@ -317,7 +317,7 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             const candidateInputs: (CorrelationCandidateInput & { connectionId: string })[] = [];
             const settled = await Promise.allSettled(
               candidateRefs.map(async (ref) => {
-                const client = registry.get(ref.connectionId);
+                const client = await registry.get(ref.connectionId);
                 const incidentResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.incident, config.maxDataPoints);
                 const incidentResult = await executeQueryWindow(client, incidentResolved.targets, windowSet.incident, config);
                 const preResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.preWindow, config.maxDataPoints);

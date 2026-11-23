@@ -51,7 +51,7 @@ export function registerResolvePanelQueries(server: McpServer, { registry, confi
       let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('resolve_panel_queries', { dashboardUid, panelId }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = await resolveToolClient(registry, { connection });
           resolvedConnectionId = connectionId;
           const { dashboard } = await client.getDashboard(dashboardUid);
           const variables = dashboard.templating?.list ?? [];

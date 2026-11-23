@@ -65,7 +65,7 @@ export function registerValidateBaseline(server: McpServer, { registry, config, 
       let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('validate_baseline', { dashboardUid, panelId, startsAtMs, endsAtMs }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = await resolveToolClient(registry, { connection });
           resolvedConnectionId = connectionId;
           const windowSet = computeWindows({ startsAtMs, endsAtMs, controlOffsets });
           // Fail fast, before running a single Grafana query, rather than

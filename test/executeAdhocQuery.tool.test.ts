@@ -96,39 +96,39 @@ afterEach(async () => {
 });
 
 describe('execute_adhoc_query registration', () => {
-  it('is not registered when no workspace authorized it', () => {
+  it('is not registered when no workspace authorized it', async () => {
     const { server, call } = fakeServer();
     const cfg = config([]);
     const { client } = fakeClient(INFLUX);
-    registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
+    await registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
     return expect(call('execute_adhoc_query', {})).rejects.toThrow('No tool registered');
   });
 
-  it('warns at startup when a policy host matches no connection', () => {
+  it('warns at startup when a policy host matches no connection', async () => {
     // The likeliest .mcp.json typo. Without this it surfaces only as a per-call
     // "not authorized" refusal, which reads like a broken feature.
     const cfg = config([{ host: 'typo.example.com', datasourceTypes: ['influxdb'] }]);
     const { client } = fakeClient(INFLUX);
     const registry = registryFor(cfg, client);
-    expect(registry.unmatchedAdhocHosts()).toEqual(['typo.example.com']);
+    expect(await registry.unmatchedAdhocHosts()).toEqual(['typo.example.com']);
 
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { server } = fakeServer();
-    registerAllTools(server, { registry, logRegistry: undefined as never, config: cfg });
+    await registerAllTools(server, { registry, logRegistry: undefined as never, config: cfg });
     expect(warn.mock.calls.flat().join(' ')).toContain('typo.example.com');
   });
 
-  it('does not warn when every policy host matches a connection', () => {
+  it('does not warn when every policy host matches a connection', async () => {
     const cfg = config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
     const { client } = fakeClient(INFLUX);
-    expect(registryFor(cfg, client).unmatchedAdhocHosts()).toEqual([]);
+    expect(await registryFor(cfg, client).unmatchedAdhocHosts()).toEqual([]);
   });
 
   it('is registered once some workspace authorized it', async () => {
     const { server, call } = fakeServer();
     const cfg = config([{ host: 'metrics.staging.example.com', datasourceTypes: ['influxdb'] }]);
     const { client } = fakeClient(INFLUX);
-    registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
+    await registerAllTools(server, { registry: registryFor(cfg, client), logRegistry: undefined as never, config: cfg });
     await expect(call('execute_adhoc_query', {})).resolves.toBeDefined();
   });
 });

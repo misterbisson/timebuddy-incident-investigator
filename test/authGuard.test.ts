@@ -23,6 +23,12 @@ function fakeSession() {
       });
       return result;
     },
+    /** Like send(), but waits for the listener's callback — for a resolver that returns a Promise. */
+    sendAsync(url: string): Promise<Record<string, string> | undefined> {
+      return new Promise((resolve) => {
+        listener!({ url }, (r) => resolve(r.requestHeaders as Record<string, string> | undefined));
+      });
+    },
   };
 }
 
@@ -75,5 +81,32 @@ describe('attachAuthHeaders', () => {
       throw new Error('no token saved');
     });
     expect(ses.send('https://grafana.internal/api/ds/query')).toBeUndefined();
+  });
+
+  // main.js's live-view resolver is async now: it decrypts the connection's
+  // credential through safeStorage's async API before it can build a header.
+  describe('with a resolver that returns a Promise', () => {
+    const asyncGuarded = () => {
+      const ses = fakeSession();
+      attachAuthHeaders(ses, async (origin: string) => (origin === target ? TOKEN : null));
+      return ses;
+    };
+
+    it('holds the request and injects the header for the vouched-for origin', async () => {
+      await expect(asyncGuarded().sendAsync('https://grafana.internal/api/ds/query')).resolves.toMatchObject(TOKEN);
+    });
+
+    it('still does not leak the token to a third-party subresource or over plaintext http', async () => {
+      await expect(asyncGuarded().sendAsync('https://attacker.example/pixel.png')).resolves.toBeUndefined();
+      await expect(asyncGuarded().sendAsync('http://grafana.internal/api/ds/query')).resolves.toBeUndefined();
+    });
+
+    it('falls back to unauthenticated, rather than dropping the request, when the resolver rejects', async () => {
+      const ses = fakeSession();
+      attachAuthHeaders(ses, async () => {
+        throw new Error('keychain could not decrypt');
+      });
+      await expect(ses.sendAsync('https://grafana.internal/api/ds/query')).resolves.toBeUndefined();
+    });
   });
 });

@@ -289,7 +289,7 @@ export function registerRenderDashboard(server: McpServer, { registry, config, a
       let resolvedDashboardUid: string | undefined;
       try {
         return await withAudit('render_dashboard', { url, dashboardUid: inputDashboardUid }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection, hintUrl: url });
+          const { client, connectionId } = await resolveToolClient(registry, { connection, hintUrl: url });
           resolvedConnectionId = connectionId;
 
           let dashboardUid = inputDashboardUid;

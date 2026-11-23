@@ -21,7 +21,7 @@ function fakeClient(datasources: Array<{ uid: string; name: string }>): { client
 }
 
 function fakeRegistry(connections: GrafanaConnection[]): ConnectionRegistry {
-  return { list: () => connections } as unknown as ConnectionRegistry;
+  return { list: async () => connections, lastListed: () => connections } as unknown as ConnectionRegistry;
 }
 
 describe('resolveTargetDatasource', () => {

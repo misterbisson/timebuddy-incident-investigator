@@ -183,7 +183,7 @@ export function registerDiscoverInfluxdbSchema(server: McpServer, { registry, co
     async ({ searchTerm, tagKey, datasourceUid, limit, connection }) => {
       try {
         return await withAudit('discover_influxdb_schema', { searchTerm, tagKey, datasourceUid, connection }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = await resolveToolClient(registry, { connection });
           const resolvedUid = await resolveInfluxDbDatasourceUid(client, datasourceUid);
 
           const measurementsResult = await runShowQuery(client, resolvedUid, buildShowMeasurementsQuery(searchTerm));

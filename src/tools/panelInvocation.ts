@@ -114,7 +114,7 @@ export async function resolvePanelInvocation(
   input: PanelInvocationInput,
   { toolName, verb, windowLabel, onContext }: ResolvePanelOptions,
 ): Promise<PanelInvocation> {
-  const { client, connectionId } = resolveToolClient(registry, { connection: input.connection, hintUrl: input.url });
+  const { client, connectionId } = await resolveToolClient(registry, { connection: input.connection, hintUrl: input.url });
   onContext?.({ connectionId });
 
   let dashboardUid = input.dashboardUid;
@@ -191,7 +191,7 @@ export async function resolvePanelInvocation(
   });
   enforceWindowLimit({ label: windowLabel, fromMs, toMs }, config);
 
-  const rawConnection = registry.list().find((c) => c.id === connectionId);
+  const rawConnection = (await registry.list()).find((c) => c.id === connectionId);
   if (!rawConnection) {
     throw new Error(`Unknown Grafana connection "${connectionId}".`);
   }

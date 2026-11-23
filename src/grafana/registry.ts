@@ -10,8 +10,15 @@ import { GrafanaClient } from './client.js';
  * the connection-manager GUI later has no effect until the whole MCP server
  * process is respawned, which isn't something restarting just the GUI
  * window actually does.
+ *
+ * The thunk may return a Promise, and the Electron one does: its credentials
+ * are decrypted through safeStorage's async API (the synchronous one is gone
+ * as of Electron 46), and an async decrypt can't hide behind a sync thunk.
+ * That's why list()/get() below are async, and every caller awaits them.
  */
-export type ConnectionsSource = GrafanaConnection[] | (() => GrafanaConnection[]);
+export type ConnectionsSource =
+  | GrafanaConnection[]
+  | (() => GrafanaConnection[] | Promise<GrafanaConnection[]>);
 
 /**
  * Lazily builds and caches one GrafanaClient per configured connection, so a
@@ -27,17 +34,42 @@ export class ConnectionRegistry {
   private readonly clients = new Map<string, GrafanaClient>();
   private readonly builtFrom = new Map<string, GrafanaConnection>();
 
+  private snapshot: GrafanaConnection[];
+
   constructor(
     private readonly source: ConnectionsSource,
     private readonly config: Config,
-  ) {}
-
-  list(): GrafanaConnection[] {
-    return typeof this.source === 'function' ? this.source() : this.source;
+  ) {
+    this.snapshot = typeof source === 'function' ? [] : source;
   }
 
-  get(id: string): GrafanaClient {
-    const connection = this.list().find((c) => c.id === id);
+  async list(): Promise<GrafanaConnection[]> {
+    const connections = typeof this.source === 'function' ? await this.source() : this.source;
+    this.snapshot = connections;
+    return connections;
+  }
+
+  /**
+   * The result of the most recent list() — synchronously, without re-reading
+   * the source. Only for non-secret display metadata (url, name, stream) of a
+   * connection the current tool call has already resolved through list() or
+   * get(): the URL builders and Activity-log helpers in tools/shared.ts, which
+   * run inside .map() callbacks and catch blocks where an await would mean
+   * restructuring every result builder around Promise.all.
+   *
+   * Never use it to *choose* a connection or build a client — that must go
+   * through list()/get(), which re-read the source so a GUI edit takes effect
+   * on the next tool call. Empty until the first list() for a thunk source;
+   * callers already treat a missing connection as "no URL", never an error.
+   */
+  lastListed(): GrafanaConnection[] {
+    return this.snapshot;
+  }
+
+  async get(id: string): Promise<GrafanaClient> {
+    // Everything after this await is synchronous, so two concurrent get()s
+    // can't interleave between the cache check and the cache write.
+    const connection = (await this.list()).find((c) => c.id === id);
     if (!connection) {
       throw new Error(`Unknown Grafana connection "${id}"`);
     }
@@ -85,15 +117,15 @@ export class ConnectionRegistry {
    * to register would turn a recoverable state into one needing a restart, for
    * no safety gain — an unmatched policy authorizes nothing either way.
    */
-  unmatchedAdhocHosts(): string[] {
-    const connections = this.list();
+  async unmatchedAdhocHosts(): Promise<string[]> {
+    const connections = await this.list();
     return (this.config.adhocQueries ?? [])
       .map((policy) => policy.host)
       .filter((host) => !connections.some((connection) => hostMatchesConnection(host, connection)));
   }
 
-  adhocDatasourceTypes(connectionId: string): string[] {
-    const connection = this.list().find((c) => c.id === connectionId);
+  async adhocDatasourceTypes(connectionId: string): Promise<string[]> {
+    const connection = (await this.list()).find((c) => c.id === connectionId);
     if (!connection) return [];
     const types = new Set<string>();
     for (const policy of this.config.adhocQueries ?? []) {

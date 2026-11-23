@@ -95,10 +95,10 @@ function lokiSource(connection: GrafanaConnection, datasource: { uid: string; na
 export async function listLokiSources(
   registry: ConnectionRegistry | undefined,
 ): Promise<{ sources: LokiLogSource[]; problems: LokiDiscoveryProblem[] }> {
-  const connections = registry?.list() ?? [];
+  const connections = (await registry?.list()) ?? [];
   const settled = await Promise.allSettled(
     connections.map(async (connection) => {
-      const datasources = await registry!.get(connection.id).listDatasources();
+      const datasources = await (await registry!.get(connection.id)).listDatasources();
       return datasources.filter((d) => d.type.toLowerCase() === 'loki').map((d) => lokiSource(connection, d));
     }),
   );
@@ -118,7 +118,7 @@ export async function listLogSources(
   logRegistry: LogConnectionRegistry | undefined,
   registry: ConnectionRegistry | undefined,
 ): Promise<{ sources: LogSource[]; problems: LokiDiscoveryProblem[] }> {
-  const graylog = (logRegistry?.list() ?? []).map(graylogSource);
+  const graylog = ((await logRegistry?.list()) ?? []).map(graylogSource);
   const loki = await listLokiSources(registry);
   return { sources: markAmbiguous([...graylog, ...loki.sources]), problems: loki.problems };
 }
@@ -155,8 +155,8 @@ interface LokiIdSplit {
 }
 
 /** Every Grafana connection whose id, followed by `/`, begins `id` — see lokiSourceId for why not a split on `/`. */
-function lokiIdSplits(registry: ConnectionRegistry | undefined, id: string): LokiIdSplit[] {
-  return (registry?.list() ?? [])
+async function lokiIdSplits(registry: ConnectionRegistry | undefined, id: string): Promise<LokiIdSplit[]> {
+  return ((await registry?.list()) ?? [])
     .filter((c) => id.length > c.id.length + 1 && id.startsWith(`${c.id}/`))
     .map((c) => ({ grafana: c, uid: id.slice(c.id.length + 1) }));
 }
@@ -173,7 +173,7 @@ interface LokiProbe extends LokiIdSplit {
 async function probeLokiSplit(registry: ConnectionRegistry, split: LokiIdSplit): Promise<LokiProbe> {
   let datasources;
   try {
-    datasources = await registry.get(split.grafana.id).listDatasources();
+    datasources = await (await registry.get(split.grafana.id)).listDatasources();
   } catch (err) {
     return { ...split, outcome: 'unreadable', error: err instanceof Error ? err.message : String(err), cause: err };
   }
@@ -205,13 +205,13 @@ export async function resolveLogSource(
   registry: ConnectionRegistry | undefined,
   explicitId: string | undefined,
 ): Promise<ResolvedLogSource> {
-  const graylogConnections = logRegistry?.list() ?? [];
+  const graylogConnections = (await logRegistry?.list()) ?? [];
 
   if (explicitId) {
     const graylog = graylogConnections.find((c) => c.id === explicitId);
-    const splits = lokiIdSplits(registry, explicitId);
+    const splits = await lokiIdSplits(registry, explicitId);
     if (graylog && splits.length === 0) {
-      return { sourceType: 'graylog', source: graylogSource(graylog), client: logRegistry!.get(graylog.id) };
+      return { sourceType: 'graylog', source: graylogSource(graylog), client: await logRegistry!.get(graylog.id) };
     }
 
     const probes = await Promise.all(splits.map((split) => probeLokiSplit(registry!, split)));
@@ -240,14 +240,14 @@ export async function resolveLogSource(
       );
     }
     if (graylog) {
-      return { sourceType: 'graylog', source: graylogSource(graylog), client: logRegistry!.get(graylog.id) };
+      return { sourceType: 'graylog', source: graylogSource(graylog), client: await logRegistry!.get(graylog.id) };
     }
     if (matches.length === 1) {
       const { grafana, datasource } = matches[0]!;
       return {
         sourceType: 'loki',
         source: lokiSource(grafana, datasource),
-        client: registry!.get(grafana.id),
+        client: await registry!.get(grafana.id),
         grafanaUrl: grafana.url,
         grafanaName: grafana.name,
       };

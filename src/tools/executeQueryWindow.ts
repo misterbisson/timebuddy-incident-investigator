@@ -139,7 +139,7 @@ export function registerExecuteQueryWindow(server: McpServer, { registry, config
       let resolvedConnectionId: string | undefined;
       try {
         return await withAudit('execute_query_window', { dashboardUid, panelId, startsAtMs, endsAtMs, minIntervalMs, tagBreakout }, config, async () => {
-          const { client, connectionId } = resolveToolClient(registry, { connection });
+          const { client, connectionId } = await resolveToolClient(registry, { connection });
           resolvedConnectionId = connectionId;
           const windowSet = computeWindows({
             startsAtMs,

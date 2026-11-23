@@ -179,12 +179,12 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
       try {
         return await withAudit('find_related_dashboards', { metricName, labels, query }, config, async () => {
           const connections = connection
-            ? [resolveToolClient(registry, { connection }).connectionId]
-            : registry.list().map((c) => c.id);
+            ? [(await resolveToolClient(registry, { connection })).connectionId]
+            : (await registry.list()).map((c) => c.id);
 
           const perConnection = await Promise.allSettled(
             connections.map(async (connectionId) => {
-              const client = registry.get(connectionId);
+              const client = await registry.get(connectionId);
               const index = await getOrBuildIndex(client, config, connectionId, { force: forceRefresh });
               return {
                 connectionId,
@@ -205,7 +205,7 @@ export function registerFindRelatedDashboards(server: McpServer, { registry, con
           const knowledgePerConnection = await Promise.allSettled(
             connections.map(async (connectionId) => ({
               connectionId,
-              dashboards: await listKnowledgeDashboards(registry.get(connectionId), config, connectionId),
+              dashboards: await listKnowledgeDashboards(await registry.get(connectionId), config, connectionId),
             })),
           );
           const allKnowledgeDashboards = knowledgePerConnection
