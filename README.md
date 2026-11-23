@@ -677,7 +677,9 @@ would race the listener's own appends.
   — only the reverse lookup (metric → dashboards) and dashboards pointing at a now-missing
   datasource UID. Extraction is a best-effort regex scan, not a full parser.
 - **`detect_correlated_anomalies`** ranks candidates with a heuristic (z-score magnitude ×
-  label overlap × onset-timing proximity), not a statistical correlation/causation test.
+  label overlap × onset-timing proximity), not a statistical correlation/causation test. Its
+  `connection` and `all-connections` tiers only find panels that use the alert panel's metric, so
+  a clean result there isn't a check of every product on the connection.
 - **Windows/Linux unsigned:** the macOS build is Developer ID signed and notarized (opens
   normally), but Windows builds still trip SmartScreen and Linux builds are unsigned —
   signing those is a packaging/credentials task, not a code fix.

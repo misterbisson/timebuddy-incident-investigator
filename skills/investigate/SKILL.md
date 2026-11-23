@@ -269,7 +269,12 @@ search.
    don't just call `all-connections` straight away.** Default (`scope: "product"`) checks the primary
    dashboard plus whatever its own Timebuddy knowledge panel declares as its ops/SLI dashboards and
    dependencies (falls back to just the primary dashboard alone if no knowledge is published for this
-   alert — check `productScope.source` to know which happened). Say what that tier found — even
+   alert — check `productScope.source` to know which happened). It compares every queryable panel on
+   those dashboards, whatever metric each one uses, sharing its per-call cap (3× `limit`, at least 15)
+   across them. `productScope.dashboards` says how many panels each dashboard has and how many were
+   compared. If `productScopeIncomplete: true` comes back, some listed dashboard was only partly
+   compared, or couldn't be read at all. Before you say the product's dependencies were checked, pass
+   that dashboard's `uncheckedPanelIds` as explicit `candidates`. Say what that tier found — even
    "nothing correlated within the product" is a real, useful thing to report mid-investigation, not
    just a step to silently pass through. Then look at `nextScope`/`nextScopeCandidateCount` in the
    response: if `nextScopeCandidateCount` is `0`, there's nothing to gain by widening, say so and
@@ -288,24 +293,34 @@ search.
    the *`connection`* tier (every other dashboard on the same Grafana — i.e. the other products in
    that region/estate), and you cannot make any of them from `product`-scope results alone. This is
    the resolution for the "never checked other products in the region" gap, and it is **not** a
-   knowledge-dashboard gap: `connection` scope sweeps the whole region regardless of whether a
-   Timebuddy knowledge dashboard is published. It bites hardest when `productScope.source` comes back
+   knowledge-dashboard gap: `connection` scope reaches past the product whether or not a Timebuddy
+   knowledge dashboard is published. But it is not a sweep of every panel in the region. The
+   `connection` and `all-connections` tiers only compare panels whose query uses the primary's metric
+   or measurement, which `candidateBasis.metrics` names. A clean result there means no other panel on
+   that metric moved. It says nothing about other products that measure something else. When the
+   primary is a narrow check (a synthetic probe, a status gauge), those candidates are often just
+   copies of the primary on other dashboards. A `candidateWarning` means no metric could be read from
+   the primary's query at all, so the tier found nothing to compare. It bites hardest when `productScope.source` comes back
    `same-dashboard-only` (no knowledge published for this alert) — there, `product` scope *only ever
    looked at the primary dashboard itself*, so a "clean" or "self-contained" product-scope result has
    quite literally not looked at any other product yet. So **before you assert containment or that the
    blast radius is confined to the product, run `scope: "connection"`** (unless its
    `nextScopeCandidateCount` was `0`, meaning there's nothing else on the connection to check). Report
-   what it found — "checked the N other dashboards on the region connection, nothing else moved" is a
-   real, earned containment statement; "the same-dashboard panels agreed with each other" is not.
+   what it found, scoped to what it compared: "checked the N other panels on the region connection
+   that read `<metric>`, none moved" is a real, earned statement; "nothing else in the region moved" is
+   not, unless you also checked the other products' own panels (as explicit `candidates`, or through
+   their own alerts). "The same-dashboard panels agreed with each other" is not containment evidence.
    Don't wait to be asked "what about other products?" — that check is part of establishing blast
    radius, not an optional follow-up. The tool now flags this for you: a `containmentCheckIncomplete: true`
    in the response (with a `containmentHint` naming how many same-connection panels are still unchecked)
    means you are *not* done — re-run with `scope: "connection"` before writing any "contained"/"self-
    contained"/"no other product affected" language into the verdict.
 
-   **This only checks *other dashboards* — it won't catch a primary panel that's a narrow/synthetic
+   **Correlation ranks what else *moved*; it won't tell you the primary panel is a narrow/synthetic
    signal (e.g. a health-check-style series) overstating impact that sibling panels on the *same*
-   dashboard would reveal.** Especially for an undirected "find errors"/"what's going on" investigation
+   dashboard would reveal.** `product` scope does compare those siblings (cap permitting), but a
+   sibling that barely moved ranks low or drops out of `correlated`, which is exactly the evidence you
+   need here. Especially for an undirected "find errors"/"what's going on" investigation
    with no specific alert pointing at one exact panel: before asserting severity from a single
    high-deviation panel, check whether the same dashboard has sibling panels measuring the same
    underlying thing at a different, more concrete grain — real traffic/volume, per-account or
@@ -324,10 +339,13 @@ search.
    - **Thrown as an error** by `execute_query_window`, `validate_baseline`, `export_panel_csv`, and
      `detect_correlated_anomalies` *when the mirror panel is the one you named*. The message names
      the mirrored panel id(s), so call that panel directly and move on.
+   - **Left out before running** at `product` scope: mirror panels aren't counted in
+     `productScope.dashboards[].queryablePanels` or compared. Any other product-scope candidate
+     whose query fails is counted in that dashboard's `failed` and raises `productScopeIncomplete`.
    - **Silently omitted** when `detect_correlated_anomalies` hits one among the candidates it
-     auto-discovered, rather than as the primary panel. Those run under `Promise.allSettled` and
-     rejected candidates are skipped, so the mirror panel is neither returned nor reported — it just
-     isn't in the results. Don't read a candidate's absence as evidence it was checked and cleared.
+     auto-discovered at `connection` or `all-connections` scope. Those run under `Promise.allSettled`
+     and rejected candidates are skipped, so the mirror panel is neither returned nor reported — it
+     just isn't in the results. Don't read a candidate's absence as evidence it was checked and cleared.
 
    All three are expected, not failures to investigate. Don't go looking for a misconfiguration and
    don't treat the throw as the dashboard being broken — it's this Grafana feature working as

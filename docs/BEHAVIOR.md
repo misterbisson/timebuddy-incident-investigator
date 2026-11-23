@@ -105,11 +105,14 @@ instead — its message still names the mirrored panel id(s) to call directly. N
 the three named above.
 
 There is a third outcome worth stating explicitly, because it isn't an error at all: when
-`detect_correlated_anomalies` encounters a mirror panel among the candidates it *auto-discovered*
-(rather than as the primary panel it was asked about), the rejection is swallowed by the
-`Promise.allSettled` + skip-non-fulfilled loop that guards candidate scanning. That candidate is
-neither returned nor reported — it is simply absent from the results, which a caller should not
-read as "checked and found unrelated."
+`detect_correlated_anomalies` encounters a mirror panel among the candidates it auto-discovered at
+`connection` or `all-connections` scope (rather than as the primary panel it was asked about), the
+rejection is swallowed by the `Promise.allSettled` + skip-non-fulfilled loop that guards candidate
+scanning. That candidate is neither returned nor reported — it is simply absent from the results,
+which a caller should not read as "checked and found unrelated." At `product` scope (issue #310)
+mirror panels are left out before anything runs and aren't counted as queryable, and any other
+candidate that fails is counted in `productScope.dashboards[].failed`, which also raises
+`productScopeIncomplete`.
 
 ## Relative time params: rounding, week-start, and time zone
 

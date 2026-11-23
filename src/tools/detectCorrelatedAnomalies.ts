@@ -13,6 +13,8 @@ import { dashboardUrlFor, epochMsSchema, recordActivity, resolvePanelForWindow, 
 import { materializeVariables } from './liveVariables.js';
 import { resolveProductContext } from '../knowledge/lookup.js';
 import { extractRelatedDashboardUids } from '../knowledge/relatedDashboards.js';
+import { resolvePanelQueries } from '../dashboards/panelQueries.js';
+import { selectProductCandidates, type ProductDashboardInput, type ProductDashboardReport } from '../analysis/productScope.js';
 import { redact } from '../security/redact.js';
 import { withAudit } from '../security/audit.js';
 
@@ -25,7 +27,12 @@ interface CandidateRef {
   dashboardUid: string;
   panelId: number;
   connectionId: string;
+  /** Set only when the panel's id is shared with another panel on its dashboard, to pick the right one. */
+  panelTitle?: string;
 }
+
+/** How a tier's candidates were chosen, so a short or empty result can't be read as a sweep it wasn't (issue #310). */
+type CandidateBasis = { kind: 'listed-dashboards' } | { kind: 'metric-name'; metrics: string[] };
 
 const SCOPE_ORDER = ['product', 'connection', 'all-connections'] as const;
 type Scope = (typeof SCOPE_ORDER)[number];
@@ -59,6 +66,14 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
         'can take minutes on a large Grafana estate, so this call only ever builds the index(es) the requested ' +
         '"scope" actually needs; "nextScopeCandidateCount" is omitted (not guessed) when the next tier would need ' +
         'a connection whose index isn\'t already built and cached - call that wider scope directly to find out. ' +
+        'At "product" scope every queryable panel on each listed dashboard is a candidate (panels sharing the ' +
+        'primary\'s metric first, then alert-backed ones), with the per-call cap (3x "limit", at least 15) shared ' +
+        'across dashboards; "productScope.dashboards" reports checked/total per dashboard, and ' +
+        '"productScopeIncomplete": true (with a "productScopeHint") means a listed dashboard was only partly ' +
+        'compared - pass its "uncheckedPanelIds" as explicit "candidates" before calling it checked. The ' +
+        '"connection" and "all-connections" tiers only find panels whose query uses the primary\'s metric ' +
+        '("candidateBasis" names it), so an empty result there means no same-metric panel moved, not that nothing ' +
+        'else did. ' +
         'A "containmentCheckIncomplete": true (with a "containmentHint") is returned whenever a "product"-scope call ' +
         'still has unchecked panels on the same connection (i.e. other products in this region) - treat it as a hard ' +
         'signal that you have NOT yet established blast radius and must re-run with "scope": "connection" before ' +
@@ -181,7 +196,15 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
             let scopeInfo:
               | {
                   scope: Scope;
-                  productScope: { dashboardUids: string[]; source: 'knowledge-dependencies' | 'same-dashboard-only' };
+                  productScope: {
+                    dashboardUids: string[];
+                    source: 'knowledge-dependencies' | 'same-dashboard-only';
+                    dashboards?: ProductDashboardReport[];
+                  };
+                  candidateBasis: CandidateBasis;
+                  candidateWarning?: string;
+                  productScopeIncomplete?: boolean;
+                  productScopeHint?: string;
                   nextScope?: Scope;
                   nextScopeCandidateCount?: number;
                   containmentCheckIncomplete?: boolean;
@@ -278,7 +301,56 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               const tiered: Record<Scope, CandidateRef[]> = { product: [], connection: [], 'all-connections': [] };
               for (const ref of allCandidateRefs) tiered[tierOf(ref, connectionId, productDashboardUids)].push(ref);
 
-              candidateRefs = tiered[requestedScope].slice(0, Math.max(limit! * 3, 15));
+              const cap = Math.max(limit! * 3, 15);
+              let productDashboards: ProductDashboardReport[] | undefined;
+              let candidateBasis: CandidateBasis;
+              if (requestedScope === 'product') {
+                // Every queryable panel on every listed dashboard, not only the
+                // panels sharing the primary's metric (issue #310): a dependency
+                // board is listed because the knowledge panel says it matters,
+                // and it almost never uses the primary's metric. Panels that do
+                // share it, then panels backing an alert rule, go first within
+                // each dashboard; the cap is shared round-robin across dashboards.
+                const primaryIndex = indexByConnection.get(connectionId)!;
+                const metricMatched = new Set(
+                  tiered.product.map((r) => `${r.dashboardUid}|${r.panelId}`),
+                );
+                const alertBacked = new Set(primaryIndex.alertBackedPanels.map((p) => `${p.dashboardUid}|${p.panelId}`));
+                const inputs: ProductDashboardInput[] = await Promise.all(
+                  [...productDashboardUids].map(async (uid): Promise<ProductDashboardInput> => {
+                    try {
+                      const dashboard = uid === primaryDashboardUid ? primaryDashboard : (await primaryClient.getDashboard(uid)).dashboard;
+                      return { dashboardUid: uid, dashboardTitle: dashboard.title, panels: resolvePanelQueries(dashboard) };
+                    } catch (err) {
+                      return { dashboardUid: uid, error: err instanceof Error ? err.message : String(err) };
+                    }
+                  }),
+                );
+                const selection = selectProductCandidates(inputs, {
+                  cap,
+                  exclude: { dashboardUid: primaryDashboardUid, panelId: primaryPanelId, panelTitle: primaryResolved.panel.title },
+                  prioritize: (uid, panel) => {
+                    const key = `${uid}|${panel.panelId}`;
+                    return metricMatched.has(key) ? 0 : alertBacked.has(key) ? 1 : 2;
+                  },
+                });
+                candidateRefs = selection.candidates.map((c) => ({ ...c, connectionId }));
+                productDashboards = selection.dashboards;
+                candidateBasis = { kind: 'listed-dashboards' };
+              } else {
+                candidateRefs = tiered[requestedScope].slice(0, cap);
+                candidateBasis = { kind: 'metric-name', metrics: [...metricNames] };
+              }
+              // The connection and all-connections tiers only ever find panels
+              // whose query uses the primary's metric, so when that metric
+              // couldn't be read from the primary's query they can find nothing,
+              // and an empty result there means "couldn't look", not "nothing moved".
+              const candidateWarning =
+                candidateBasis.kind === 'metric-name' && metricNames.size === 0
+                  ? `No metric or measurement name could be read from the primary panel's query, so the "${requestedScope}" ` +
+                    'tier, which only finds panels using the same metric, had nothing to compare. An empty result here is ' +
+                    'not evidence that nothing else moved; pass explicit "candidates" instead.'
+                  : undefined;
 
               // "product" scope alone can never establish blast-radius containment: it only ever
               // looks at this one product's own dashboards (and, when no knowledge is published,
@@ -293,7 +365,13 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
               const containmentCheckIncomplete = requestedScope === 'product' && tiered.connection.length > 0;
               scopeInfo = {
                 scope: requestedScope,
-                productScope: { dashboardUids: [...productDashboardUids], source: productScopeSource },
+                productScope: {
+                  dashboardUids: [...productDashboardUids],
+                  source: productScopeSource,
+                  ...(productDashboards ? { dashboards: productDashboards } : {}),
+                },
+                candidateBasis,
+                ...(candidateWarning ? { candidateWarning } : {}),
                 // Omit nextScopeCandidateCount rather than report an undercount when widening to
                 // "all-connections" and some other connection's cache wasn't already fresh (see
                 // above - we don't force a rebuild just to fill in this hint).
@@ -307,9 +385,10 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                         (productScopeSource === 'same-dashboard-only'
                           ? ' and no Timebuddy knowledge is published for this alert, so that was just the primary dashboard itself'
                           : '') +
-                        `; ${tiered.connection.length} other panel(s) on this same connection (other products in this ` +
-                        'region/estate) have not been checked. Do not report the blast radius as contained until you ' +
-                        're-run with scope:"connection".',
+                        `; ${tiered.connection.length} other panel(s) on this same connection that use the primary's ` +
+                        'metric (on dashboards outside this product) have not been checked. Do not report the blast ' +
+                        'radius as contained until you re-run with scope:"connection", and even then, that tier only ' +
+                        'compares panels on the same metric (see candidateBasis), not every product in the region.',
                     }
                   : {}),
               };
@@ -321,9 +400,9 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                 // The candidate's url/name for its link and Activity entry come
                 // from the same read as the client that queried it.
                 const { client, connection: candidateConnection } = await registry.resolve(ref.connectionId);
-                const incidentResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.incident, config.maxDataPoints);
+                const incidentResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.incident, config.maxDataPoints, ref.panelTitle);
                 const incidentResult = await executeQueryWindow(client, incidentResolved.targets, windowSet.incident, config);
-                const preResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.preWindow, config.maxDataPoints);
+                const preResolved = await resolvePanelForWindow(client, ref.dashboardUid, ref.panelId, {}, windowSet.preWindow, config.maxDataPoints, ref.panelTitle);
                 const preResult = await executeQueryWindow(client, preResolved.targets, windowSet.preWindow, config);
                 return { ref, candidateConnection, dashboard: incidentResolved.dashboard, panel: incidentResolved.panel, incidentResult, preResult };
               }),
@@ -359,6 +438,35 @@ export function registerDetectCorrelatedAnomalies(server: McpServer, { registry,
                   preWindowPoints: preSeries?.points ?? [],
                   connectionId: ref.connectionId,
                 });
+              }
+            }
+
+            // Per-dashboard accounting for the product tier: a dashboard that
+            // couldn't be read, had panels left out by the cap, or had panels
+            // whose queries failed was not fully compared, and the response
+            // has to say so rather than let its listing in productScope stand
+            // for a check (issue #310).
+            const productReports = scopeInfo?.productScope.dashboards;
+            if (productReports) {
+              settled.forEach((outcome, i) => {
+                if (outcome.status === 'fulfilled') return;
+                const report = productReports.find((r) => r.dashboardUid === candidateRefs[i]!.dashboardUid);
+                if (report) report.failed = (report.failed ?? 0) + 1;
+              });
+              const gaps = productReports.flatMap((r) => {
+                if (r.error) return [`"${r.dashboardTitle ?? r.dashboardUid}" couldn't be read (${r.error})`];
+                const parts = [
+                  ...(r.uncheckedPanelIds ? [`${r.uncheckedPanelIds.length} of ${r.queryablePanels} panels not compared (over the per-call cap)`] : []),
+                  ...(r.failed ? [`${r.failed} panel(s) whose queries failed`] : []),
+                ];
+                return parts.length ? [`"${r.dashboardTitle ?? r.dashboardUid}": ${parts.join(', ')}`] : [];
+              });
+              if (gaps.length > 0) {
+                scopeInfo!.productScopeIncomplete = true;
+                scopeInfo!.productScopeHint =
+                  `Product scope was only partly compared: ${gaps.join('; ')}. Don't report these dashboards as checked. ` +
+                  'Pass the panels in productScope.dashboards[].uncheckedPanelIds as explicit "candidates" (or raise ' +
+                  '"limit") to compare the rest.';
               }
             }
 
