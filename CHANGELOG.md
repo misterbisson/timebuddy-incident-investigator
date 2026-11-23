@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.13.4](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.3...v0.13.4) (2026-11-23)
+
+
+### Bug Fixes
+
+* compare every panel on the dashboards product scope lists ([#337](https://github.com/misterbisson/timebuddy-incident-investigator/issues/337)) ([5a67e95](https://github.com/misterbisson/timebuddy-incident-investigator/commit/5a67e95615ff75644d376b3ad1f4f664fd72ae17))
+* **deps-dev:** bump electron from 44.9.1 to 45.2.3 ([#330](https://github.com/misterbisson/timebuddy-incident-investigator/issues/330)) ([3aae3d5](https://github.com/misterbisson/timebuddy-incident-investigator/commit/3aae3d59c2808ac684578eb07db5db0e35ddc280))
+* **deps-dev:** bump electron from 45.2.3 to 45.3.2 in the minor-and-patch group ([#333](https://github.com/misterbisson/timebuddy-incident-investigator/issues/333)) ([29777ba](https://github.com/misterbisson/timebuddy-incident-investigator/commit/29777baac6e41d0eaa333e20f4d08d20d1111b4f))
+* **deps:** bump hono from 4.13.13 to 4.13.18 ([#331](https://github.com/misterbisson/timebuddy-incident-investigator/issues/331)) ([867e57a](https://github.com/misterbisson/timebuddy-incident-investigator/commit/867e57acadc4f7d046c096b6cdbfd7172267c1b4))
+* move the connection store to safeStorage's async API before Electron 46 ([#336](https://github.com/misterbisson/timebuddy-incident-investigator/issues/336)) ([6c7af65](https://github.com/misterbisson/timebuddy-incident-investigator/commit/6c7af65a95b811f1ccc3221e9b30db61a2872524))
+
 ## [0.13.3](https://github.com/misterbisson/timebuddy-incident-investigator/compare/v0.13.2...v0.13.3) (2026-11-09)
 
 
