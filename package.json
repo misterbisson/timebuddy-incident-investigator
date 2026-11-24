@@ -37,7 +37,7 @@
     "@liquescent/log-correlator-core": "0.0.7",
     "@liquescent/log-correlator-query-parser": "0.0.7",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "undici": "^8.12.4",
+    "undici": "^8.13.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -45,6 +45,6 @@
     "@types/node": "^26.6.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
